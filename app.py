@@ -28,15 +28,20 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
 import broker
+import program as P
+import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import Candidate, RangeRequest, Report, db, ensure_schema
+from models import (Badge, BoardResult, Candidate, RangeRequest, Report, db,
+                    ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
-ROLES = ["red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]
-BOARDS = ["board1", "board2", "board3", "board4", "board5", "board6"]
-ROLE_TITLES = {"red-teamer": "Red Team", "detection-engineer": "Detection Engineering",
-               "soc-analyst": "SOC Analyst triage", "incident-responder": "Incident Response"}
+# Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
+MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_RANGES", "2"))
+ROLES = list(dict.fromkeys(P.ROLES + [
+    "red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]))
+BOARDS = [P.bstr(b["n"]) for b in P.BOARD_PLAN]
+ROLE_TITLES = {**P.ROLE_TITLES, "detection-engineering": "Detection Engineering"}
 
 
 def _initials(name):
@@ -59,6 +64,17 @@ def _ago(dt):
     if s < 86400:
         return f"{int(s // 3600)}h"
     return f"{int(s // 86400)}d"
+
+
+def _iso(dt):
+    """Canonical UTC ISO string that round-trips identically on SQLite and
+    Postgres (SQLite reads timestamps back naive). Used for everything that is
+    signed and re-emitted, so signatures verify regardless of the DB backend."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_dt.timezone.utc)
+    return dt.astimezone(_dt.timezone.utc).isoformat()
 
 
 def _normalize_db_url(url):
@@ -126,24 +142,194 @@ def create_app():
         return (RangeRequest.query.filter_by(candidate_id=c.id)
                 .order_by(RangeRequest.id.desc()).first())
 
-    def _provision_user_and_config(c):
-        """Create the Ludus user and stage the GOAD config. Best-effort.
-
-        Enrollment never fails because Ludus is unreachable; the detail is
-        recorded on the RangeRequest and ops can retry a deploy later.
-        """
-        uid, key, udetail = broker.ensure_user(c)
+    def _ensure_ludus_user(c):
+        """Lazily create the candidate's Ludus user (only needed for isolated
+        boards). Idempotent. Stores the encrypted per-user key."""
+        if c.ludus_user_id:
+            return
+        uid, key, _ = broker.ensure_user(c)
         c.ludus_user_id = uid
         if key:
             c.ludus_key_enc = encrypt(key)
-        ok, cdetail = broker.set_range_config(c, broker.GOAD_TEMPLATE, user_key=key)
-        rr = RangeRequest(candidate_id=c.id,
-                          status="configured" if ok else "failed",
-                          template="goad",
-                          ludus_range_id=broker._mock_range_id(c) if broker.mode() == "mock" else None,
-                          detail=f"{udetail}; {cdetail}")
-        db.session.add(rr)
+
+    def _board_range(c, n):
+        return (RangeRequest.query
+                .filter_by(candidate_id=c.id, board=n)
+                .order_by(RangeRequest.id.desc()).first())
+
+    def _slots_used(host="primary"):
+        """Isolated ranges currently holding a RAM slot on a host."""
+        return (RangeRequest.query
+                .filter(RangeRequest.host == host,
+                        RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT))
+                .count())
+
+    def _try_deploy(c, rr):
+        """Deploy an isolated range if a slot is free, else park it as
+        queued_slot. Returns the resulting status."""
+        if _slots_used(rr.host) >= MAX_CONCURRENT:
+            rr.status = "queued_slot"
+            rr.detail = f"waiting for a slot on {rr.host} (cap {MAX_CONCURRENT})"
+            return rr.status
+        _ensure_ludus_user(c)
+        key = _candidate_key(c)
+        broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE, user_key=key)
+        status, range_id, detail = broker.deploy_range(c, user_key=key)
+        rr.status = status
+        if range_id:
+            rr.ludus_range_id = range_id
+        rr.wireguard_config = broker.wireguard_config(c, user_key=key)
+        st, sdetail = broker.range_status(c, user_key=key)
+        rr.status = st
+        rr.detail = f"{detail}; {sdetail}"
+        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        return rr.status
+
+    def _provision_for_board(c, n, auto_deploy=True):
+        """Open board n's lab for the candidate.
+
+        Shared boards are ready instantly (a seeded session, no VM). Isolated
+        boards stage a Ludus range and deploy it if a slot is free, otherwise
+        queue it. Idempotent per (candidate, board)."""
+        rr = _board_range(c, n)
+        if rr is None:
+            rr = RangeRequest(candidate_id=c.id, board=n, template=P.template_of(n))
+            db.session.add(rr)
+        if not P.is_isolated(n):
+            rr.host = "shared"
+            rr.status = "deployed"  # shared environment access granted immediately
+            rr.detail = "shared instrumented environment; per-candidate dataset seeded"
+            return rr
+        rr.host = rr.host or "primary"
+        if auto_deploy:
+            _try_deploy(c, rr)
+        else:
+            _ensure_ludus_user(c)
+            rr.status = rr.status if rr.status in RangeRequest.ACTIVE else "configured"
+            rr.detail = rr.detail or "configured; deploy on lab-start"
         return rr
+
+    def _reconcile(host="primary"):
+        """Promote queued ranges into freed slots, oldest first. Called after a
+        teardown and by the admin reconcile endpoint. Keeps the host at its cap."""
+        promoted = 0
+        while _slots_used(host) < MAX_CONCURRENT:
+            rr = (RangeRequest.query
+                  .filter_by(host=host, status="queued_slot")
+                  .order_by(RangeRequest.id.asc()).first())
+            if not rr:
+                break
+            c = Candidate.query.get(rr.candidate_id)
+            _try_deploy(c, rr)
+            promoted += 1
+        db.session.commit()
+        return promoted
+
+    # --- grading + promotion engine -----------------------------------------
+    def _board_result(c, n, create=True):
+        br = BoardResult.query.filter_by(candidate_id=c.id, board=n).first()
+        if br is None and create:
+            br = BoardResult(candidate_id=c.id, board=n, role=P.role_of(n))
+            db.session.add(br)
+            db.session.flush()
+        return br
+
+    def _mint_badge(c, level, name, role):
+        """Create a signed badge once per (candidate, level). Idempotent."""
+        existing = Badge.query.filter_by(candidate_id=c.id, level=level).first()
+        if existing:
+            return existing
+        issued = _dt.datetime.now(_dt.timezone.utc)
+        claim = {"kind": "badge", "handle": c.handle, "cohort": c.cohort,
+                 "level": level, "name": name, "role": role,
+                 "issued_at": _iso(issued)}
+        b = Badge(candidate_id=c.id, level=level, name=name, role=role,
+                  issued_at=issued, signature=signing.sign(claim))
+        db.session.add(b)
+        return b
+
+    def _teardown_ranges(c):
+        """Destroy all of the candidate's isolated ranges and free their slots."""
+        key = _candidate_key(c)
+        freed_hosts = set()
+        for rr in RangeRequest.query.filter_by(candidate_id=c.id).all():
+            if rr.host != "shared" and rr.status in RangeRequest.OCCUPIES_SLOT:
+                broker.destroy_range(c, user_key=key)
+                rr.status = "destroyed"
+                rr.detail = "torn down"
+                freed_hosts.add(rr.host or "primary")
+        return freed_hosts
+
+    def _exit_candidate(c, status, reason):
+        """Terminal exit: set status, tear down ranges, revoke token. Earned
+        badges and signed clearances are kept."""
+        if c.status in Candidate.TERMINAL:
+            return
+        freed = _teardown_ranges(c)
+        c.status = status
+        c.exit_reason = reason
+        c.exited_at = _dt.datetime.now(_dt.timezone.utc)
+        c.token = "revoked-" + c.token[:8]  # revoke submission token
+        db.session.flush()
+        for h in freed:
+            _reconcile(h)
+
+    def _promote(c):
+        """Clear the current board, sign it, mint the badge, and open the next
+        board (or graduate). Transactional + idempotent."""
+        n = c.current_board
+        br = _board_result(c, n)
+        if br.cleared:
+            return False  # already promoted past this board
+        cleared_at = _dt.datetime.now(_dt.timezone.utc)
+        claim = {"kind": "clearance", "handle": c.handle, "cohort": c.cohort,
+                 "board": n, "role": P.role_of(n),
+                 "objective_score": br.objective_score, "cleared_at": _iso(cleared_at)}
+        br.cleared = True
+        br.cleared_at = cleared_at
+        br.signature = signing.sign(claim)
+        lvl, name, role = P.badge_for(n)
+        _mint_badge(c, lvl, name, role)
+
+        # Free the cleared board's isolated range so the candidate never holds
+        # two RAM slots, and pull a queued range into the freed slot.
+        rr = _board_range(c, n)
+        if rr and rr.host != "shared" and rr.status in RangeRequest.OCCUPIES_SLOT:
+            broker.destroy_range(c, user_key=_candidate_key(c))
+            rr.status = "destroyed"
+            rr.detail = "torn down on promotion"
+            db.session.flush()
+            _reconcile(rr.host or "primary")
+
+        if n >= P.LAST_BOARD:
+            _mint_badge(c, P.CERTIFIED["level"], P.CERTIFIED["name"], P.CERTIFIED["role"])
+            _exit_candidate(c, "graduated", "cleared the capstone")
+        else:
+            c.current_board = n + 1
+            c.current_role = P.role_of(n + 1)
+            _provision_for_board(c, n + 1, auto_deploy=True)
+        return True
+
+    def _evaluate_gate(c):
+        """Promote if the current board's objective passed AND its report is
+        approved. Safe to call after either grade lands."""
+        if not c.is_active:
+            return False
+        n = c.current_board
+        br = _board_result(c, n, create=False)
+        if not br or not br.objective_passed or br.report_status != "approved":
+            return False
+        return _promote(c)
+
+    def _record_objective(c, n, score):
+        br = _board_result(c, n)
+        br.objective_score = float(score)
+        br.objective_passed = float(score) >= P.PASS_BAR
+        attest = {"kind": "objective", "handle": c.handle, "board": n,
+                  "score": float(score), "passed": br.objective_passed,
+                  "at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+        br.objective_sig = signing.sign(attest)
+        return br
 
     # --- public --------------------------------------------------------------
     ranger_site = os.environ.get("RANGER_SITE_URL", "https://ranger.qwalora.com")
@@ -184,14 +370,15 @@ def create_app():
             return render_template("enroll.html", cohort=cohort,
                                    error=f"'{handle}' is already enrolled."), 409
 
-        c = Candidate(handle=handle, name=name, email=email, cohort=cohort, repo=repo)
+        c = Candidate(handle=handle, name=name, email=email, cohort=cohort, repo=repo,
+                      current_board=1, current_role=P.role_of(1))
         db.session.add(c)
         db.session.flush()  # assign id before provisioning
 
-        # Hybrid model: enrollment mints the Ludus user and stages the GOAD
-        # config. No VMs are built here. The ranger deploys the range when they
-        # start their lab (POST /labs/start).
-        rr = _provision_user_and_config(c)
+        # Progression model: enrollment opens board 1 (SOC, a shared environment),
+        # so a new ranger starts triaging immediately. Isolated GOAD ranges are
+        # provisioned later, when they are promoted into the red-team boards.
+        rr = _provision_for_board(c, 1)
         db.session.commit()
         return render_template("enroll_done.html", candidate=c,
                                range_status=rr.status, range_detail=rr.detail,
@@ -210,33 +397,22 @@ def create_app():
 
     @app.post("/labs/start")
     def lab_start():
-        """Deploy the candidate's range. This is 'starting a lab' in the hybrid
-        model: enrollment staged the config, this builds it. Returns the range
-        status and the WireGuard config the ranger connects with.
-        """
+        """Start (deploy) the current board's lab.
+
+        Shared boards are already open, so this just confirms access. Isolated
+        boards deploy the Ludus range if a slot is free, otherwise queue it and
+        report the wait. Returns the range status and WireGuard config."""
         data = request.get_json(silent=True) or request.form
         c, err = _auth_candidate(data)
         if err:
             return err
-        rr = _latest_range(c)
-        if rr is None:
-            rr = _provision_user_and_config(c)
-            db.session.flush()
-
-        key = _candidate_key(c)
-        status, range_id, detail = broker.deploy_range(c, user_key=key)
-        rr.status = status
-        if range_id:
-            rr.ludus_range_id = range_id
-        rr.detail = detail
-        # Fetch the WireGuard profile and the settled state.
-        rr.wireguard_config = broker.wireguard_config(c, user_key=key)
-        st, sdetail = broker.range_status(c, user_key=key)
-        rr.status = st
-        rr.detail = f"{detail}; {sdetail}"
-        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        if not c.is_active:
+            return jsonify(error=f"candidate is {c.status}"), 409
+        n = c.current_board
+        rr = _provision_for_board(c, n, auto_deploy=True)
         db.session.commit()
-        return jsonify(ok=True, handle=c.handle, range_status=rr.status,
+        return jsonify(ok=True, handle=c.handle, board=n, role=c.current_role,
+                       tier=P.tier_of(n), range_status=rr.status,
                        range_id=rr.ludus_range_id, wireguard=rr.wireguard_config,
                        detail=rr.detail, mode=broker.mode()), 200
 
@@ -246,39 +422,46 @@ def create_app():
         c, err = _auth_candidate(data)
         if err:
             return err
-        rr = _latest_range(c)
+        n = c.current_board
+        rr = _board_range(c, n)
         if rr is None:
-            return jsonify(ok=True, handle=c.handle, range_status="none",
+            return jsonify(ok=True, handle=c.handle, board=n, range_status="none",
                            detail="no range provisioned yet"), 200
-        key = _candidate_key(c)
-        st, sdetail = broker.range_status(c, user_key=key)
-        rr.status = st
-        rr.detail = sdetail
-        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
-        db.session.commit()
-        return jsonify(ok=True, handle=c.handle, range_status=rr.status,
-                       range_id=rr.ludus_range_id, detail=sdetail,
-                       mode=broker.mode()), 200
+        if P.is_isolated(n) and rr.status in ("deploying", "deployed"):
+            key = _candidate_key(c)
+            st, sdetail = broker.range_status(c, user_key=key)
+            rr.status, rr.detail = st, sdetail
+            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+            db.session.commit()
+        return jsonify(ok=True, handle=c.handle, board=n, tier=P.tier_of(n),
+                       range_status=rr.status, range_id=rr.ludus_range_id,
+                       detail=rr.detail, mode=broker.mode()), 200
 
     @app.post("/reports")
     def submit_report():
         data = request.get_json(silent=True) or request.form
-        board = (data.get("board") or "").strip()
-        role = (data.get("role") or "").strip()
         body = (data.get("body") or "").strip()
-        if not (board and role and body):
-            return jsonify(error="handle, board, role, body are required"), 400
-        if board not in BOARDS or role not in ROLES:
-            return jsonify(error="unknown board or role", boards=BOARDS, roles=ROLES), 400
-
         c, err = _auth_candidate(data)
         if err:
             return err
+        if not c.is_active:
+            return jsonify(error=f"candidate is {c.status}, not accepting reports"), 409
 
-        # A report must tie back to real lab work: the range has to be deployed.
-        # REPORTS_REQUIRE_RANGE=0 disables the gate (useful for seed/demo data).
-        if os.environ.get("REPORTS_REQUIRE_RANGE", "1") != "0":
-            rr = _latest_range(c)
+        # A report is for the candidate's CURRENT board; board/role default to it.
+        n = c.current_board
+        board = (data.get("board") or P.bstr(n)).strip()
+        role = (data.get("role") or c.current_role or P.role_of(n)).strip()
+        if P.bint(board) != n:
+            return jsonify(error=f"you are on {P.bstr(n)}; submit for that board",
+                           current_board=P.bstr(n)), 409
+        if not body:
+            return jsonify(error="body is required"), 400
+
+        # The report must tie back to real lab work. For isolated boards the range
+        # must be deployed; shared boards are always open. REPORTS_REQUIRE_RANGE=0
+        # bypasses for seed/demo data.
+        if os.environ.get("REPORTS_REQUIRE_RANGE", "1") != "0" and P.is_isolated(n):
+            rr = _board_range(c, n)
             if rr is None or not rr.is_deployed:
                 return jsonify(error="deploy your lab before submitting a report",
                                hint="POST /labs/start first",
@@ -287,7 +470,35 @@ def create_app():
         r = Report(candidate_id=c.id, board=board, role=role, body=body)
         db.session.add(r)
         db.session.commit()
-        return jsonify(ok=True, report_id=r.id, status=r.status), 201
+        return jsonify(ok=True, report_id=r.id, board=board, status=r.status), 201
+
+    @app.post("/grade")
+    def grade():
+        """Objective grade callback from the lab-repo CI (GitHub Actions).
+
+        Authenticated by the shared CI token. Records the answer-free score for a
+        board and evaluates the promotion gate. Body: {handle, board, score}."""
+        ci_token = os.environ.get("CI_TOKEN")
+        if not ci_token or request.headers.get("X-CI-Token", "") != ci_token:
+            return jsonify(error="invalid CI token"), 401
+        data = request.get_json(silent=True) or request.form
+        handle = (data.get("handle") or "").strip().lstrip("@")
+        board = P.bint(data.get("board"))
+        try:
+            score = float(data.get("score"))
+        except (TypeError, ValueError):
+            return jsonify(error="score must be numeric"), 400
+        c = Candidate.query.filter_by(handle=handle).first()
+        if not c:
+            return jsonify(error="unknown candidate"), 404
+        if board is None or not P.board_meta(board):
+            return jsonify(error="unknown board"), 400
+        _record_objective(c, board, score)
+        promoted = _evaluate_gate(c) if board == c.current_board else False
+        db.session.commit()
+        return jsonify(ok=True, handle=c.handle, board=board, score=score,
+                       passed=score >= P.PASS_BAR, promoted=promoted,
+                       current_board=c.current_board, status=c.status), 200
 
     # --- admin ---------------------------------------------------------------
     @app.get("/admin/login")
@@ -421,6 +632,16 @@ def create_app():
             r.status = m[action]
             r.reviewer_notes = (request.form.get("notes") or "").strip() or None
             r.reviewed_at = _dt.datetime.now(_dt.timezone.utc)
+            # Feed the subjective channel into the board result, then re-check the
+            # promotion gate (promotes if the objective grade is already in).
+            c = r.candidate
+            n = P.bint(r.board)
+            if n is not None and c.is_active:
+                br = _board_result(c, n)
+                br.report_id = r.id
+                br.report_status = r.status
+                if action == "approve" and n == c.current_board:
+                    _evaluate_gate(c)
             db.session.commit()
         return redirect(url_for("admin", status=request.form.get("return_status", "pending")))
 
@@ -468,31 +689,74 @@ def create_app():
     def admin_range_action(cid):
         c = Candidate.query.get_or_404(cid)
         action = request.form.get("action")
-        rr = _latest_range(c)
+        n = c.current_board
+        rr = _board_range(c, n)
         key = _candidate_key(c)
-        if rr is None and action in ("deploy", "refresh"):
-            rr = _provision_user_and_config(c)
-            db.session.flush()
         if action == "deploy":
-            status, range_id, detail = broker.deploy_range(c, user_key=key)
-            rr.status = status
-            if range_id:
-                rr.ludus_range_id = range_id
-            rr.wireguard_config = broker.wireguard_config(c, user_key=key)
-            st, sdetail = broker.range_status(c, user_key=key)
-            rr.status, rr.detail = st, f"{detail}; {sdetail}"
-            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
-        elif action == "refresh" and rr is not None:
+            rr = _provision_for_board(c, n, auto_deploy=True)
+        elif action == "refresh" and rr is not None and P.is_isolated(n):
             st, sdetail = broker.range_status(c, user_key=key)
             rr.status, rr.detail = st, sdetail
             rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
         elif action == "destroy" and rr is not None:
-            ok, detail = broker.destroy_range(c, user_key=key)
-            rr.status = "destroyed" if ok else "failed"
-            rr.detail = detail
-            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+            host = rr.host or "primary"
+            if rr.host != "shared":
+                broker.destroy_range(c, user_key=key)
+            rr.status = "destroyed"
+            rr.detail = "torn down by admin"
+            db.session.flush()
+            _reconcile(host)  # a freed slot pulls in a queued range
         db.session.commit()
         return redirect(url_for("admin_ranges"))
+
+    @app.post("/admin/reconcile")
+    @admin_required
+    def admin_reconcile():
+        host = request.form.get("host") or request.args.get("host") or "primary"
+        promoted = _reconcile(host)
+        return jsonify(ok=True, host=host, deployed_from_queue=promoted,
+                       slots_used=_slots_used(host), cap=MAX_CONCURRENT)
+
+    @app.post("/admin/candidates/<int:cid>/exit")
+    @admin_required
+    def admin_exit(cid):
+        c = Candidate.query.get_or_404(cid)
+        reason = (request.form.get("reason") or "").strip()
+        kind = (request.form.get("kind") or "withdrawn").strip()
+        status = kind if kind in Candidate.TERMINAL else "withdrawn"
+        _exit_candidate(c, status, reason or status)
+        db.session.commit()
+        return jsonify(ok=True, handle=c.handle, status=c.status,
+                       exit_reason=c.exit_reason)
+
+    # --- public verification -------------------------------------------------
+    @app.get("/pubkey")
+    def pubkey():
+        return jsonify(alg="ed25519", public_key=signing.public_key_b64())
+
+    @app.get("/badges/<handle>.json")
+    def badges_json(handle):
+        """Signed, verifiable badges + board clearances for a candidate. This is
+        what the public status page checks in-browser; it reveals no grades of
+        other candidates and no answer keys."""
+        handle = handle.lstrip("@")
+        c = Candidate.query.filter_by(handle=handle).first()
+        if not c:
+            return jsonify(error="unknown candidate"), 404
+        badges = [{"level": b.level, "name": b.name, "role": b.role,
+                   "issued_at": _iso(b.issued_at),
+                   "signature": b.signature, "revoked": b.revoked}
+                  for b in sorted(c.badges, key=lambda x: str(x.level))]
+        clearances = [{"board": br.board, "role": br.role,
+                       "objective_score": br.objective_score,
+                       "cleared_at": _iso(br.cleared_at),
+                       "signature": br.signature}
+                      for br in sorted(c.board_results, key=lambda x: x.board)
+                      if br.cleared]
+        return jsonify(handle=c.handle, cohort=c.cohort, status=c.status,
+                       current_board=c.current_board, alg="ed25519",
+                       public_key=signing.public_key_b64(),
+                       badges=badges, clearances=clearances)
 
     @app.get("/roster.json")
     @admin_required
