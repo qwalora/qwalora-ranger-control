@@ -31,6 +31,30 @@ from models import Candidate, RangeRequest, Report, db
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 ROLES = ["red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]
 BOARDS = ["board1", "board2", "board3", "board4", "board5", "board6"]
+ROLE_TITLES = {"red-teamer": "Red Team", "detection-engineer": "Detection Engineering",
+               "soc-analyst": "SOC Analyst triage", "incident-responder": "Incident Response"}
+
+
+def _initials(name):
+    parts = [p for p in (name or "").split() if p]
+    if not parts:
+        return "?"
+    return (parts[0][0] + (parts[-1][0] if len(parts) > 1 else "")).upper()
+
+
+def _ago(dt):
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_dt.timezone.utc)
+    s = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
+    if s < 90:
+        return "now"
+    if s < 3600:
+        return f"{int(s // 60)}m"
+    if s < 86400:
+        return f"{int(s // 3600)}h"
+    return f"{int(s // 86400)}d"
 
 
 def _normalize_db_url(url):
@@ -170,21 +194,80 @@ def create_app():
     @app.get("/admin")
     @admin_required
     def admin():
-        candidates = Candidate.query.order_by(Candidate.created_at.desc()).all()
-        pending = Report.query.filter_by(status="pending").order_by(Report.created_at).all()
-        reviewed = (Report.query.filter(Report.status != "pending")
-                    .order_by(Report.reviewed_at.desc()).limit(50).all())
-        return render_template("admin.html", candidates=candidates, pending=pending,
-                               reviewed=reviewed, broker=broker_status(),
-                               cohort=DEFAULT_COHORT)
+        demo = bool(os.environ.get("QW_DEMO"))
+        pending = Report.query.filter_by(status="pending").order_by(Report.created_at.desc()).all()
+        all_n = Report.query.count()
+        approved_n = Report.query.filter_by(status="approved").count()
+        needs_n = Report.query.filter_by(status="needs_changes").count()
+
+        board_counts = {}
+        for r in pending:
+            board_counts[r.board] = board_counts.get(r.board, 0) + 1
+        boards_vm = [{"name": b, "count": board_counts.get(b, 0)} for b in BOARDS[:4]]
+
+        def tags_for(r):
+            return [{"t": "capstone", "cls": "pill-violet", "dot": None}] if r.board == BOARDS[-1] else []
+
+        sel_id = request.args.get("r", type=int)
+        active_id = sel_id if sel_id else (pending[0].id if pending else None)
+
+        items = []
+        for r in pending:
+            c = r.candidate
+            items.append({
+                "id": r.id, "ini": _initials(c.name), "name": c.name, "time": _ago(r.created_at),
+                "subject": f"{r.board} · {ROLE_TITLES.get(r.role, r.role)}",
+                "preview": " ".join((r.body or "").split())[:90],
+                "role": r.role, "tags": tags_for(r), "unread": True, "on": (r.id == active_id)})
+
+        sel = None
+        target = next((r for r in pending if r.id == active_id), None)
+        if target is None and active_id:
+            target = Report.query.get(active_id)
+        if target:
+            c = target.candidate
+            paras = [p.strip() for p in (target.body or "").split("\n") if p.strip()] or \
+                    ["No written analysis was submitted with this report."]
+            evidence = sig = None
+            if demo:
+                evidence = [{"label": "Exploit captured", "cls": "pill-ok", "dot": "dot-ok"},
+                            {"label": "Detection fired", "cls": "pill-ok", "dot": "dot-ok"},
+                            {"label": "Triage: malicious", "cls": "pill-amber", "dot": "dot-amber"},
+                            {"label": "Flag: domain-admin", "cls": "pill-ok", "dot": "dot-ok"}]
+                sig = "9f2a4c…e71b"
+            smap = {"pending": ("Pending", "pill-amber", "dot-amber"),
+                    "approved": ("Approved", "pill-ok", "dot-ok"),
+                    "rejected": ("Rejected", "pill-amber", "dot-amber"),
+                    "needs_changes": ("Needs changes", "pill-amber", "dot-amber")}
+            sl, scls, sdot = smap.get(target.status, ("Pending", "pill-amber", "dot-amber"))
+            sel = {
+                "id": target.id, "ini": _initials(c.name), "name": c.name, "handle": c.handle,
+                "board": target.board, "role_title": ROLE_TITLES.get(target.role, target.role),
+                "time": _ago(target.created_at), "rid": f"RGR-{DEFAULT_COHORT}-{target.id:02d}",
+                "subject_line": f"{c.name.split()[0]} submitted {target.board} "
+                                f"{ROLE_TITLES.get(target.role, target.role)} for review.",
+                "participants": [_initials(c.name), "FK"], "participants_more": 0,
+                "m_roles": 4, "m_boards": len(BOARDS), "m_flags": len(tags_for(target)),
+                "m_signals": (len(evidence) if evidence else 0),
+                "remeasure_label": (f"Program re-measured the repo · {len(evidence)} signals"
+                                    if evidence else "Re-measurement runs at cohort sync"),
+                "engine": "ed25519", "evidence": evidence, "sig": sig, "analysis": paras,
+                "status_label": sl, "status_cls": scls, "status_dot": sdot}
+
+        vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
+              "nav": {"all": all_n, "pending": len(pending), "approved": approved_n,
+                      "needs": needs_n, "boards": boards_vm, "flagged": 0},
+              "queue": items, "selected": sel}
+        return render_template("admin.html", vm=vm)
 
     @app.post("/admin/reports/<int:rid>")
     @admin_required
     def review_report(rid):
         r = Report.query.get_or_404(rid)
         action = request.form.get("action")
-        if action in ("approve", "reject"):
-            r.status = "approved" if action == "approve" else "rejected"
+        m = {"approve": "approved", "reject": "rejected", "changes": "needs_changes"}
+        if action in m:
+            r.status = m[action]
             r.reviewer_notes = (request.form.get("notes") or "").strip() or None
             r.reviewed_at = _dt.datetime.now(_dt.timezone.utc)
             db.session.commit()

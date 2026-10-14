@@ -1,96 +1,176 @@
 {% extends "base.html" %}
-{% block title %}Admin - Qwalora Ranger{% endblock %}
+{% from "_icons.html" import ic %}
+{% block title %}Grading Queue · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="flex items-center justify-between">
-  <h1 class="text-xl font-semibold text-slate-100">Grading queue</h1>
-  <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
-    <span>broker: <span class="text-slate-200">{{ broker }}</span></span>
-    <a href="/roster.json?cohort={{ cohort }}" class="hover:text-slate-100">roster.json</a>
-    <a href="/admin/logout" class="hover:text-slate-100">logout</a>
+<div class="shell">
+  <div class="app">
+
+    <!-- NAV -->
+    <aside class="nav">
+      <div class="nav-top">
+        <div class="nav-brand">
+          <span class="l"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></span>
+          <span class="compose">{{ ic('plus','ic ic-sm') }}</span>
+        </div>
+        <div class="nav-search">{{ ic('search','ic ic-sm') }}<span>Search rangers, boards</span></div>
+
+        <div class="nav-group">
+          <div class="gl">Queue</div>
+          <div class="nav-item"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span><span class="count">{{ vm.nav.all }}</span></div>
+          <div class="nav-item on"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span><span class="count count-on">{{ vm.nav.pending }}</span></div>
+          <div class="nav-item"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span><span class="count">{{ vm.nav.approved }}</span></div>
+          <div class="nav-item"><span class="l">{{ ic('edit') }}</span><span class="lbl">Needs changes</span>{% if vm.nav.needs %}<span class="count">{{ vm.nav.needs }}</span>{% endif %}</div>
+        </div>
+
+        <div class="nav-group">
+          <div class="gl">Pinned</div>
+          <div class="nav-item"><span class="l">{{ ic('star') }}</span><span class="lbl">Flagged rangers</span>{% if vm.nav.flagged %}<span class="count">{{ vm.nav.flagged }}</span>{% endif %}</div>
+          <div class="nav-item"><span class="l">{{ ic('tag') }}</span><span class="lbl">Capstone board</span></div>
+        </div>
+
+        <div class="nav-group">
+          <div class="gl">Cohort {{ vm.cohort }}</div>
+          {% for b in vm.nav.boards %}
+          <div class="nav-item"><span class="l">{{ ic('hash') }}</span><span class="lbl">{{ b.name }}</span>{% if b.count %}<span class="count">{{ b.count }}</span>{% endif %}</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="nav-user">
+        <span class="av av-32">FK</span>
+        <span class="nm"><b>Franck Kengne</b><span>Reviewer · Admin</span></span>
+        <a href="/admin/logout" class="iconbtn" title="Sign out">{{ ic('sliders','ic ic-sm') }}</a>
+      </div>
+    </aside>
+
+    <!-- LIST -->
+    <section class="list">
+      <div class="list-head">
+        <div class="ttl">Pending <span class="count">{{ vm.nav.pending }}</span></div>
+        <div class="list-tools">
+          <span class="iconbtn">{{ ic('columns','ic ic-sm') }}</span>
+          <span class="iconbtn">{{ ic('sort','ic ic-sm') }}</span>
+          <span class="iconbtn">{{ ic('filter','ic ic-sm') }}</span>
+        </div>
+      </div>
+      <div class="list-body">
+        {% for it in vm.queue %}
+        <a class="li {% if it.on %}on{% endif %}" href="/admin?r={{ it.id }}">
+          <div class="li-r1">
+            <div class="li-nm">
+              {% if it.unread %}<span class="unread"></span>{% endif %}
+              <span class="av av-24">{{ it.ini }}</span><b>{{ it.name }}</b>
+            </div>
+            <span class="li-time">{{ it.time }}</span>
+          </div>
+          <div class="li-sub">{{ it.subject }}</div>
+          <div class="li-prev">{{ it.preview }}</div>
+          <div class="li-tags">
+            <span class="pill">{{ it.role }}</span>
+            {% for t in it.tags %}<span class="pill {{ t.cls }}">{% if t.dot %}<span class="dot {{ t.dot }}"></span>{% endif %}{{ t.t }}</span>{% endfor %}
+          </div>
+        </a>
+        {% else %}
+        <div class="empty"><div class="ring">{{ ic('inbox') }}</div><div>No reports pending review.</div></div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- DETAIL -->
+    <section class="detail">
+      {% if vm.selected %}
+      {% set s = vm.selected %}
+      <div class="det-top">
+        <div class="ttl">{{ s.board }} · {{ s.role_title }}</div>
+        <div class="r">
+          <span class="iconbtn">{{ ic('kebab','ic ic-sm') }}</span>
+          <span class="iconbtn">{{ ic('clock','ic ic-sm') }}</span>
+          <span class="av av-26">FK</span>
+          <span class="pill {{ s.status_cls }}"><span class="dot {{ s.status_dot }}"></span>{{ s.status_label }}</span>
+        </div>
+      </div>
+
+      <div class="meta">
+        <span class="crumb">{{ ic('inbox','ic ic-sm') }}Cohort {{ vm.cohort }}</span>
+        <span class="mono dim" style="font-size:12px">{{ s.rid }}</span>
+        <span class="stack">{% for a in s.participants %}<span class="av av-24 av-ring">{{ a }}</span>{% endfor %}</span>
+        {% if s.participants_more %}<span class="muted" style="font-size:11.5px">+{{ s.participants_more }}</span>{% endif %}
+        <span class="metric">{{ ic('users','ic ic-sm') }}{{ s.m_roles }}</span>
+        <span class="metric">{{ ic('layers','ic ic-sm') }}{{ s.m_boards }}</span>
+        <span class="metric">{{ ic('tag','ic ic-sm') }}{{ s.m_flags }}</span>
+        <span class="metric">{{ ic('shield','ic ic-sm') }}{{ s.m_signals }}</span>
+      </div>
+
+      <div class="subject"><span class="bar"></span><p>{{ s.subject_line }}</p></div>
+
+      <div class="thread">
+        <div class="msg">
+          <div class="msg-h">
+            <div class="l"><span class="av av-32">{{ s.ini }}</span>
+              <div class="who"><b>{{ s.name }}</b><span class="sub"><span class="mono">@{{ s.handle }}</span></span></div></div>
+            <div class="r"><span class="li-time">{{ s.time }}</span><span class="iconbtn">{{ ic('reply','ic ic-sm') }}</span><span class="iconbtn">{{ ic('kebab','ic ic-sm') }}</span></div>
+          </div>
+          <p>Submitting {{ s.board }} {{ s.role_title }} for review. Write-up and the re-measured evidence are below.</p>
+        </div>
+
+        <div class="sep"><span class="hl"></span><span class="g">{{ ic('link','ic ic-sm') }}{{ s.remeasure_label }}</span><span class="hl"></span></div>
+
+        <div class="progcard">
+          <div class="h">{{ ic('shield','ic ic-sm') }}<b>Program re-measurement</b><span class="pill pill-violet">answer-free</span><span class="sp" style="flex:1"></span><span class="mono dim" style="font-size:11px">{{ s.engine }}</span></div>
+          {% if s.evidence %}
+          <div class="evrow">
+            {% for e in s.evidence %}<span class="chip {{ e.cls }}"><span class="dot {{ e.dot }}"></span>{{ e.label }}</span>{% endfor %}
+          </div>
+          {% else %}
+          <p class="muted" style="font-size:12.5px">Evidence is re-measured program-side at the next cohort sync. Nothing is scored from self-report.</p>
+          {% endif %}
+        </div>
+
+        {% if s.sig %}
+        <div class="sep"><span class="hl"></span><span class="g">{{ ic('lock','ic ic-sm') }}Signature sealed <span class="mono dim">{{ s.sig }}</span></span><span class="hl"></span></div>
+        {% endif %}
+
+        <div class="msg">
+          <div class="msg-h">
+            <div class="l"><span class="av av-32">{{ s.ini }}</span>
+              <div class="who"><b>{{ s.name }}</b><span class="sub"><span class="mono">@{{ s.handle }}</span><span class="dim">→ Reviewers</span></span></div></div>
+            <div class="r"><span class="li-time">{{ s.time }}</span><span class="iconbtn">{{ ic('reply','ic ic-sm') }}</span></div>
+          </div>
+          {% for p in s.analysis %}<p>{{ p }}</p>{% endfor %}
+          <a class="replink" href="#">View evidence in repo {{ ic('ext','ic ic-sm') }}</a>
+        </div>
+
+        <div class="sep"><span class="hl"></span><span class="g">Awaiting your decision</span><span class="hl"></span></div>
+      </div>
+
+      <form class="det-foot" method="post" action="/admin/reports/{{ s.id }}">
+        <div class="notebar">{{ ic('lock','ic ic-sm') }}<input name="notes" placeholder="Add a reviewer note" style="border:none;background:transparent;outline:none;flex:1;font:inherit;color:var(--ink)"></div>
+        <div class="foot-actions">
+          <span class="cap">Visible to reviewers in Cohort {{ vm.cohort }}</span>
+          <div class="b">
+            <button class="btn btn-ghost btn-sm" name="action" value="reject">Reject</button>
+            <button class="btn btn-outline btn-sm" name="action" value="changes">Request changes</button>
+            <button class="btn btn-primary btn-sm" name="action" value="approve">Approve</button>
+          </div>
+        </div>
+      </form>
+      {% else %}
+      <div class="empty"><div class="ring">{{ ic('medal') }}</div><div>Select a report to review.</div></div>
+      {% endif %}
+    </section>
+
+    <!-- RAIL -->
+    <nav class="rail">
+      <span class="rb">{{ ic('grid') }}</span>
+      <span class="rb on">{{ ic('inbox') }}</span>
+      <span class="rb">{{ ic('users') }}</span>
+      <span class="rb">{{ ic('server') }}</span>
+      <span class="rb">{{ ic('activity') }}</span>
+      <span class="rb">{{ ic('shield') }}</span>
+      <span class="sp"></span>
+      <span class="rb">{{ ic('help') }}</span>
+      <span class="rb">{{ ic('sliders') }}</span>
+    </nav>
+
   </div>
 </div>
-
-<!-- candidates -->
-<section class="mt-8">
-  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">rangers ({{ candidates|length }})</h2>
-  <div class="rounded-lg border border-edge overflow-hidden">
-    <table class="w-full text-sm">
-      <thead class="bg-panel text-slate-400 font-mono text-xs">
-        <tr><th class="text-left px-4 py-2">handle</th><th class="text-left px-4 py-2">name</th>
-            <th class="text-left px-4 py-2">cohort</th><th class="text-left px-4 py-2">repo</th>
-            <th class="text-left px-4 py-2">reports</th></tr>
-      </thead>
-      <tbody>
-        {% for c in candidates %}
-        <tr class="border-t border-edge">
-          <td class="px-4 py-2 font-mono text-ranger">@{{ c.handle }}</td>
-          <td class="px-4 py-2 text-slate-200">{{ c.name }}</td>
-          <td class="px-4 py-2 font-mono text-slate-400">{{ c.cohort }}</td>
-          <td class="px-4 py-2 font-mono text-slate-500">{{ c.repo or ('qwalora/' ~ c.handle) }}</td>
-          <td class="px-4 py-2 text-slate-400">{{ c.reports|length }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="px-4 py-6 text-center text-slate-600 text-sm">no rangers enrolled yet</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<!-- pending reports -->
-<section class="mt-10">
-  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">pending review ({{ pending|length }})</h2>
-  <div class="space-y-4">
-    {% for r in pending %}
-    <div class="rounded-lg border border-edge bg-panel p-4">
-      <div class="flex items-center justify-between">
-        <div class="font-mono text-xs text-slate-300">
-          <span class="text-ranger">@{{ r.candidate.handle }}</span>
-          · {{ r.board }} · {{ r.role }}
-        </div>
-        <span class="inline-flex items-center gap-1.5 text-xs text-amber-400">
-          <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>pending</span>
-      </div>
-      <pre class="mt-3 text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">{{ r.body }}</pre>
-      <form method="post" action="/admin/reports/{{ r.id }}" class="mt-3 flex items-center gap-2">
-        <input name="notes" placeholder="reviewer note (optional)"
-               class="flex-1 rounded-md bg-ink border border-edge px-3 py-1.5 text-xs text-slate-200 focus:border-ranger outline-none">
-        <button name="action" value="approve"
-                class="px-3 py-1.5 rounded-md bg-ranger text-ink font-mono text-xs font-semibold hover:brightness-110">approve</button>
-        <button name="action" value="reject"
-                class="px-3 py-1.5 rounded-md border border-red-500/50 text-red-300 font-mono text-xs hover:bg-red-500/10">reject</button>
-      </form>
-    </div>
-    {% else %}
-    <p class="text-sm text-slate-600">nothing pending.</p>
-    {% endfor %}
-  </div>
-</section>
-
-<!-- reviewed -->
-{% if reviewed %}
-<section class="mt-10">
-  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">recently reviewed</h2>
-  <div class="rounded-lg border border-edge overflow-hidden">
-    <table class="w-full text-sm">
-      <tbody>
-        {% for r in reviewed %}
-        <tr class="border-t border-edge first:border-t-0">
-          <td class="px-4 py-2 font-mono text-xs text-ranger">@{{ r.candidate.handle }}</td>
-          <td class="px-4 py-2 font-mono text-xs text-slate-400">{{ r.board }} · {{ r.role }}</td>
-          <td class="px-4 py-2 text-xs">
-            {% if r.status == 'approved' %}
-            <span class="inline-flex items-center gap-1.5 text-ranger"><span class="w-1.5 h-1.5 rounded-full bg-ranger"></span>approved</span>
-            {% else %}
-            <span class="inline-flex items-center gap-1.5 text-red-300"><span class="w-1.5 h-1.5 rounded-full bg-red-400"></span>rejected</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-2 text-xs text-slate-500">{{ r.reviewer_notes or '' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
 {% endblock %}

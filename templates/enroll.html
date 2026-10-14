@@ -1,40 +1,42 @@
 {% extends "base.html" %}
-{% block title %}Enroll - Qwalora Ranger{% endblock %}
+{% from "_icons.html" import ic %}
+{% block title %}Enroll · Qwalora Ranger{% endblock %}
+{% block bodyclass %}{% endblock %}
 {% block body %}
-<section class="max-w-lg">
-  <h1 class="text-xl font-semibold text-slate-100">Enroll a ranger</h1>
-  <p class="mt-2 text-sm text-slate-400">Cohort <span class="font-mono text-ranger">{{ cohort }}</span>.
-    You get a submission token and a queued range on completion.</p>
-
-  {% if error %}
-  <div class="mt-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{{ error }}</div>
-  {% endif %}
-
-  <form method="post" action="/enroll" class="mt-6 space-y-4">
-    <div>
-      <label class="block text-xs font-mono text-slate-400 mb-1">github handle</label>
-      <input name="handle" required placeholder="cloudcwfranck"
-             class="w-full rounded-md bg-ink border border-edge px-3 py-2 text-sm text-slate-100 font-mono focus:border-ranger outline-none">
+<div class="stage">
+  <div class="auth">
+    <div class="auth-head">
+      <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
+      <h1 class="t">Enroll a ranger</h1>
+      <p class="lead">Cohort <span class="mono" style="color:var(--violet-700)">{{ cohort }}</span>.
+        You receive a submission token and a queued range on completion.</p>
     </div>
-    <div>
-      <label class="block text-xs font-mono text-slate-400 mb-1">full name</label>
-      <input name="name" required placeholder="Franck Kengne"
-             class="w-full rounded-md bg-ink border border-edge px-3 py-2 text-sm text-slate-100 focus:border-ranger outline-none">
+    <div class="auth-body">
+      {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
+      <form method="post" action="/enroll" style="display:flex;flex-direction:column;gap:16px">
+        <div class="field">
+          <label class="label">GitHub handle</label>
+          <input class="input mono" name="handle" required placeholder="cloudcwfranck" autocomplete="off">
+        </div>
+        <div class="field">
+          <label class="label">Full name</label>
+          <input class="input" name="name" required placeholder="Franck Kengne">
+        </div>
+        <div class="rowline">
+          <div class="field">
+            <label class="label">Email</label>
+            <input class="input" type="email" name="email" required placeholder="you@qwalora.com">
+          </div>
+          <div class="field">
+            <label class="label">Fork repo <span class="dim">· optional</span></label>
+            <input class="input mono" name="repo" placeholder="qwalora/handle">
+          </div>
+        </div>
+        <input type="hidden" name="cohort" value="{{ cohort }}">
+        <button class="btn btn-primary btn-block">Enroll ranger</button>
+      </form>
+      <p class="foothint">Objective scoring is answer-free and program-side. Nothing here contains the answers.</p>
     </div>
-    <div>
-      <label class="block text-xs font-mono text-slate-400 mb-1">email</label>
-      <input name="email" type="email" required placeholder="you@qwalora.com"
-             class="w-full rounded-md bg-ink border border-edge px-3 py-2 text-sm text-slate-100 focus:border-ranger outline-none">
-    </div>
-    <div>
-      <label class="block text-xs font-mono text-slate-400 mb-1">fork repo <span class="text-slate-600">(optional, owner/name)</span></label>
-      <input name="repo" placeholder="qwalora/{handle}"
-             class="w-full rounded-md bg-ink border border-edge px-3 py-2 text-sm text-slate-100 font-mono focus:border-ranger outline-none">
-    </div>
-    <input type="hidden" name="cohort" value="{{ cohort }}">
-    <button class="w-full rounded-md bg-ranger text-ink font-mono text-sm font-semibold py-2.5 hover:brightness-110">
-      enroll
-    </button>
-  </form>
-</section>
+  </div>
+</div>
 {% endblock %}

@@ -1,39 +1,12 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Qwalora Ranger{% endblock %}</title>
-  <script src="https://cdn.tailwindcss.com/3.4.13"></script>
-  <script>
-    tailwind.config = { darkMode: 'class', theme: { extend: {
-      fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','monospace'] },
-      colors: { ink: '#0a0e14', panel: '#11161f', edge: '#1e2735', ranger: '#38e8b0' }
-    }}}
-  </script>
-  <style>
-    body { background: radial-gradient(1200px 600px at 80% -10%, #10212020, transparent), #0a0e14; }
-    .ln { stroke: currentColor; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
-<body class="min-h-screen text-slate-200 antialiased">
-  <header class="border-b border-edge">
-    <div class="max-w-5xl mx-auto px-5 h-14 flex items-center justify-between">
-      <a href="/" class="flex items-center gap-2 text-slate-100">
-        <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger"><path class="ln" d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><circle class="ln" cx="12" cy="10" r="1.6"/><path class="ln" d="M12 11.8V15"/></svg>
-        <span class="font-mono text-sm tracking-tight">qwalora<span class="text-ranger">/</span>ranger</span>
-      </a>
-      <nav class="flex items-center gap-4 text-xs text-slate-400 font-mono">
-        <a href="/enroll" class="hover:text-slate-100">enroll</a>
-        <a href="/admin" class="hover:text-slate-100">admin</a>
-      </nav>
-    </div>
-  </header>
-  <main class="max-w-5xl mx-auto px-5 py-10">
-    {% block body %}{% endblock %}
-  </main>
-  <footer class="max-w-5xl mx-auto px-5 py-8 text-xs text-slate-600 font-mono border-t border-edge mt-10">
-    control plane - objective grading stays answer-free and program-side
-  </footer>
+<body class="{% block bodyclass %}{% endblock %}">
+{% block body %}{% endblock %}
 </body>
 </html>

@@ -1,19 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Admin - Qwalora Ranger{% endblock %}
+{% from "_icons.html" import ic %}
+{% block title %}Reviewer sign-in · Qwalora Ranger{% endblock %}
 {% block body %}
-<section class="max-w-sm">
-  <h1 class="text-xl font-semibold text-slate-100">Admin</h1>
-  <p class="mt-2 text-sm text-slate-400">Enter the control-plane admin token.</p>
-  {% if error %}
-  <div class="mt-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{{ error }}</div>
-  {% endif %}
-  <form method="post" action="/admin/login" class="mt-6 space-y-4">
-    <input type="password" name="token" required placeholder="admin token"
-           class="w-full rounded-md bg-ink border border-edge px-3 py-2 text-sm text-slate-100 font-mono focus:border-ranger outline-none">
-    <input type="hidden" name="next" value="{{ nxt }}">
-    <button class="w-full rounded-md bg-ranger text-ink font-mono text-sm font-semibold py-2.5 hover:brightness-110">
-      sign in
-    </button>
-  </form>
-</section>
+<div class="stage">
+  <div class="auth" style="max-width:400px">
+    <div class="auth-head">
+      <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
+      <h1 class="t">Reviewer sign-in</h1>
+      <p class="lead">Enter the control-plane admin token to open the grading queue.</p>
+    </div>
+    <div class="auth-body">
+      {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
+      <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:16px">
+        <div class="field">
+          <label class="label">Admin token</label>
+          <input class="input mono" type="password" name="token" required placeholder="••••••••••••" autocomplete="off">
+        </div>
+        <input type="hidden" name="next" value="{{ nxt }}">
+        <button class="btn btn-primary btn-block">{{ ic('key','ic ic-sm') }} Sign in</button>
+      </form>
+    </div>
+  </div>
+</div>
 {% endblock %}

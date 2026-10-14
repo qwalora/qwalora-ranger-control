@@ -1,41 +1,55 @@
 {% extends "base.html" %}
+{% from "_icons.html" import ic %}
 {% block body %}
-<section class="max-w-2xl">
-  <p class="font-mono text-xs text-ranger mb-3">cohort {{ cohort }}</p>
-  <h1 class="text-2xl md:text-3xl font-semibold text-slate-100 leading-tight">
-    Qwalora Ranger control plane
-  </h1>
-  <p class="mt-4 text-slate-400 leading-relaxed">
-    Enrollment, written-report review, and range provisioning for the Ranger
-    cyber range. Objective scoring is not done here: the program re-measures
-    every repo answer-free and signs the cohort. This plane runs the human
-    surface around that spine.
-  </p>
-  <div class="mt-8 flex gap-3">
-    <a href="/enroll" class="px-4 py-2 rounded-md bg-ranger text-ink font-mono text-sm font-semibold hover:brightness-110">
-      enroll a ranger
-    </a>
-    <a href="/admin" class="px-4 py-2 rounded-md border border-edge text-slate-300 font-mono text-sm hover:border-ranger">
-      admin
-    </a>
+<div class="site">
+  <div class="topbar">
+    <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
+    <nav class="topnav">
+      <a href="#proof">Proof</a><a href="#roles">Roles</a><a href="#how">How it works</a>
+    </nav>
+    <a class="btn btn-primary btn-sm" href="/enroll">Enroll a ranger</a>
   </div>
 
-  <div class="mt-12 grid sm:grid-cols-3 gap-4">
-    <div class="rounded-lg border border-edge bg-panel p-4">
-      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M4 7h16M4 12h16M4 17h10"/></svg>
-      <p class="font-mono text-xs text-slate-300">roster</p>
-      <p class="text-xs text-slate-500 mt-1">feeds cohort-sync the exact list it grades.</p>
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Verifiable cyber range</p>
+      <h1>Capability you can <span class="v">verify.</span></h1>
+      <p class="lead">Rangers run the full operation: black-box recon, red-team exploitation, blue-team
+        detection, incident response. Every result is re-measured by the program and sealed with a
+        cryptographic signature anyone can verify. No one scores themselves.</p>
+      <div style="display:flex;gap:10px;margin-top:26px">
+        <a class="btn btn-primary" href="/enroll">Enroll a ranger {{ ic('arrow','ic ic-sm') }}</a>
+        <a class="btn btn-ghost" href="/admin">Reviewer sign-in</a>
+      </div>
     </div>
-    <div class="rounded-lg border border-edge bg-panel p-4">
-      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M5 4h11l3 3v13H5z"/><path class="ln" d="M8 11h8M8 15h5"/></svg>
-      <p class="font-mono text-xs text-slate-300">reports</p>
-      <p class="text-xs text-slate-500 mt-1">written analyses queued for human review.</p>
+    <div class="previewcard">
+      <div style="display:flex;justify-content:space-between;color:#8f86d6">
+        <span>cohort {{ cohort }}</span><span style="color:#6ee0a6">signature valid</span>
+      </div>
+      <div style="margin:16px 0;height:1px;background:#2a2060"></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#9a92e0">ranger</span><span style="color:#efecff">amina-okafor</span></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#9a92e0">boards cleared</span><span style="color:#efecff">6 / 6</span></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#9a92e0">re-measured</span><span style="color:#efecff">program-side</span></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#9a92e0">ed25519</span><span style="color:#7a71c8">9f2a4c…e71b</span></div>
     </div>
-    <div class="rounded-lg border border-edge bg-panel p-4">
-      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M4 6h16v12H4z"/><path class="ln" d="M7 10l2 2-2 2M12 14h4"/></svg>
-      <p class="font-mono text-xs text-slate-300">range broker</p>
-      <p class="text-xs text-slate-500 mt-1">queues per-ranger Ludus ranges.</p>
+  </section>
+
+  <section class="feature-row" id="roles">
+    <div class="fcard">
+      <div class="ficon">{{ ic('flag') }}</div>
+      <h3>Red Teamer</h3>
+      <p>Reproduce the attack on an isolated estate, map each step to MITRE ATT&CK, and capture the flag with a signed proof.</p>
     </div>
-  </div>
-</section>
+    <div class="fcard">
+      <div class="ficon">{{ ic('activity') }}</div>
+      <h3>Detection &amp; SOC</h3>
+      <p>Author detections that fire on the real activity and stay silent on the benign set, then triage the live telemetry.</p>
+    </div>
+    <div class="fcard">
+      <div class="ficon">{{ ic('shield') }}</div>
+      <h3>Incident Responder</h3>
+      <p>Contain, eradicate, recover, and reconstruct the incident end to end, scored on outcome and time, not self-report.</p>
+    </div>
+  </section>
+</div>
 {% endblock %}
