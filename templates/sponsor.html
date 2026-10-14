@@ -12,13 +12,16 @@
     </div>
   </div></header>
 
-  <div class="page-main" style="max-width:920px">
-    <div style="margin-bottom:6px">
-      <div class="ttl">{{ vm.org }}</div>
-      <div class="rg-sub">Your sponsored rangers. Read-only, scoped to your organization.</div>
+  <div style="flex:1;padding:32px 20px">
+   <div class="card" style="max-width:960px;margin:0 auto">
+    <div class="card-head">
+      <span class="eyebrow"><span class="d"></span>Sponsor view</span>
+      <h1 class="t">{{ vm.org }}</h1>
+      <p class="muted" style="margin-top:2px">Your sponsored rangers. Read-only, scoped to your organization.</p>
     </div>
+    <div class="card-body">
 
-    <div class="rg-stats" style="margin:14px 0 6px">
+    <div class="rg-stats" style="margin:0 0 6px;padding:0">
       <div class="rg-stat"><b>{{ vm.counts.active }}</b><span>Active</span></div>
       <div class="rg-stat"><b>{{ vm.counts.graduated }}</b><span>Certified</span></div>
       <div class="rg-stat"><b>{{ vm.counts.washed_out }}</b><span>Washed out</span></div>
@@ -50,6 +53,8 @@
       <div class="empty"><div class="ring">{{ ic('users') }}</div><div>No rangers in {{ vm.org }} yet.</div></div>
       {% endfor %}
     </div>
+    </div>
+   </div>
   </div>
 </div>
 {% endblock %}
