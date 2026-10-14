@@ -345,6 +345,17 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
 .rec-id b{font:600 13.5px/1.1 var(--f)}
 .rec-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px}
 @media(max-width:560px){.rec-row{grid-template-columns:auto 1fr auto;gap:8px}.rec-meta{display:none}}
+.verify-banner{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:10px;border:1px solid var(--line2)}
+.verify-banner .ic{width:22px;height:22px;flex:none}
+.verify-banner div{display:flex;flex-direction:column;gap:2px}
+.verify-banner b{font:600 13.5px/1.2 var(--f)}
+.verify-banner span{font-size:12px;color:var(--mut)}
+.vb-ok{background:rgba(42,165,103,.08);border-color:rgba(42,165,103,.3);color:var(--ok,#2aa567)}
+.vb-warn{background:rgba(202,162,58,.08);border-color:rgba(202,162,58,.3);color:var(--amber,#9a7b1f)}
+.cert-badge{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line2);border-radius:10px}
+.cert-badge div{display:flex;flex-direction:column;gap:1px}
+.cert-badge b{font:600 14px/1.2 var(--f)}
+.cert-badge span{font-size:12px;color:var(--mut)}
 
 .prog{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0 2px}
 .prog-l{font:600 12.5px/1 var(--f);color:var(--med)}

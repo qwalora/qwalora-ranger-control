@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Verify · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <span class="muted" style="font-size:12.5px">Public credential check</span>
+  </div></header>
+
+  <div class="page-main">
+    <div class="card" style="max-width:640px">
+      {% if not vm.found %}
+      <div class="card-body" style="text-align:center;padding:40px">
+        <div class="ring" style="margin:0 auto 12px">{{ ic('shield') }}</div>
+        <h1 class="t">No such ranger</h1>
+        <p class="muted">We have no record for <b>@{{ vm.handle }}</b>.</p>
+      </div>
+      {% else %}
+      <div class="card-head">
+        <span class="eyebrow"><span class="d"></span>Cohort {{ vm.cohort }}</span>
+        <h1 class="t">{{ vm.name }} <span class="mono dim" style="font-size:15px;font-weight:400">@{{ vm.handle }}</span></h1>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
+
+        <div class="verify-banner {% if vm.all_ok %}vb-ok{% else %}vb-warn{% endif %}">
+          {{ ic('shield','ic') }}
+          <div>
+            <b>{% if vm.all_ok %}Every credential verifies{% else %}Some credentials could not be verified{% endif %}</b>
+            <span>Each badge and board clearance is checked against Qwalora's Ed25519 signing key, live, in this request.</span>
+          </div>
+        </div>
+
+        {% if vm.certified %}
+        <div class="field">
+          <div class="cert-badge">
+            <span class="pip cert on" style="width:34px;height:34px">{{ ic('medal') }}</span>
+            <div><b>Qwalora Ranger, Certified</b><span class="muted">Cleared all six boards, SOC analyst to capstone.</span></div>
+            <a class="btn btn-primary btn-sm" href="/verify/{{ vm.handle }}/certificate" style="margin-left:auto">View certificate</a>
+          </div>
+        </div>
+        {% else %}
+        <div class="field"><span class="pill pill-violet"><span class="dot dot-violet"></span>In progress · {{ vm.status }}</span></div>
+        {% endif %}
+
+        <div class="field">
+          <label class="label">Board clearances</label>
+          <div class="record">
+            {% for cl in vm.clearances %}
+            <div class="rec-row">
+              <span class="rec-pip t{{ cl.board }}">{{ cl.board }}</span>
+              <div class="rec-id"><b>{{ cl.name }}</b><span class="muted">{{ cl.role_title }}</span></div>
+              <div class="rec-meta">{% if cl.objective_score is not none %}<span class="mono dim">obj {{ cl.objective_score }}%</span>{% endif %}<span class="mono dim">{{ cl.cleared_at[:10] }}</span></div>
+              {% if cl.verified %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Verified</span>
+              {% else %}<span class="pill pill-amber"><span class="dot dot-amber"></span>Unverified</span>{% endif %}
+            </div>
+            {% else %}
+            <div class="rec-row"><span class="muted" style="padding:6px 0">No board clearances yet.</span></div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="label">Rank badges</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            {% for b in vm.badges %}{% if b.level != 'certified' %}
+            <span class="pill {% if b.verified %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot {% if b.verified %}dot-ok{% else %}dot-amber{% endif %}"></span>{{ b.name }}</span>
+            {% endif %}{% endfor %}
+          </div>
+        </div>
+
+        <div class="field" style="border-top:1px solid var(--line);padding-top:14px">
+          <p class="dim" style="font-size:11.5px">Verify independently: the signed record is at <a href="/badges/{{ vm.handle }}.json">/badges/{{ vm.handle }}.json</a>, checked against the public key at <a href="/pubkey">/pubkey</a>.</p>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

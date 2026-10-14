@@ -1459,6 +1459,65 @@ def create_app():
                        public_key=signing.public_key_b64(),
                        badges=badges, clearances=clearances)
 
+    def _verify_record(c):
+        """Re-derive each signed claim and check its Ed25519 signature, so the
+        public page proves the credential rather than just displaying it."""
+        badges = []
+        for b in sorted(c.badges, key=lambda x: str(x.level)):
+            claim = {"kind": "badge", "handle": c.handle, "cohort": c.cohort,
+                     "level": b.level, "name": b.name, "role": b.role,
+                     "issued_at": _iso(b.issued_at)}
+            ok = bool(b.signature) and not b.revoked and signing.verify(claim, b.signature)
+            badges.append({"level": b.level, "name": b.name, "role": b.role,
+                           "issued_at": _iso(b.issued_at), "revoked": b.revoked,
+                           "verified": ok})
+        clearances = []
+        for br in sorted(c.board_results, key=lambda x: x.board):
+            if not br.cleared:
+                continue
+            claim = {"kind": "clearance", "handle": c.handle, "cohort": c.cohort,
+                     "board": br.board, "role": P.role_of(br.board),
+                     "objective_score": br.objective_score, "cleared_at": _iso(br.cleared_at)}
+            ok = bool(br.signature) and signing.verify(claim, br.signature)
+            clearances.append({"board": br.board, "name": P.badge_for(br.board)[1],
+                               "role_title": P.ROLE_TITLES.get(P.role_of(br.board), "-"),
+                               "objective_score": (round(br.objective_score, 1)
+                                                   if br.objective_score is not None else None),
+                               "cleared_at": _iso(br.cleared_at), "verified": ok})
+        certified = any(b["level"] == "certified" and b["verified"] for b in badges)
+        return {"badges": badges, "clearances": clearances, "certified": certified}
+
+    @app.get("/verify/<handle>")
+    def verify_page(handle):
+        """Public, no-auth: verify a ranger's signed credentials in the open.
+        Reveals only their own badges/clearances, no grades of others, no keys."""
+        c = Candidate.query.filter_by(handle=handle.lstrip("@")).first()
+        if not c:
+            return render_template("verify.html", vm={"found": False, "handle": handle}), 404
+        rec = _verify_record(c)
+        all_ok = all(b["verified"] for b in rec["badges"]) and \
+            all(cl["verified"] for cl in rec["clearances"]) and \
+            (rec["badges"] or rec["clearances"])
+        vm = {"found": True, "handle": c.handle, "name": c.name, "cohort": c.cohort,
+              "status": c.status, "certified": rec["certified"],
+              "badges": rec["badges"], "clearances": rec["clearances"],
+              "all_ok": all_ok, "pubkey": signing.public_key_b64()}
+        return render_template("verify.html", vm=vm)
+
+    @app.get("/verify/<handle>/certificate")
+    def verify_certificate(handle):
+        c = Candidate.query.filter_by(handle=handle.lstrip("@")).first()
+        if not c:
+            abort(404)
+        rec = _verify_record(c)
+        if not rec["certified"]:
+            return redirect(url_for("verify_page", handle=c.handle))
+        cert = next((b for b in c.badges if b.level == "certified"), None)
+        vm = {"name": c.name, "handle": c.handle, "cohort": c.cohort,
+              "issued_at": _iso(cert.issued_at) if cert else "",
+              "clearances": rec["clearances"], "pubkey": signing.public_key_b64()}
+        return render_template("certificate.html", vm=vm)
+
     @app.get("/roster.json")
     @admin_required
     def roster_json():

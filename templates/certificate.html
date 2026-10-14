@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Certificate · {{ vm.name }} · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="cert-page">
+  <div class="cert-actions no-print">
+    <a class="btn btn-ghost btn-sm" href="/verify/{{ vm.handle }}">Back to verification</a>
+    <button class="btn btn-primary btn-sm" onclick="window.print()">{{ ic('ext','ic ic-sm') }} Print / Save PDF</button>
+  </div>
+
+  <div class="cert">
+    <div class="cert-rule"></div>
+    <div class="cert-brand">{{ qlogo('dark',34) }}<b>QWALORA <span>Ranger</span></b></div>
+    <div class="cert-kicker">Certificate of Completion</div>
+    <div class="cert-name">{{ vm.name }}</div>
+    <div class="cert-body">
+      has completed the Qwalora Ranger program, clearing all six boards from
+      SOC analyst to capstone under a verified, no-assistance standard, and is
+      recognized as a
+    </div>
+    <div class="cert-title">Qwalora Ranger, Certified</div>
+
+    <div class="cert-boards">
+      {% for cl in vm.clearances %}
+      <div class="cert-board"><span class="rec-pip t{{ cl.board }}">{{ cl.board }}</span><span>{{ cl.name }}</span></div>
+      {% endfor %}
+    </div>
+
+    <div class="cert-foot">
+      <div><span class="cert-lbl">Cohort</span><b>{{ vm.cohort }}</b></div>
+      <div><span class="cert-lbl">Issued</span><b>{{ vm.issued_at[:10] }}</b></div>
+      <div><span class="cert-lbl">Handle</span><b>@{{ vm.handle }}</b></div>
+    </div>
+    <div class="cert-sig">
+      Ed25519-signed and independently verifiable at ranger.qwalora.com/verify/{{ vm.handle }}
+      · key {{ vm.pubkey[:16] }}…
+    </div>
+    <div class="cert-rule"></div>
+  </div>
+</div>
+
+<style>
+.cert-page{max-width:860px;margin:0 auto;padding:24px 16px}
+.cert-actions{display:flex;gap:10px;justify-content:flex-end;margin-bottom:16px}
+.cert{position:relative;background:#fff;border:1px solid var(--line2);border-radius:14px;
+  padding:48px 56px 40px;text-align:center;box-shadow:0 10px 40px rgba(20,12,60,.08)}
+.cert-rule{height:4px;border-radius:3px;background:linear-gradient(90deg,var(--violet,#6b5cf0),var(--orange,#f26b2a));margin:0 0 28px}
+.cert-rule:last-child{margin:28px 0 0}
+.cert-brand{display:inline-flex;align-items:center;gap:8px;font:700 16px/1 var(--f);letter-spacing:.02em}
+.cert-brand span{color:var(--orange,#f26b2a)}
+.cert-kicker{margin-top:26px;font:600 12px/1 var(--f);letter-spacing:.22em;text-transform:uppercase;color:var(--mut)}
+.cert-name{margin-top:14px;font:700 40px/1.1 var(--f);color:var(--ink)}
+.cert-body{max-width:560px;margin:16px auto 0;color:var(--mut);font:400 14.5px/1.7 var(--f)}
+.cert-title{margin-top:18px;font:800 24px/1.2 var(--f);color:var(--violet,#5a4ce0)}
+.cert-boards{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:26px auto 0;max-width:620px}
+.cert-board{display:flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid var(--line2);border-radius:999px;font:600 12.5px/1 var(--f)}
+.cert-foot{display:flex;gap:40px;justify-content:center;margin-top:30px}
+.cert-foot .cert-lbl{display:block;font:600 10px/1 var(--f);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.cert-foot b{font:600 14px/1 var(--f)}
+.cert-sig{margin-top:22px;font:400 11px/1.5 var(--m);color:var(--dim);word-break:break-all}
+@media print{.no-print{display:none}.cert{border:none;box-shadow:none}.cert-page{padding:0}body{background:#fff}}
+</style>
+{% endblock %}
