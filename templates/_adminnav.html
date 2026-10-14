@@ -29,7 +29,6 @@
       <div class="gl">Program</div>
       <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
       <a class="nav-item {% if active=='ranges' %}on{% endif %}" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
-      <a class="nav-item" href="/roster.json?cohort={{ cohort }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">Roster JSON</span></a>
     </div>
   </div>
   <div class="nav-user">
@@ -45,7 +44,6 @@
   <a class="rb {% if active in ('all','pending','approved','needs') %}on{% endif %}" href="/admin?status=pending" title="Reports">{{ ic('inbox') }}</a>
   <a class="rb {% if active=='cohort' %}on{% endif %}" href="/admin/cohort" title="Cohort">{{ ic('users') }}</a>
   <a class="rb {% if active=='ranges' %}on{% endif %}" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
-  <a class="rb" href="/roster.json?cohort={{ cohort }}" title="Roster JSON">{{ ic('hash') }}</a>
   <span class="sp"></span>
   <a class="rb" href="https://ranger.qwalora.com" title="Ranger site">{{ ic('help') }}</a>
   <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
