@@ -28,6 +28,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
 import broker
+import githuboauth
 import program as P
 import signing
 from broker import broker_status
@@ -147,7 +148,7 @@ def create_app():
 
     @app.context_processor
     def _inject_asset_ver():
-        return {"asset_ver": asset_ver}
+        return {"asset_ver": asset_ver, "oauth_enabled": githuboauth.enabled()}
 
     @app.after_request
     def _security_headers(resp):
@@ -944,6 +945,131 @@ def create_app():
         cands = Candidate.query.filter_by(cohort=cohort).order_by(Candidate.handle).all()
         return jsonify(cohort=cohort,
                        candidates=[c.roster_entry() for c in cands])
+
+    # --- GitHub OAuth: the only way candidates get in -----------------------
+    @app.get("/auth/github/login")
+    def gh_login():
+        if not githuboauth.enabled():
+            abort(503, "GitHub sign-in is not configured.")
+        import secrets as _secrets
+        state = _secrets.token_urlsafe(24)
+        session["oauth_state"] = state
+        session["oauth_role"] = "reviewer" if request.args.get("role") == "reviewer" else "candidate"
+        session["oauth_next"] = request.args.get("next", "")
+        return redirect(githuboauth.authorize_url(state))
+
+    @app.get("/auth/github/callback")
+    def gh_callback():
+        if not githuboauth.enabled():
+            abort(503)
+        if request.args.get("error"):
+            return render_template("oauth_error.html",
+                                   msg=request.args.get("error_description") or "sign-in was cancelled"), 400
+        state = request.args.get("state")
+        if not state or state != session.pop("oauth_state", None):
+            return render_template("oauth_error.html", msg="sign-in session expired, please try again"), 400
+        role = session.pop("oauth_role", "candidate")
+        nxt = session.pop("oauth_next", "")
+        token = githuboauth.exchange_code(request.args.get("code", ""))
+        if not token:
+            return render_template("oauth_error.html", msg="could not complete GitHub sign-in"), 400
+        user = githuboauth.get_user(token)
+        emails = githuboauth.get_emails(token)
+        gid = str(user.get("id") or "")
+        login = user.get("login") or ""
+        name = user.get("name") or login
+        if not gid or not login:
+            return render_template("oauth_error.html", msg="could not read your GitHub profile"), 400
+
+        if role == "reviewer":
+            if gid not in githuboauth.reviewer_ids():
+                return render_template("oauth_error.html",
+                                       msg="this GitHub account is not authorized as a reviewer"), 403
+            session["admin"] = True
+            session["admin_login"] = login
+            return redirect(nxt or url_for("admin"))
+
+        # Candidate: enforce the identity bar before letting anyone in.
+        ok, reason, email = githuboauth.identity_ok(user, emails)
+        if not ok:
+            return render_template("oauth_error.html", msg=reason), 403
+
+        c = Candidate.query.filter_by(github_id=gid).first()
+        if c is None:
+            # Adopt a legacy row enrolled before OAuth (github_id was the handle).
+            legacy = Candidate.query.filter_by(handle=login).first()
+            if legacy is not None:
+                legacy.github_id = gid
+                c = legacy
+            else:
+                decision, msg = _enrollment_decision(gid)
+                if decision in ("blocked_active", "blocked_graduate"):
+                    return render_template("oauth_error.html", msg=msg), 409
+                c = Candidate(handle=login, name=name, email=email,
+                              cohort=DEFAULT_COHORT, github_id=gid,
+                              current_board=1, current_role=P.role_of(1))
+                db.session.add(c)
+                db.session.flush()
+                _provision_for_board(c, 1)
+        db.session.commit()
+        session["cand"] = c.id
+        return redirect(url_for("candidate_me"))
+
+    @app.get("/auth/logout")
+    def auth_logout():
+        session.pop("cand", None)
+        return redirect(ranger_site)
+
+    # --- candidate self-service --------------------------------------------
+    def _current_candidate():
+        cid = session.get("cand")
+        return Candidate.query.get(cid) if cid else None
+
+    @app.get("/me")
+    def candidate_me():
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))
+            abort(401)
+        n = c.current_board
+        rr = _board_range(c, n)
+        bc = _badge_chain(c)
+        rst = rr.status if rr else "none"
+        rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("Not started", "pill", "dot"))
+        vm = {
+            "name": c.name, "handle": c.handle, "status": c.status,
+            "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
+            "tier": P.tier_of(n), "cohort": c.cohort,
+            "badges": bc["chain"], "certified": bc["certified"],
+            "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
+            "has_wg": bool(rr and rr.wireguard_config),
+            "seed": _current_seed(c), "token": c.token,
+            "range_detail": (rr.detail if rr else ""),
+        }
+        return render_template("candidate_me.html", vm=vm)
+
+    @app.post("/me/start")
+    def candidate_start():
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if c.is_active:
+            _provision_for_board(c, c.current_board, auto_deploy=True)
+            db.session.commit()
+        return redirect(url_for("candidate_me"))
+
+    @app.get("/me/wireguard")
+    def candidate_wireguard():
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        rr = _board_range(c, c.current_board)
+        if not rr or not rr.wireguard_config:
+            abort(404)
+        from flask import Response
+        return Response(rr.wireguard_config, mimetype="text/plain",
+                        headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
 
     return app
 

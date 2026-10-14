@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Your Ranger · Qwalora{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+  </div></header>
+
+  <div class="page-main">
+    <div class="card" style="max-width:620px">
+      <div class="card-head">
+        <span class="eyebrow"><span class="d"></span>Cohort {{ vm.cohort }} ·
+          {% if vm.status == 'graduated' %}Certified{% else %}{{ vm.status }}{% endif %}</span>
+        <h1 class="t">{{ vm.name }} <span class="mono dim" style="font-size:15px;font-weight:400">@{{ vm.handle }}</span></h1>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
+
+        <div class="field">
+          <label class="label">Your progress</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            {% if vm.status == 'graduated' %}
+            <span class="pill pill-ok"><span class="dot dot-ok"></span>Graduated · certified</span>
+            {% else %}
+            <b style="font:600 15px/1 var(--f)">Board {{ vm.board }}</b>
+            <span class="muted">{{ vm.role_title }}</span>
+            <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
+            {% endif %}
+          </div>
+          <div class="chain" style="margin-top:12px">
+            {% for b in vm.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
+            <span class="pip cert {% if vm.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
+          </div>
+        </div>
+
+        {% if vm.status == 'active' %}
+        <div class="field">
+          <label class="label">Your lab</label>
+          <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
+            <span class="pill {{ vm.range_pcls }}"><span class="dot {{ vm.range_dot }}"></span>{{ vm.range_label }}</span>
+            <span class="muted" style="font-size:12.5px">{{ vm.range_detail }}</span>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+            {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
+            <form method="post" action="/me/start"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>
+            {% endif %}
+            {% if vm.has_wg %}
+            <a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>
+            {% endif %}
+          </div>
+          {% if vm.tier == 'shared' and vm.range_status == 'deployed' %}
+          <p class="dim" style="font-size:12px;margin-top:8px">Your SIEM session is ready. Work this board in the browser.</p>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="rowline">
+          <div class="field">
+            <label class="label">Your scenario</label>
+            <div class="tokenbox"><code>{{ vm.seed or 'assigned when you start' }}</code></div>
+            <p class="dim" style="font-size:11.5px">Seeded uniquely to you. The lab generates your scenario from it.</p>
+          </div>
+          <div class="field">
+            <label class="label">Submission token</label>
+            <div class="tokenbox"><code>{{ vm.token }}</code></div>
+            <p class="dim" style="font-size:11.5px">Send as <span class="mono">X-Candidate-Token</span> when submitting.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:16px">
+          <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com/handbook">Handbook</a>
+          <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com">Ranger site</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="afoot"><span class="mono">Qwalora Ranger · Cohort {{ vm.cohort }} · signed, verifiable status</span></footer>
+</div>
+{% endblock %}

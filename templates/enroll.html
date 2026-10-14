@@ -9,10 +9,17 @@
     <div class="card-head">
       <span class="eyebrow"><span class="d"></span>Cohort {{ cohort }}</span>
       <h1 class="t">Enroll a ranger</h1>
-      <p class="lead">You receive a submission token and a queued range on completion.</p>
+      <p class="lead">{% if oauth_enabled %}Sign in with GitHub to join. We verify your account is real before you start.{% else %}You receive a submission token and a queued range on completion.{% endif %}</p>
     </div>
     <div class="card-body">
       {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
+      {% if oauth_enabled %}
+      <a class="btn btn-primary btn-block" href="/auth/github/login?role=candidate" style="display:flex;align-items:center;justify-content:center;gap:9px">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>
+        Sign in with GitHub
+      </a>
+      <p class="foothint">Requires two-factor authentication and a verified email on your GitHub account. Objective scoring is answer-free; nothing here contains answers.</p>
+      {% else %}
       <form method="post" action="/enroll" style="display:flex;flex-direction:column;gap:16px">
         <div class="field">
           <label class="label">GitHub handle</label>
@@ -32,6 +39,7 @@
         <button class="btn btn-primary btn-block">Enroll ranger</button>
       </form>
       <p class="foothint">Objective scoring is answer-free and program-side. Nothing here contains the answers.</p>
+      {% endif %}
     </div>
   </div>
 </div>

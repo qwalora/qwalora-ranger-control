@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_brand.html" import authnav, authfoot %}
+{% block title %}Sign-in · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+{{ authnav('Enroll a ranger', '/enroll', 'primary') }}
+<div class="page-main">
+  <div class="card" style="max-width:440px">
+    <div class="card-head">
+      <span class="eyebrow"><span class="d"></span>GitHub sign-in</span>
+      <h1 class="t">Couldn't sign you in</h1>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+      <div class="note note-err">{{ msg }}</div>
+      <p class="lead" style="font-size:13.5px">Fix the issue on your GitHub account, then try again. Enrollment requires two-factor authentication, a verified email, and an account older than our minimum.</p>
+      <a class="btn btn-primary" href="/auth/github/login?role=candidate" style="align-self:flex-start">Try again</a>
+    </div>
+  </div>
+</div>
+{{ authfoot() }}
+</div>
+{% endblock %}
