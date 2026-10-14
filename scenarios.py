@@ -753,16 +753,65 @@ _B5_OBJECTIVES = [
 ]
 
 
-def board5_flags(seed):
-    """The per-seed flag for each objective. Used by BOTH the grader and the
-    range provisioner (which plants these at deploy time), so they always
-    agree. High-entropy and seed-bound, so a flag proves the action and does
-    not transfer between rangers."""
+# Flag-capture boards (5 and 6) share one mechanism, parameterized by the
+# board's objective list. The flag is a per-seed, per-board token so it proves
+# the action, is unique to the ranger, and never transfers across boards.
+_FLAG_OBJECTIVES = {}  # board -> objectives spec (filled as boards are defined)
+
+
+def _flags_for(board, seed):
     out = {}
-    for oid, *_ in _B5_OBJECTIVES:
-        h = _hashlib.sha256(("board5:%s:%s" % (seed, oid)).encode()).hexdigest()[:16]
-        out[oid] = "QR5{%s}" % h
+    for oid, *_ in _FLAG_OBJECTIVES.get(board, []):
+        h = _hashlib.sha256(("board%d:%s:%s" % (board, seed, oid)).encode()).hexdigest()[:16]
+        out[oid] = "QR%d{%s}" % (board, h)
     return out
+
+
+def flags_for_board(n, seed):
+    """The per-seed flag for each objective of a flag-capture board. Used by both
+    the grader and the range provisioner (which plants these at deploy time), so
+    they always agree."""
+    return _flags_for(n, seed)
+
+
+def board5_flags(seed):  # retained name; some callers reference it directly
+    return _flags_for(5, seed)
+
+
+def _public_flags(scenario):
+    """The mission brief: objectives, targets, points. Flags are never sent."""
+    return {"board": scenario["board"], "theme": scenario["cohort_theme"],
+            "domain": scenario["targets"]["domain"], "targets": scenario["targets"],
+            "total_points": sum(o["points"] for o in scenario["objectives"]),
+            "objectives": scenario["objectives"]}
+
+
+def _score_flags(scenario, submission):
+    """Score captured flags against the seed-derived expected flags. Points-
+    weighted; feedback is which objectives are captured, never the flag value."""
+    expected = scenario["_flags"]
+    by_id = {o["id"]: o for o in scenario["objectives"]}
+    sub = submission.get("flags") if isinstance(submission, dict) else None
+    if not isinstance(sub, dict):
+        sub = {}
+    total = sum(o["points"] for o in scenario["objectives"])
+    earned = 0
+    per_obj = []
+    for oid, o in by_id.items():
+        want = _norm(expected.get(oid))
+        got = _norm(sub.get(oid))
+        ok = bool(want) and got == want
+        if ok:
+            earned += o["points"]
+        per_obj.append({"id": oid, "name": o["name"], "points": o["points"], "captured": ok})
+    score = round(100.0 * earned / total, 1) if total else 0.0
+    captured = sum(1 for p in per_obj if p["captured"])
+    feedback = {"objectives_captured": "%d/%d" % (captured, len(per_obj)),
+                "points": "%d/%d" % (earned, total), "objectives": per_obj}
+    return score, [feedback]
+
+
+_FLAG_OBJECTIVES[5] = _B5_OBJECTIVES
 
 
 def generate_board5(seed):
@@ -779,42 +828,78 @@ def generate_board5(seed):
                         "kerberoast_account": svc, "asrep_user": asrep_user,
                         "lateral_host": lateral_host},
             "objectives": objectives,
-            "_flags": board5_flags(seed)}
+            "_flags": _flags_for(5, seed)}
 
 
 def public_board5(scenario):
-    """The mission brief: objectives, targets, points. Flags are never sent."""
-    return {"board": 5, "theme": scenario["cohort_theme"],
-            "domain": scenario["targets"]["domain"], "targets": scenario["targets"],
-            "total_points": sum(o["points"] for o in scenario["objectives"]),
-            "objectives": scenario["objectives"]}
+    return _public_flags(scenario)
 
 
 def score_board5(scenario, submission):
-    """Score captured flags against the seed-derived expected flags. Points-
-    weighted; feedback is which objectives are captured, never the flag value."""
-    expected = scenario["_flags"]
-    by_id = {o["id"]: o for o in scenario["objectives"]}
-    sub = submission.get("flags") if isinstance(submission, dict) else None
-    if not isinstance(sub, dict):
-        sub = {}
+    return _score_flags(scenario, submission)
 
-    total = sum(o["points"] for o in scenario["objectives"])
-    earned = 0
-    per_obj = []
-    for oid, o in by_id.items():
-        want = _norm(expected.get(oid))
-        got = _norm(sub.get(oid))
-        ok = bool(want) and got == want
-        if ok:
-            earned += o["points"]
-        per_obj.append({"id": oid, "name": o["name"], "points": o["points"], "captured": ok})
 
-    score = round(100.0 * earned / total, 1) if total else 0.0
-    captured = sum(1 for p in per_obj if p["captured"])
-    feedback = {"objectives_captured": "%d/%d" % (captured, len(per_obj)),
-                "points": "%d/%d" % (earned, total), "objectives": per_obj}
-    return score, [feedback]
+# --- board 6: Vanguard capstone (full-forest GOAD) --------------------------
+# The culmination. A harder, multi-domain estate: the sevenkingdoms.local
+# forest (parent + north child) plus a trust to the essos.local forest. The
+# ranger must own the whole forest and pivot across the trust, end to end. Same
+# proof-of-action flag model as board 5, but the objectives escalate to child
+# -> parent trust abuse, forest persistence, and cross-forest compromise.
+_B6_PARENT = "sevenkingdoms.local"
+_B6_CHILD = "north.sevenkingdoms.local"
+_B6_FOREST2 = "essos.local"
+_B6_DCS = ["kingslanding", "winterfell", "braavos"]
+_B6_SERVERS = ["castelblack", "meereen"]
+_B6_OBJECTIVES = [
+    ("recon_forest", "Map the forest and its trusts", "T1482 / T1087",
+     "Enumerate {parent}, {child}, and the trust to {forest2}. The flag is on a world-readable share.", 5),
+    ("foothold", "Establish a foothold", "T1110 / T1078",
+     "Land a session in {child}. The flag is in the user's profile.", 8),
+    ("roast_forest", "Harvest service and AS-REP tickets", "T1558.003 / T1558.004",
+     "Kerberoast and AS-REP roast across the forest, crack offline. The flag unlocks with a cracked account.", 10),
+    ("child_da", "Become Domain Admin of the child", "T1078.002",
+     "Reach Domain Admin on {child}. The flag is on the Administrator desktop of {child_dc}.", 12),
+    ("trust_abuse", "Abuse the child to parent trust", "T1134.005 / T1484.002",
+     "Forge an inter-realm ticket (SID history of {parent} Enterprise Admins) to cross the trust. The flag proves the crossing.", 12),
+    ("parent_ea", "Seize Enterprise Admin", "T1078.002",
+     "Take Enterprise Admin on {parent}. The flag is on {parent_dc}.", 12),
+    ("forest_persist", "Establish forest persistence", "T1558.001 / T1003.006",
+     "DCSync krbtgt and mint forest persistence (golden ticket). The flag derives from the krbtgt material.", 10),
+    ("cross_forest", "Pivot across the forest trust", "T1482 / T1550",
+     "Abuse the trust to {forest2} and land there. The flag is on a {forest2} host.", 12),
+    ("forest2_da", "Compromise the second forest", "T1078.002",
+     "Reach Domain Admin on {forest2}. The flag is on {forest2_dc}.", 10),
+    ("crown", "Capture the crown jewels", "T1005 / T1020",
+     "Exfiltrate the designated crown-jewel secret from the root DC. The flag is that secret.", 9),
+]
+_FLAG_OBJECTIVES[6] = _B6_OBJECTIVES
+
+
+def generate_board6(seed):
+    r = _random.Random("board6:" + str(seed))
+    child_dc = "winterfell"
+    parent_dc = "kingslanding"
+    forest2_dc = "braavos"
+    forest2_host = r.choice(_B6_SERVERS)
+    fill = {"parent": _B6_PARENT, "child": _B6_CHILD, "forest2": _B6_FOREST2,
+            "child_dc": child_dc, "parent_dc": parent_dc, "forest2_dc": forest2_dc}
+    objectives = [{"id": oid, "name": name, "technique": tech,
+                   "hint": hint.format(**fill), "points": pts}
+                  for (oid, name, tech, hint, pts) in _B6_OBJECTIVES]
+    return {"board": 6, "cohort_theme": _B6_PARENT,
+            "targets": {"domain": _B6_PARENT, "parent": _B6_PARENT, "child": _B6_CHILD,
+                        "forest2": _B6_FOREST2, "dcs": _B6_DCS, "servers": _B6_SERVERS,
+                        "forest2_host": forest2_host},
+            "objectives": objectives,
+            "_flags": _flags_for(6, seed)}
+
+
+def public_board6(scenario):
+    return _public_flags(scenario)
+
+
+def score_board6(scenario, submission):
+    return _score_flags(scenario, submission)
 
 
 # --- dispatch ---------------------------------------------------------------
@@ -824,13 +909,14 @@ _GENERATORS = {
     3: (generate_board3, public_board3, score_board3),
     4: (generate_board4, public_board4, score_board4),
     5: (generate_board5, public_board5, score_board5),
+    6: (generate_board6, public_board6, score_board6),
 }
 
 
 # What kind of exercise each board is, so the lab client knows what file to
 # scaffold and submit. "triage": per-event verdicts (triage.yml). "detection":
 # a detection ruleset (rules.yml).
-_KINDS = {1: "triage", 2: "triage", 3: "detection", 4: "ir", 5: "flags"}
+_KINDS = {1: "triage", 2: "triage", 3: "detection", 4: "ir", 5: "flags", 6: "flags"}
 
 
 def has_board(n):

@@ -345,10 +345,10 @@ def create_app():
         # each ranger's range holds their own secrets. The grader derives the same
         # flags from the seed independently, so this only affects the live range.
         tvars = None
-        if scenarios.kind(rr.board) == "flags" and hasattr(scenarios, "board5_flags"):
+        if scenarios.kind(rr.board) == "flags":
             seed = _current_seed(c)
             if seed:
-                tvars = {"ranger_flags": scenarios.board5_flags(seed)}
+                tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
         broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
                                 user_key=key, template_vars=tvars)
         status, range_id, detail = broker.deploy_range(c, user_key=key)
@@ -530,7 +530,8 @@ def create_app():
 
     @app.get("/enroll")
     def enroll_form():
-        return render_template("enroll.html", cohort=DEFAULT_COHORT)
+        return render_template("enroll.html", cohort=request.args.get("cohort", DEFAULT_COHORT),
+                               org=request.args.get("org", ""))
 
     def _enrollment_decision(github_id):
         """Branch a (re)enrollment by the person's lifetime history, keyed on the
@@ -554,6 +555,7 @@ def create_app():
         name = (request.form.get("name") or "").strip()
         email = (request.form.get("email") or "").strip()
         cohort = (request.form.get("cohort") or DEFAULT_COHORT).strip()
+        org = (request.form.get("org") or "").strip() or None
         repo = (request.form.get("repo") or "").strip() or None
         if not (handle and name and email):
             return render_template("enroll.html", cohort=cohort,
@@ -571,7 +573,7 @@ def create_app():
             return render_template("enroll.html", cohort=cohort,
                                    error=f"'{handle}' is already enrolled."), 409
 
-        c = Candidate(handle=handle, name=name, email=email, cohort=cohort, repo=repo,
+        c = Candidate(handle=handle, name=name, email=email, cohort=cohort, org=org, repo=repo,
                       github_id=github_id, current_board=1, current_role=P.role_of(1))
         db.session.add(c)
         db.session.flush()  # assign id before provisioning
@@ -925,14 +927,41 @@ def create_app():
     def admin_cohort():
         cohort = request.args.get("cohort", DEFAULT_COHORT)
         status = request.args.get("status", "active")
+        org = (request.args.get("org") or "").strip()
         qtext = (request.args.get("q") or "").strip()
         base = Candidate.query.filter_by(cohort=cohort)
         counts = {k: base.filter_by(status=k).count()
                   for k in ("active", "graduated", "washed_out", "withdrawn")}
         counts["all"] = base.count()
+
+        # Group summary: roll the cohort up by organization. For each org, how
+        # many rangers, how many active, how far along, and how many need an
+        # isolated range right now (board 5-6) vs have one deployed. This is the
+        # view for running a sponsored batch and planning range capacity.
+        orgs_present = sorted({c.org for c in base.all() if c.org})
+        groups = []
+        for oname in orgs_present:
+            members = base.filter_by(org=oname).all()
+            active = [m for m in members if m.status == "active"]
+            iso = [m for m in active if P.is_isolated(m.current_board)]
+            deployed = 0
+            for m in iso:
+                rr = _board_range(m, m.current_board)
+                if rr and rr.is_deployed:
+                    deployed += 1
+            groups.append({
+                "org": oname, "total": len(members),
+                "active": len(active),
+                "graduated": sum(1 for m in members if m.status == "graduated"),
+                "iso_needed": len(iso), "iso_deployed": deployed,
+                "avg_board": round(sum(m.current_board for m in active) / len(active), 1) if active else 0,
+            })
+
         qry = base
         if status in ("active", "graduated", "washed_out", "withdrawn"):
             qry = qry.filter_by(status=status)
+        if org:
+            qry = qry.filter_by(org=org)
         if qtext:
             like = f"%{qtext}%"
             qry = qry.filter(db.or_(Candidate.name.ilike(like),
@@ -948,6 +977,7 @@ def create_app():
             slabel, spcls, sdot = STATUS_UI.get(c.status, ("-", "pill", "dot"))
             rows.append({
                 "cid": c.id, "ini": _initials(c.name), "name": c.name, "handle": c.handle,
+                "org": c.org,
                 "status": c.status, "status_label": slabel, "status_pcls": spcls, "status_dot": sdot,
                 "board": c.current_board,
                 "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(c.current_board), "-"),
@@ -958,6 +988,7 @@ def create_app():
             })
         vm = {"cohort": cohort, "active_status": status, "q": qtext,
               "counts": counts, "rows": rows, "total": len(rows),
+              "org": org, "orgs": orgs_present, "groups": groups,
               "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT,
               "mode": broker.mode()}
         return render_template("admin_cohort.html", vm=vm)
@@ -1084,8 +1115,12 @@ def create_app():
     @admin_required
     def roster_json():
         cohort = request.args.get("cohort", DEFAULT_COHORT)
-        cands = Candidate.query.filter_by(cohort=cohort).order_by(Candidate.handle).all()
-        return jsonify(cohort=cohort,
+        org = (request.args.get("org") or "").strip()
+        q = Candidate.query.filter_by(cohort=cohort)
+        if org:
+            q = q.filter_by(org=org)
+        cands = q.order_by(Candidate.handle).all()
+        return jsonify(cohort=cohort, org=(org or None),
                        candidates=[c.roster_entry() for c in cands])
 
     # --- GitHub OAuth: the only way candidates get in -----------------------

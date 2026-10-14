@@ -29,16 +29,37 @@
         <div class="rg-stat"><b>{{ vm.counts.withdrawn }}</b><span>Withdrawn</span></div>
       </div>
 
+      {% if vm.groups %}
+      <div class="co-groups">
+        <div class="co-groups-head">
+          <span class="eyebrow"><span class="d"></span>By organization</span>
+          <a class="btn btn-ghost btn-sm" href="/enroll?cohort={{ vm.cohort }}{% if vm.org %}&org={{ vm.org }}{% endif %}">{{ ic('plus','ic ic-sm') }} Enroll into {{ vm.org or 'cohort' }}</a>
+        </div>
+        <div class="co-grouprow">
+          <a class="grp {% if not vm.org %}on{% endif %}" href="/admin/cohort?status={{ vm.active_status }}">All orgs</a>
+          {% for g in vm.groups %}
+          <a class="grp {% if vm.org==g.org %}on{% endif %}" href="/admin/cohort?status={{ vm.active_status }}&org={{ g.org }}" title="{{ g.active }} active · avg board {{ g.avg_board }} · isolated ranges {{ g.iso_deployed }}/{{ g.iso_needed }} up">
+            <b>{{ g.org }}</b>
+            <span class="grp-m">{{ g.total }} ranger{{ '' if g.total==1 else 's' }}</span>
+            <span class="grp-m">{{ g.active }} active · {{ g.graduated }} cert</span>
+            {% if g.iso_needed %}<span class="pill pill-amber" style="font-size:11px"><span class="dot dot-amber"></span>ranges {{ g.iso_deployed }}/{{ g.iso_needed }}</span>{% endif %}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       <div class="co-tools">
         <div class="seg">
           {% for s,lbl in [('active','Active'),('graduated','Graduated'),('washed_out','Washed out'),('withdrawn','Withdrawn'),('all','All')] %}
-          <a class="seg-i {% if vm.active_status==s %}on{% endif %}" href="/admin/cohort?status={{ s }}{% if vm.q %}&q={{ vm.q }}{% endif %}">{{ lbl }}</a>
+          <a class="seg-i {% if vm.active_status==s %}on{% endif %}" href="/admin/cohort?status={{ s }}{% if vm.org %}&org={{ vm.org }}{% endif %}{% if vm.q %}&q={{ vm.q }}{% endif %}">{{ lbl }}</a>
           {% endfor %}
         </div>
         <form class="co-search" method="get" action="/admin/cohort">
           {{ ic('search','ic ic-sm') }}
           <input name="q" value="{{ vm.q }}" placeholder="Search rangers" autocomplete="off">
           <input type="hidden" name="status" value="{{ vm.active_status }}">
+          {% if vm.org %}<input type="hidden" name="org" value="{{ vm.org }}">{% endif %}
         </form>
       </div>
 
@@ -49,7 +70,7 @@
             <span class="av av-32">{{ r.ini }}</span>
             <div class="co-id">
               <b>{{ r.name }}</b>
-              <span class="mono dim">@{{ r.handle }}</span>
+              <span class="mono dim">@{{ r.handle }}{% if r.org %} · <a class="orgtag" href="/admin/cohort?status={{ vm.active_status }}&org={{ r.org }}">{{ r.org }}</a>{% endif %}</span>
             </div>
           </div>
 

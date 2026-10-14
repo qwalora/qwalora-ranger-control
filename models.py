@@ -39,6 +39,7 @@ def ensure_schema(db):
     wanted = {
         "candidates": [
             ("github_id", "VARCHAR(64)"),
+            ("org", "VARCHAR(120)"),
             ("ludus_user_id", "VARCHAR(64)"),
             ("ludus_key_enc", "TEXT"),
             ("status", "VARCHAR(20) DEFAULT 'active'"),
@@ -82,6 +83,11 @@ class Candidate(db.Model):
     name = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(200), nullable=False)
     cohort = db.Column(db.String(40), nullable=False, index=True)
+    # Organization / group: an optional grouping of rangers who belong together
+    # (same employer, same sponsored batch). Orthogonal to cohort: an org can
+    # span cohorts and a cohort can hold several orgs. Used for batch enrollment,
+    # group-level progress and range-capacity planning.
+    org = db.Column(db.String(120), nullable=True, index=True)
     repo = db.Column(db.String(200), nullable=True)  # owner/name of their fork, optional at enroll
     token = db.Column(db.String(64), nullable=False, default=_token)  # report-submission secret
     # Person identity: the immutable GitHub numeric user id (a handle can be renamed).
@@ -118,7 +124,7 @@ class Candidate(db.Model):
     def roster_entry(self):
         return {"handle": self.handle, "name": self.name,
                 "repo": self.repo or f"qwalora/{self.handle}",
-                "status": self.status, "board": self.current_board}
+                "org": self.org, "status": self.status, "board": self.current_board}
 
 
 class Report(db.Model):

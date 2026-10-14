@@ -33,9 +33,11 @@
         <div class="rowline">
           <div class="field"><label class="label">Email</label>
             <input class="input" type="email" name="email" required placeholder="you@qwalora.com"></div>
-          <div class="field"><label class="label">Fork repo <span class="dim">· optional</span></label>
-            <input class="input mono" name="repo" placeholder="qwalora/handle"></div>
+          <div class="field"><label class="label">Organization <span class="dim">· optional</span></label>
+            <input class="input" name="org" value="{{ org or '' }}" placeholder="Acme Corp" autocomplete="off"></div>
         </div>
+        <div class="field"><label class="label">Fork repo <span class="dim">· optional</span></label>
+          <input class="input mono" name="repo" placeholder="qwalora/handle"></div>
         <input type="hidden" name="cohort" value="{{ cohort }}">
         <button class="btn btn-primary btn-block">Enroll ranger</button>
       </form>
