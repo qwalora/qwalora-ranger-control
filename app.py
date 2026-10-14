@@ -94,7 +94,14 @@ def create_app():
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
     db.init_app(app)
     with app.app_context():
-        db.create_all()
+        # Two gunicorn workers import the app concurrently and both run these.
+        # create_all() is checkfirst, but the check+create still races between
+        # workers on a brand-new table; the loser sees "already exists". Swallow
+        # so a worker never crash-loops on first boot after a schema addition.
+        try:
+            db.create_all()
+        except Exception:
+            db.session.rollback()
         ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
 
     admin_token = os.environ.get("ADMIN_TOKEN")
