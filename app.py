@@ -49,6 +49,20 @@ RECONCILE_INTERVAL = int(os.environ.get("RECONCILE_INTERVAL_SECONDS", "60"))
 # long, so a stalled ranger never permanently holds a slot. 0 disables either.
 RANGE_MAX_AGE_HOURS = float(os.environ.get("RANGE_MAX_AGE_HOURS", "48"))
 RANGE_IDLE_HOURS = float(os.environ.get("RANGE_IDLE_HOURS", "8"))
+# The program window: 26 weeks / 130 days. The clock starts when a cohort is
+# activated. Enforcement (window-expiry + inactivity washout) is a toggle, off
+# by default so a deploy never mass-washes-out; turn on when you want the 130-day
+# structure enforced. Thresholds are generous and configurable.
+PROGRAM_DAYS = int(os.environ.get("PROGRAM_DAYS", "130"))
+WASHOUT_IDLE_DAYS = int(os.environ.get("WASHOUT_IDLE_DAYS", "21"))
+ENFORCE_DEADLINES = os.environ.get("ENFORCE_DEADLINES", "0") == "1"
+
+
+def _aware(d):
+    """SQLite drops tzinfo; treat stored naive datetimes as UTC."""
+    if d is not None and d.tzinfo is None:
+        return d.replace(tzinfo=_dt.timezone.utc)
+    return d
 
 
 def _bootstrap_cohorts():
@@ -533,8 +547,11 @@ def create_app():
         return reclaimed
 
     def _maintenance():
-        """One pass: advance in-flight deploys, reclaim stale ranges, then fill
-        freed slots from the queue. Used by the scheduler and the admin button."""
+        """One pass: start due cohorts, enforce the program window + inactivity,
+        advance in-flight deploys, reclaim stale ranges, then fill freed slots.
+        Used by the scheduler and the admin Reconcile button."""
+        _activate_due_cohorts()
+        _enforce_program()
         _poll_deploying()
         freed = _expire_ranges()
         db.session.flush()
@@ -611,6 +628,49 @@ def create_app():
             nxt.status = "active"
             nxt.activated_at = _dt.datetime.now(_dt.timezone.utc)
         db.session.flush()
+
+    def _cohort_day(co):
+        """1-based day number of an active cohort since activation, or None."""
+        if not co or not co.activated_at:
+            return None
+        return (_dt.datetime.now(_dt.timezone.utc) - _aware(co.activated_at)).days + 1
+
+    def _activate_due_cohorts():
+        """When no cohort is live and a scheduled one's start date has arrived,
+        start it. (Completion-based advance is handled separately.)"""
+        if _active_cohort():
+            return
+        now = _dt.datetime.now(_dt.timezone.utc)
+        due = (Cohort.query.filter_by(status="scheduled")
+               .filter(Cohort.start_at.isnot(None), Cohort.start_at <= now)
+               .order_by(Cohort.sequence.asc()).first())
+        if due:
+            due.status = "active"
+            due.activated_at = now
+            db.session.flush()
+
+    def _enforce_program():
+        """The 130-day structure. Off unless ENFORCE_DEADLINES=1. Washes out the
+        active cohort's stragglers when its window closes, and anyone idle past
+        the inactivity threshold. Washout is terminal; badges already earned are
+        kept, and the window clock starts at cohort activation."""
+        if not ENFORCE_DEADLINES:
+            return
+        now = _dt.datetime.now(_dt.timezone.utc)
+        active = _active_cohort()
+        window_over = bool(active and active.activated_at and
+                           (now - _aware(active.activated_at)).days >= PROGRAM_DAYS)
+        for c in Candidate.query.filter_by(status="active").all():
+            if window_over and c.cohort == active.name:
+                _exit_candidate(c, "washed_out",
+                                f"cohort window ended ({PROGRAM_DAYS} days)")
+                continue
+            rr = _board_range(c, c.current_board)
+            last = _aware((rr.last_active_at if rr else None) or
+                          (rr.created_at if rr else None) or c.created_at)
+            if last and (now - last).days >= WASHOUT_IDLE_DAYS:
+                _exit_candidate(c, "washed_out",
+                                f"inactive {WASHOUT_IDLE_DAYS}+ days")
 
     def _exit_candidate(c, status, reason):
         """Terminal exit: set status, tear down ranges, revoke token. Earned
@@ -1255,11 +1315,15 @@ def create_app():
                 "terminal": (c.status in Candidate.TERMINAL),
             })
         this_co = Cohort.query.filter_by(name=cohort).first()
+        day = _cohort_day(this_co) if (this_co and this_co.status == "active") else None
         vm = {"cohort": cohort, "active_status": status, "q": qtext,
               "counts": counts, "rows": rows, "total": len(rows),
               "org": org, "orgs": orgs_present, "groups": groups,
               "cohorts": _cohort_rows(), "cohort_status": (this_co.status if this_co else "scheduled"),
               "is_active_cohort": bool(this_co and this_co.status == "active"),
+              "program_days": PROGRAM_DAYS, "cohort_day": day,
+              "days_left": (max(0, PROGRAM_DAYS - day + 1) if day else None),
+              "enforce": ENFORCE_DEADLINES,
               "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT,
               "mode": broker.mode()}
         return render_template("admin_cohort.html", vm=vm)

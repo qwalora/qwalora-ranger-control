@@ -22,7 +22,7 @@
             {% elif vm.cohort_status=='completed' %}<span class="pill"><span class="dot"></span>Completed</span>
             {% else %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Scheduled</span>{% endif %}
           </div>
-          <div class="rg-sub">SOC to capstone · 6 boards · isolated slots {{ vm.slots_used }}/{{ vm.cap }} in use · <a class="orgtag" href="/admin/cohorts">all cohorts</a></div>
+          <div class="rg-sub">SOC to capstone · 6 boards · isolated slots {{ vm.slots_used }}/{{ vm.cap }} in use{% if vm.cohort_day %} · <b>day {{ vm.cohort_day }}/{{ vm.program_days }}</b> ({{ vm.days_left }} left){% if not vm.enforce %} · <span class="dim">enforcement off</span>{% endif %}{% endif %} · <a class="orgtag" href="/admin/cohorts">all cohorts</a></div>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           {% if not vm.is_active_cohort %}
