@@ -11,8 +11,21 @@
     <section class="ranges-main">
       <div class="rg-head">
         <div>
-          <div class="ttl">Ranges <span class="count">{{ vm.total }}</span></div>
+          {% if vm.cohort %}
+          <div class="ttl" style="display:flex;align-items:center;gap:10px">
+            Ranges <span class="count">{{ vm.total }}</span>
+            <select class="input" style="padding:5px 10px;font:600 13px/1 var(--f)"
+                    onchange="if(this.value)window.location='/admin/ranges?cohort='+this.value">
+              {% for c in vm.cohorts %}
+              <option value="{{ c.name }}" {% if c.name==vm.cohort %}selected{% endif %}>{{ c.name }}{% if c.status=='active' %} (active){% elif c.status=='completed' %} (done){% endif %}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="rg-sub">Cohort {{ vm.cohort }} · isolated slots <b>{{ vm.slots_used }}/{{ vm.cap }}</b> in use · active rangers only</div>
+          {% else %}
+          <div class="ttl">Ranges</div>
+          <div class="rg-sub">No cohort is live right now.</div>
+          {% endif %}
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <form method="post" action="/admin/reconcile">
@@ -31,6 +44,13 @@
       </div>
       {% endif %}
 
+      {% if vm.no_active %}
+      <div class="empty" style="margin:40px auto">
+        <div class="ring">{{ ic('layers') }}</div>
+        <div>No cohort is active, so no ranges are shown.</div>
+        <a class="btn btn-ghost btn-sm" href="/admin/cohorts">Choose or activate a cohort</a>
+      </div>
+      {% else %}
       <div class="rg-stats">
         <div class="rg-stat"><b>{{ vm.counts.deployed }}</b><span>Deployed</span></div>
         <div class="rg-stat"><b>{{ vm.counts.deploying }}</b><span>Deploying</span></div>
@@ -74,6 +94,7 @@
           <a class="btn btn-ghost btn-sm" href="/enroll">Enroll a ranger</a></div>
         {% endfor %}
       </div>
+      {% endif %}
     </section>
 
     {{ adminrail('ranges', vm.cohort) }}

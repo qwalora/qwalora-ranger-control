@@ -1075,9 +1075,13 @@ def create_app():
     @app.get("/admin/cohort")
     @admin_required
     def admin_cohort():
-        # No cohort chosen -> show the chooser, rather than defaulting to one.
+        # Default to the live (active) cohort; if none is live, don't default to
+        # anything, send the operator to the chooser.
         cohort = (request.args.get("cohort") or "").strip()
         if not cohort:
+            active = _active_cohort()
+            if active:
+                return redirect(url_for("admin_cohort", cohort=active.name))
             return redirect(url_for("admin_cohorts"))
         status = request.args.get("status", "active")
         org = (request.args.get("org") or "").strip()
@@ -1152,12 +1156,21 @@ def create_app():
     @app.get("/admin/ranges")
     @admin_required
     def admin_ranges():
-        cohort = request.args.get("cohort") or _active_cohort_name()
+        # Default to the live (active) cohort. If none is live and none is
+        # chosen, don't default: show the empty state with the chooser.
+        active = _active_cohort()
+        cohort = (request.args.get("cohort") or "").strip() or (active.name if active else None)
+        counts = {"deployed": 0, "deploying": 0, "queued_slot": 0, "configured": 0, "failed": 0}
+        if not cohort:
+            vm = {"cohort": None, "no_active": True, "cohorts": _cohort_rows(),
+                  "broker": broker_status(), "mode": broker.mode(),
+                  "template": broker.GOAD_TEMPLATE, "rows": [], "counts": counts, "total": 0,
+                  "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT}
+            return render_template("admin_ranges.html", vm=vm)
         # Ranges matter for active candidates; show them ordered by board.
         cands = (Candidate.query.filter_by(cohort=cohort, status="active")
                  .order_by(Candidate.current_board.desc(), Candidate.handle).limit(300).all())
         rows = []
-        counts = {"deployed": 0, "deploying": 0, "queued_slot": 0, "configured": 0, "failed": 0}
         for c in cands:
             n = c.current_board
             rr = _board_range(c, n)
@@ -1178,7 +1191,10 @@ def create_app():
                 "checked": _ago(rr.last_checked_at) if rr and rr.last_checked_at else "",
                 "detail": (rr.detail if rr else "no range provisioned"),
             })
-        vm = {"cohort": _active_cohort_name(), "broker": broker_status(),
+        this_co = Cohort.query.filter_by(name=cohort).first()
+        vm = {"cohort": cohort, "no_active": False, "cohorts": _cohort_rows(),
+              "cohort_status": (this_co.status if this_co else "scheduled"),
+              "broker": broker_status(),
               "mode": broker.mode(), "template": broker.GOAD_TEMPLATE,
               "rows": rows, "counts": counts, "total": len(rows),
               "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT}
