@@ -32,8 +32,8 @@ import program as P
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import (Badge, BoardResult, Candidate, RangeRequest, Report, db,
-                    ensure_schema)
+from models import (Badge, BoardResult, Candidate, RangeRequest, Report,
+                    ScenarioAssignment, db, ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
@@ -106,7 +106,21 @@ def _normalize_db_url(url):
 
 def create_app():
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
+    # SECRET_KEY must be a stable secret so sessions survive restarts and are
+    # consistent across workers. A per-boot random fallback silently logs people
+    # out; warn loudly if it is missing instead of pretending it is fine.
+    secret = os.environ.get("SECRET_KEY")
+    if not secret:
+        import logging
+        logging.getLogger(__name__).warning(
+            "SECRET_KEY is not set; using an ephemeral key. Sessions will not "
+            "persist across restarts or workers. Set SECRET_KEY in the environment.")
+        secret = os.urandom(32).hex()
+    app.config["SECRET_KEY"] = secret
+    # Harden session cookies. COOKIE_INSECURE=1 is only for local http testing.
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.environ.get("COOKIE_INSECURE") != "1"
     app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(os.environ.get("DATABASE_URL"))
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
     db.init_app(app)
@@ -134,6 +148,24 @@ def create_app():
     @app.context_processor
     def _inject_asset_ver():
         return {"asset_ver": asset_ver}
+
+    @app.after_request
+    def _security_headers(resp):
+        # Defense in depth: we advertise security, so the portal models it.
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Strict-Transport-Security",
+                                "max-age=31536000; includeSubDomains")
+        # Self-hosted assets only; inline styles/handlers are still used in a few
+        # templates, so inline is permitted for now (CSP nonces are a follow-up).
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "font-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'self'; form-action 'self'")
+        return resp
 
     # --- auth helpers --------------------------------------------------------
     def _is_admin():
@@ -181,6 +213,41 @@ def create_app():
                 .filter_by(candidate_id=c.id, board=n)
                 .order_by(RangeRequest.id.desc()).first())
 
+    # --- scenario uniqueness -------------------------------------------------
+    def _assign_seed(github_id, board, cohort):
+        """Record a fresh scenario seed for this person+board, never one they
+        have already been given (across any cohort). The seed is the generator's
+        reproducibility key; a new seed is a new, never-seen scenario."""
+        seen = {a.seed for a in ScenarioAssignment.query
+                .filter_by(github_id=github_id, board=board).all()}
+        import secrets as _secrets
+        seed = None
+        for _ in range(8):
+            cand = _secrets.token_hex(8)
+            if cand not in seen:
+                seed = cand
+                break
+        seed = seed or _secrets.token_hex(12)  # vanishingly unlikely fallback
+        a = ScenarioAssignment(github_id=github_id, board=board, cohort=cohort, seed=seed)
+        db.session.add(a)
+        return a
+
+    def _ensure_seed(c, board):
+        """One scenario assignment per (person, board, cohort). Idempotent."""
+        gid = c.github_id or c.handle
+        a = (ScenarioAssignment.query
+             .filter_by(github_id=gid, board=board, cohort=c.cohort).first())
+        if a is None:
+            a = _assign_seed(gid, board, c.cohort)
+        return a
+
+    def _current_seed(c):
+        gid = c.github_id or c.handle
+        a = (ScenarioAssignment.query
+             .filter_by(github_id=gid, board=c.current_board, cohort=c.cohort)
+             .order_by(ScenarioAssignment.id.desc()).first())
+        return a.seed if a else None
+
     def _slots_used(host="primary"):
         """Isolated ranges currently holding a RAM slot on a host."""
         return (RangeRequest.query
@@ -215,6 +282,7 @@ def create_app():
         Shared boards are ready instantly (a seeded session, no VM). Isolated
         boards stage a Ludus range and deploy it if a slot is free, otherwise
         queue it. Idempotent per (candidate, board)."""
+        _ensure_seed(c, n)  # every board the ranger enters gets a unique scenario seed
         rr = _board_range(c, n)
         if rr is None:
             rr = RangeRequest(candidate_id=c.id, board=n, template=P.template_of(n))
@@ -378,6 +446,22 @@ def create_app():
     def enroll_form():
         return render_template("enroll.html", cohort=DEFAULT_COHORT)
 
+    def _enrollment_decision(github_id):
+        """Branch a (re)enrollment by the person's lifetime history, keyed on the
+        immutable GitHub id. Returns (decision, message)."""
+        prior = Candidate.query.filter_by(github_id=github_id).all()
+        if not prior:
+            return ("new", "")
+        if any(p.status == "active" for p in prior):
+            return ("blocked_active",
+                    "You already have an active enrollment. Finish or withdraw it first.")
+        if any(p.status == "graduated" for p in prior):
+            return ("blocked_graduate",
+                    "You have already graduated this track. Contact us about the advanced track.")
+        # Only washed-out / withdrawn history remains: a fresh restart is allowed,
+        # with brand-new scenarios (the ledger guarantees no repeat).
+        return ("restart", "")
+
     @app.post("/enroll")
     def enroll():
         handle = (request.form.get("handle") or "").strip().lstrip("@")
@@ -389,13 +473,20 @@ def create_app():
             return render_template("enroll.html", cohort=cohort,
                                    error="GitHub handle, name, and email are all required."), 400
 
-        existing = Candidate.query.filter_by(handle=handle).first()
-        if existing:
+        # Person key: the GitHub id. Until OAuth lands it is seeded from the
+        # handle, so returning-student detection already works by handle.
+        github_id = (request.form.get("github_id") or "").strip() or handle
+        decision, msg = _enrollment_decision(github_id)
+        if decision in ("blocked_active", "blocked_graduate"):
+            return render_template("enroll.html", cohort=cohort, error=msg), 409
+        # A brand-new handle in this cohort still can't collide (handle is unique);
+        # a true cross-cohort restart lands with the OAuth + identity split.
+        if Candidate.query.filter_by(handle=handle).first():
             return render_template("enroll.html", cohort=cohort,
                                    error=f"'{handle}' is already enrolled."), 409
 
         c = Candidate(handle=handle, name=name, email=email, cohort=cohort, repo=repo,
-                      current_board=1, current_role=P.role_of(1))
+                      github_id=github_id, current_board=1, current_role=P.role_of(1))
         db.session.add(c)
         db.session.flush()  # assign id before provisioning
 
@@ -459,7 +550,8 @@ def create_app():
             db.session.commit()
         return jsonify(ok=True, handle=c.handle, board=n, tier=P.tier_of(n),
                        range_status=rr.status, range_id=rr.ludus_range_id,
-                       detail=rr.detail, mode=broker.mode()), 200
+                       scenario_seed=_current_seed(c), detail=rr.detail,
+                       mode=broker.mode()), 200
 
     @app.post("/reports")
     def submit_report():

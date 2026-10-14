@@ -38,6 +38,7 @@ def ensure_schema(db):
     from sqlalchemy import inspect as _inspect
     wanted = {
         "candidates": [
+            ("github_id", "VARCHAR(64)"),
             ("ludus_user_id", "VARCHAR(64)"),
             ("ludus_key_enc", "TEXT"),
             ("status", "VARCHAR(20) DEFAULT 'active'"),
@@ -83,6 +84,10 @@ class Candidate(db.Model):
     cohort = db.Column(db.String(40), nullable=False, index=True)
     repo = db.Column(db.String(200), nullable=True)  # owner/name of their fork, optional at enroll
     token = db.Column(db.String(64), nullable=False, default=_token)  # report-submission secret
+    # Person identity: the immutable GitHub numeric user id (a handle can be renamed).
+    # Returning-student detection and scenario uniqueness key on this, not the handle.
+    # Until GitHub OAuth lands, this is seeded from the handle at enroll.
+    github_id = db.Column(db.String(64), nullable=True, index=True)
     # Ludus linkage: one candidate maps to exactly one Ludus user, which owns one range.
     ludus_user_id = db.Column(db.String(64), nullable=True)   # Ludus userID
     ludus_key_enc = db.Column(db.Text, nullable=True)         # Fernet-encrypted Ludus user API key
@@ -178,6 +183,27 @@ class BoardResult(db.Model):
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "board", name="uq_board_per_candidate"),)
+
+
+class ScenarioAssignment(db.Model):
+    """Lifetime ledger of every scenario seed ever given to a person (github_id),
+    spanning cohorts. Guarantees a returning ranger never repeats a scenario:
+    assignment excludes seeds already recorded for that (github_id, board).
+
+    The seed is the reproducibility key: a board's scenario generator is a pure
+    function of the seed, so the same seed reproduces the same world and answer
+    key (for grading), and a never-before-used seed is a never-before-seen world.
+    """
+    __tablename__ = "scenario_assignments"
+    id = db.Column(db.Integer, primary_key=True)
+    github_id = db.Column(db.String(64), nullable=False, index=True)  # person key
+    board = db.Column(db.Integer, nullable=False, index=True)
+    cohort = db.Column(db.String(40), nullable=False)
+    seed = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("github_id", "board", "seed",
+                                          name="uq_seed_per_person_board"),)
 
 
 class Badge(db.Model):
