@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Enrolled - Qwalora Ranger{% endblock %}
+{% block body %}
+<section class="max-w-lg">
+  <p class="font-mono text-xs text-ranger">enrolled - cohort {{ candidate.cohort }}</p>
+  <h1 class="mt-2 text-xl font-semibold text-slate-100">{{ candidate.name }}
+    <span class="text-slate-500 font-mono text-base">@{{ candidate.handle }}</span></h1>
+
+  <div class="mt-6 rounded-lg border border-edge bg-panel p-4">
+    <p class="text-xs font-mono text-slate-400 mb-1">submission token</p>
+    <code class="block text-sm text-ranger break-all">{{ candidate.token }}</code>
+    <p class="text-xs text-slate-500 mt-2">
+      Keep this. Send it as the <span class="font-mono">X-Candidate-Token</span> header when
+      posting written reports to <span class="font-mono">/reports</span>. It is shown once.
+    </p>
+  </div>
+
+  <div class="mt-4 rounded-lg border border-edge bg-panel p-4">
+    <p class="text-xs font-mono text-slate-400 mb-1">range</p>
+    <p class="text-sm text-slate-200 font-mono">{{ range_status }}</p>
+    <p class="text-xs text-slate-500 mt-1">{{ range_detail }}</p>
+  </div>
+
+  <div class="mt-6 text-sm text-slate-400 leading-relaxed">
+    Next: fork the lab template, work the four roles per board, and open one PR
+    per day. The program grades your repo at cohort sync and publishes a signed
+    result you can verify yourself.
+  </div>
+  <a href="/" class="inline-block mt-6 text-xs font-mono text-slate-400 hover:text-slate-100">&larr; back</a>
+</section>
+{% endblock %}

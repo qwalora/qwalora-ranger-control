@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="max-w-2xl">
+  <p class="font-mono text-xs text-ranger mb-3">cohort {{ cohort }}</p>
+  <h1 class="text-2xl md:text-3xl font-semibold text-slate-100 leading-tight">
+    Qwalora Ranger control plane
+  </h1>
+  <p class="mt-4 text-slate-400 leading-relaxed">
+    Enrollment, written-report review, and range provisioning for the Ranger
+    cyber range. Objective scoring is not done here: the program re-measures
+    every repo answer-free and signs the cohort. This plane runs the human
+    surface around that spine.
+  </p>
+  <div class="mt-8 flex gap-3">
+    <a href="/enroll" class="px-4 py-2 rounded-md bg-ranger text-ink font-mono text-sm font-semibold hover:brightness-110">
+      enroll a ranger
+    </a>
+    <a href="/admin" class="px-4 py-2 rounded-md border border-edge text-slate-300 font-mono text-sm hover:border-ranger">
+      admin
+    </a>
+  </div>
+
+  <div class="mt-12 grid sm:grid-cols-3 gap-4">
+    <div class="rounded-lg border border-edge bg-panel p-4">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M4 7h16M4 12h16M4 17h10"/></svg>
+      <p class="font-mono text-xs text-slate-300">roster</p>
+      <p class="text-xs text-slate-500 mt-1">feeds cohort-sync the exact list it grades.</p>
+    </div>
+    <div class="rounded-lg border border-edge bg-panel p-4">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M5 4h11l3 3v13H5z"/><path class="ln" d="M8 11h8M8 15h5"/></svg>
+      <p class="font-mono text-xs text-slate-300">reports</p>
+      <p class="text-xs text-slate-500 mt-1">written analyses queued for human review.</p>
+    </div>
+    <div class="rounded-lg border border-edge bg-panel p-4">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-ranger mb-2"><path class="ln" d="M4 6h16v12H4z"/><path class="ln" d="M7 10l2 2-2 2M12 14h4"/></svg>
+      <p class="font-mono text-xs text-slate-300">range broker</p>
+      <p class="text-xs text-slate-500 mt-1">queues per-ranger Ludus ranges.</p>
+    </div>
+  </div>
+</section>
+{% endblock %}

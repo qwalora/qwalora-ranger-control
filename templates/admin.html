@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Admin - Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="flex items-center justify-between">
+  <h1 class="text-xl font-semibold text-slate-100">Grading queue</h1>
+  <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
+    <span>broker: <span class="text-slate-200">{{ broker }}</span></span>
+    <a href="/roster.json?cohort={{ cohort }}" class="hover:text-slate-100">roster.json</a>
+    <a href="/admin/logout" class="hover:text-slate-100">logout</a>
+  </div>
+</div>
+
+<!-- candidates -->
+<section class="mt-8">
+  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">rangers ({{ candidates|length }})</h2>
+  <div class="rounded-lg border border-edge overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-panel text-slate-400 font-mono text-xs">
+        <tr><th class="text-left px-4 py-2">handle</th><th class="text-left px-4 py-2">name</th>
+            <th class="text-left px-4 py-2">cohort</th><th class="text-left px-4 py-2">repo</th>
+            <th class="text-left px-4 py-2">reports</th></tr>
+      </thead>
+      <tbody>
+        {% for c in candidates %}
+        <tr class="border-t border-edge">
+          <td class="px-4 py-2 font-mono text-ranger">@{{ c.handle }}</td>
+          <td class="px-4 py-2 text-slate-200">{{ c.name }}</td>
+          <td class="px-4 py-2 font-mono text-slate-400">{{ c.cohort }}</td>
+          <td class="px-4 py-2 font-mono text-slate-500">{{ c.repo or ('qwalora/' ~ c.handle) }}</td>
+          <td class="px-4 py-2 text-slate-400">{{ c.reports|length }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-4 py-6 text-center text-slate-600 text-sm">no rangers enrolled yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- pending reports -->
+<section class="mt-10">
+  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">pending review ({{ pending|length }})</h2>
+  <div class="space-y-4">
+    {% for r in pending %}
+    <div class="rounded-lg border border-edge bg-panel p-4">
+      <div class="flex items-center justify-between">
+        <div class="font-mono text-xs text-slate-300">
+          <span class="text-ranger">@{{ r.candidate.handle }}</span>
+          · {{ r.board }} · {{ r.role }}
+        </div>
+        <span class="inline-flex items-center gap-1.5 text-xs text-amber-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>pending</span>
+      </div>
+      <pre class="mt-3 text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">{{ r.body }}</pre>
+      <form method="post" action="/admin/reports/{{ r.id }}" class="mt-3 flex items-center gap-2">
+        <input name="notes" placeholder="reviewer note (optional)"
+               class="flex-1 rounded-md bg-ink border border-edge px-3 py-1.5 text-xs text-slate-200 focus:border-ranger outline-none">
+        <button name="action" value="approve"
+                class="px-3 py-1.5 rounded-md bg-ranger text-ink font-mono text-xs font-semibold hover:brightness-110">approve</button>
+        <button name="action" value="reject"
+                class="px-3 py-1.5 rounded-md border border-red-500/50 text-red-300 font-mono text-xs hover:bg-red-500/10">reject</button>
+      </form>
+    </div>
+    {% else %}
+    <p class="text-sm text-slate-600">nothing pending.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- reviewed -->
+{% if reviewed %}
+<section class="mt-10">
+  <h2 class="text-xs font-mono text-slate-500 uppercase tracking-wider mb-3">recently reviewed</h2>
+  <div class="rounded-lg border border-edge overflow-hidden">
+    <table class="w-full text-sm">
+      <tbody>
+        {% for r in reviewed %}
+        <tr class="border-t border-edge first:border-t-0">
+          <td class="px-4 py-2 font-mono text-xs text-ranger">@{{ r.candidate.handle }}</td>
+          <td class="px-4 py-2 font-mono text-xs text-slate-400">{{ r.board }} · {{ r.role }}</td>
+          <td class="px-4 py-2 text-xs">
+            {% if r.status == 'approved' %}
+            <span class="inline-flex items-center gap-1.5 text-ranger"><span class="w-1.5 h-1.5 rounded-full bg-ranger"></span>approved</span>
+            {% else %}
+            <span class="inline-flex items-center gap-1.5 text-red-300"><span class="w-1.5 h-1.5 rounded-full bg-red-400"></span>rejected</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-2 text-xs text-slate-500">{{ r.reviewer_notes or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
