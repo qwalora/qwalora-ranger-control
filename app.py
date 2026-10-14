@@ -709,7 +709,8 @@ def create_app():
             _ensure_seed(c, n)
             db.session.commit()
             seed = _current_seed(c)
-        return jsonify(ok=True, board=n, seed=seed, dataset=scenarios.dataset(n, seed)), 200
+        return jsonify(ok=True, board=n, seed=seed, kind=scenarios.kind(n),
+                       dataset=scenarios.dataset(n, seed)), 200
 
     @app.post("/grade/submit")
     def grade_submit():
@@ -739,7 +740,8 @@ def create_app():
         _record_objective(c, n, score)
         promoted = _evaluate_gate(c)
         db.session.commit()
-        return jsonify(ok=True, board=n, score=score, passed=score >= P.PASS_BAR,
+        return jsonify(ok=True, board=n, kind=scenarios.kind(n),
+                       score=score, passed=score >= P.PASS_BAR,
                        per_alert=per_alert, promoted=promoted,
                        current_board=c.current_board, status=c.status,
                        note="Report approval is also required to clear the board."), 200
