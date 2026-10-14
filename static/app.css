@@ -136,17 +136,18 @@ a{color:inherit;text-decoration:none}
 .av-32{width:32px;height:32px;font-size:12px}.av-40{width:40px;height:40px;font-size:14px}
 .av-ring{box-shadow:0 0 0 2px #fff}
 
-/* ---------- auth pages (light) ---------- */
-.anav{background:var(--light);border-bottom:1px solid var(--line)}
+/* ---------- auth pages (white form on a violet field) ---------- */
+.page{min-height:100%;display:flex;flex-direction:column;background:
+  radial-gradient(820px 460px at 50% -8%, #7b72f2, transparent 60%),
+  linear-gradient(165deg, #5b50e6 0%, #4234bf 100%);background-attachment:fixed}
+.anav{background:#fff;box-shadow:0 1px 0 rgba(22,13,66,.06)}
 .anav-in{max-width:1000px;margin:0 auto;padding:0 24px;height:68px;display:flex;align-items:center;justify-content:space-between}
 .anav-link{font-size:13.5px;font-weight:500;color:var(--violet)}
 .anav-link:hover{color:var(--violet-700)}
-.afoot{padding:22px 24px;text-align:center;border-top:1px solid var(--line);background:var(--light)}
-.afoot .mono{font-size:12px;color:var(--dim)}
-.page{min-height:100%;display:flex;flex-direction:column}
-.page-main{flex:1;display:flex;align-items:center;justify-content:center;padding:48px 20px;background:
-  radial-gradient(700px 360px at 50% -10%, #ece9ff88, transparent 60%), var(--light)}
-.card{width:100%;max-width:460px;background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh-soft);overflow:hidden}
+.afoot{padding:22px 24px;text-align:center}
+.afoot .mono{font-size:12px;color:rgba(255,255,255,.62)}
+.page-main{flex:1;display:flex;align-items:center;justify-content:center;padding:48px 20px}
+.card{width:100%;max-width:460px;background:#fff;border-radius:var(--r-lg);box-shadow:var(--sh-pop);overflow:hidden}
 .card-head{padding:26px 30px 0}
 .card-body{padding:22px 30px 30px}
 h1.t{font:700 26px/1.08 var(--f);letter-spacing:-.8px;margin-top:12px;color:var(--ink)}
