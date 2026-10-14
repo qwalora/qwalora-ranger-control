@@ -30,6 +30,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
 import broker
 import githuboauth
 import program as P
+import scenarios
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
@@ -165,7 +166,8 @@ def create_app():
     # --- CSRF: browser (cookie-authed) POSTs must carry the session token ----
     # API endpoints authenticate with header tokens (not cookies), so CSRF does
     # not apply to them; they are exempt.
-    _CSRF_EXEMPT = {"submit_report", "grade", "lab_start", "lab_status"}
+    _CSRF_EXEMPT = {"submit_report", "grade", "lab_start", "lab_status",
+                    "grade_submit", "lab_dataset"}
 
     @app.before_request
     def _csrf_protect():
@@ -194,6 +196,7 @@ def create_app():
         "admin_login_post": (10, 300), "gh_login": (30, 300), "gh_callback": (30, 300),
         "grade": (120, 60), "enroll": (20, 3600), "submit_report": (120, 60),
         "lab_start": (30, 60), "candidate_start": (30, 60),
+        "grade_submit": (120, 60), "lab_dataset": (120, 60),
     }
 
     def _client_ip():
@@ -689,6 +692,57 @@ def create_app():
         return jsonify(ok=True, handle=c.handle, board=board, score=score,
                        passed=score >= P.PASS_BAR, promoted=promoted,
                        current_board=c.current_board, status=c.status), 200
+
+    @app.post("/labs/dataset")
+    def lab_dataset():
+        """The ranger's seeded investigation surface for their current board,
+        with the answer key stripped. Authed by the candidate token."""
+        data = request.get_json(silent=True) or request.form
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+        n = c.current_board
+        if not scenarios.has_board(n):
+            return jsonify(error="dataset for this board is not available yet", board=n), 501
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            db.session.commit()
+            seed = _current_seed(c)
+        return jsonify(ok=True, board=n, seed=seed, dataset=scenarios.dataset(n, seed)), 200
+
+    @app.post("/grade/submit")
+    def grade_submit():
+        """Server-side, answer-free grading: the ranger submits their analysis,
+        the server re-derives the key from their seed and scores it. The key is
+        never exposed; feedback is correctness flags only."""
+        data = request.get_json(silent=True) or request.form
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+        if not c.is_active:
+            return jsonify(error=f"candidate is {c.status}"), 409
+        n = c.current_board
+        if not scenarios.has_board(n):
+            return jsonify(error="grader for this board is not available yet", board=n), 501
+        submission = data.get("submission")
+        if isinstance(submission, str):
+            import json as _json
+            try:
+                submission = _json.loads(submission)
+            except ValueError:
+                return jsonify(error="submission must be valid JSON"), 400
+        if not isinstance(submission, dict):
+            return jsonify(error="a submission object is required"), 400
+        seed = _current_seed(c)
+        score, per_alert = scenarios.grade(n, seed, submission)
+        _record_objective(c, n, score)
+        promoted = _evaluate_gate(c)
+        db.session.commit()
+        return jsonify(ok=True, board=n, score=score, passed=score >= P.PASS_BAR,
+                       per_alert=per_alert, promoted=promoted,
+                       current_board=c.current_board, status=c.status,
+                       note="Report approval is also required to clear the board."), 200
 
     # --- admin ---------------------------------------------------------------
     @app.get("/admin/login")
