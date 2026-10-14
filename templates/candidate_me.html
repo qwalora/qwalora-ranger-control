@@ -95,7 +95,58 @@
           <p class="dim" style="font-size:12px;margin-top:8px">Your SIEM session is ready. Work this board in the browser.</p>
           {% endif %}
         </div>
+
+        <div class="field">
+          <label class="label">Clear board {{ vm.board }}</label>
+          <div class="gate">
+            <div class="gate-ch">
+              <span class="pill {% if vm.cur_objective_passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot {% if vm.cur_objective_passed %}dot-ok{% else %}dot-amber{% endif %}"></span>Objective</span>
+              <span class="muted" style="font-size:12.5px">{% if vm.cur_objective_score is not none %}{{ vm.cur_objective_score }}% (need {{ vm.pass_bar }}%){% else %}not submitted yet{% endif %}</span>
+            </div>
+            <div class="gate-ch">
+              <span class="pill {% if vm.cur_report_status=='approved' %}pill-ok{% elif vm.cur_report_status %}pill-amber{% else %}pill{% endif %}"><span class="dot {% if vm.cur_report_status=='approved' %}dot-ok{% elif vm.cur_report_status %}dot-amber{% else %}dot{% endif %}"></span>Report</span>
+              <span class="muted" style="font-size:12.5px">{{ vm.cur_report_label or 'not submitted yet' }}</span>
+            </div>
+          </div>
+          {% if vm.report_ok %}<p class="note-ok">{{ ic('medal','ic ic-sm') }} Report submitted. It is now in review.</p>{% endif %}
+          {% if vm.report_error %}<p class="note-warn">{{ vm.report_error }}</p>{% endif %}
+          {% if vm.cur_report_notes and vm.cur_report_status in ('needs_changes','rejected') %}
+          <div class="reviewnote"><b>Reviewer:</b> {{ vm.cur_report_notes }}</div>
+          {% endif %}
+          {% if vm.report_open %}
+          <form method="post" action="/me/report" style="margin-top:10px">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <textarea name="body" class="input" rows="5" placeholder="Your written analysis for board {{ vm.board }}: what you found, how, and the evidence. This is reviewed alongside your objective score." {% if vm.preview %}disabled{% endif %}></textarea>
+            {% if vm.preview %}
+            <span class="btn btn-primary btn-sm" style="opacity:.5;pointer-events:none;margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</span>
+            {% else %}
+            <button class="btn btn-primary btn-sm" style="margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</button>
+            {% endif %}
+          </form>
+          {% elif vm.cur_report_status == 'pending' %}
+          <p class="dim" style="font-size:12px;margin-top:8px">Your report is in review. You will be promoted when it is approved and your objective is at {{ vm.pass_bar }}%.</p>
+          {% endif %}
+        </div>
         {% endif %}
+
+        <div class="field">
+          <label class="label">Your record</label>
+          <div class="record">
+            {% for p in vm.progress %}
+            <div class="rec-row rec-{{ p.state }}">
+              <span class="rec-pip t{{ p.board }}">{{ p.board }}</span>
+              <div class="rec-id"><b>{{ p.name }}</b><span class="muted">{{ p.role_title }}</span></div>
+              <div class="rec-meta">
+                {% if p.objective_score is not none %}<span class="mono dim">obj {{ p.objective_score }}%</span>{% endif %}
+                {% if p.report_status %}<span class="mono dim">report {{ p.report_status }}</span>{% endif %}
+              </div>
+              {% if p.state=='cleared' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Cleared</span>
+              {% elif p.state=='current' %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Current</span>
+              {% else %}<span class="pill"><span class="dot"></span>Locked</span>{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
 
         <div class="rowline">
           <div class="field">

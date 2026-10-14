@@ -822,40 +822,39 @@ def create_app():
                        scenario_seed=_current_seed(c), detail=rr.detail,
                        mode=broker.mode()), 200
 
-    @app.post("/reports")
-    def submit_report():
-        data = request.get_json(silent=True) or request.form
-        body = (data.get("body") or "").strip()
-        c, err = _auth_candidate(data)
-        if err:
-            return err
+    def _create_report(c, body, board_str=None, role=None):
+        """Create a report for the candidate's CURRENT board. Returns
+        (report, None) or (None, (reason, status_code)). Shared by the API and
+        the in-portal form, so both validate identically."""
         if not c.is_active:
-            return jsonify(error=f"candidate is {c.status}, not accepting reports"), 409
-
-        # A report is for the candidate's CURRENT board; board/role default to it.
+            return None, (f"candidate is {c.status}, not accepting reports", 409)
         n = c.current_board
-        board = (data.get("board") or P.bstr(n)).strip()
-        role = (data.get("role") or c.current_role or P.role_of(n)).strip()
+        board = (board_str or P.bstr(n)).strip()
+        role = (role or c.current_role or P.role_of(n)).strip()
         if P.bint(board) != n:
-            return jsonify(error=f"you are on {P.bstr(n)}; submit for that board",
-                           current_board=P.bstr(n)), 409
-        if not body:
-            return jsonify(error="body is required"), 400
-
-        # The report must tie back to real lab work. For isolated boards the range
-        # must be deployed; shared boards are always open. REPORTS_REQUIRE_RANGE=0
-        # bypasses for seed/demo data.
+            return None, (f"you are on {P.bstr(n)}; submit for that board", 409)
+        if not (body or "").strip():
+            return None, ("report body is required", 400)
         if os.environ.get("REPORTS_REQUIRE_RANGE", "1") != "0" and P.is_isolated(n):
             rr = _board_range(c, n)
             if rr is None or not rr.is_deployed:
-                return jsonify(error="deploy your lab before submitting a report",
-                               hint="POST /labs/start first",
-                               range_status=(rr.status if rr else "none")), 409
-
-        r = Report(candidate_id=c.id, board=board, role=role, body=body)
+                return None, ("deploy your lab before submitting a report", 409)
+        r = Report(candidate_id=c.id, board=board, role=role, body=body.strip())
         db.session.add(r)
+        _touch(c, n)
         db.session.commit()
-        return jsonify(ok=True, report_id=r.id, board=board, status=r.status), 201
+        return r, None
+
+    @app.post("/reports")
+    def submit_report():
+        data = request.get_json(silent=True) or request.form
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+        r, rerr = _create_report(c, data.get("body") or "", data.get("board"), data.get("role"))
+        if rerr:
+            return jsonify(error=rerr[0], current_board=P.bstr(c.current_board)), rerr[1]
+        return jsonify(ok=True, report_id=r.id, board=r.board, status=r.status), 201
 
     @app.post("/grade")
     def grade():
@@ -1487,6 +1486,37 @@ def create_app():
         cid = session.get("cand")
         return Candidate.query.get(cid) if cid else None
 
+    _REPORT_UI = {"approved": ("Approved", "pill-ok", "dot-ok"),
+                  "pending": ("In review", "pill-amber", "dot-amber"),
+                  "needs_changes": ("Needs changes", "pill-amber", "dot-amber"),
+                  "rejected": ("Rejected", "pill-amber", "dot-amber")}
+
+    def _board_progress(c):
+        """Per-board history: objective score, report outcome, clearance. The
+        ranger's record across the whole ladder, for the dashboard."""
+        results = {br.board: br for br in
+                   BoardResult.query.filter_by(candidate_id=c.id).all()}
+        rows = []
+        for b in P.BOARD_PLAN:
+            n = b["n"]
+            br = results.get(n)
+            state = "locked"
+            if br and br.cleared:
+                state = "cleared"
+            elif n == c.current_board and c.is_active:
+                state = "current"
+            elif n < c.current_board or c.status == "graduated":
+                state = "cleared"
+            rows.append({
+                "board": n, "name": b["badge"], "role_title": P.ROLE_TITLES.get(b["role"], b["role"]),
+                "tier": P.tier_of(n), "state": state,
+                "objective_score": (round(br.objective_score, 1) if br and br.objective_score is not None else None),
+                "objective_passed": bool(br and br.objective_passed),
+                "report_status": (br.report_status if br else None),
+                "cleared": bool(br and br.cleared),
+            })
+        return rows
+
     def _me_vm(c):
         """The candidate dashboard view model. Shared by /me and the admin
         preview so both render exactly what the ranger sees."""
@@ -1495,6 +1525,11 @@ def create_app():
         bc = _badge_chain(c)
         rst = rr.status if rr else "none"
         rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("Not started", "pill", "dot"))
+        br = _board_result(c, n, create=False)
+        last_report = (Report.query.filter_by(candidate_id=c.id, board=P.bstr(n))
+                       .order_by(Report.id.desc()).first())
+        rep_status = last_report.status if last_report else None
+        rlab, rpc, rdt = _REPORT_UI.get(rep_status, (None, None, None))
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
@@ -1505,6 +1540,14 @@ def create_app():
             "seed": _current_seed(c), "token": c.token,
             "range_detail": (rr.detail if rr else ""),
             "preview": False,
+            "progress": _board_progress(c),
+            "cur_objective_score": (round(br.objective_score, 1) if br and br.objective_score is not None else None),
+            "cur_objective_passed": bool(br and br.objective_passed),
+            "cur_report_status": rep_status,
+            "cur_report_label": rlab, "cur_report_pcls": rpc, "cur_report_dot": rdt,
+            "cur_report_notes": (last_report.reviewer_notes if last_report else None),
+            "report_open": (c.is_active and rep_status in (None, "needs_changes", "rejected")),
+            "pass_bar": P.PASS_BAR,
         }
 
     def _demo_vm(n, graduated):
@@ -1530,6 +1573,19 @@ def create_app():
             "range_detail": "Demo range (preview only)",
             "preview": True, "demo": True,
             "persona_board": n, "persona_graduated": graduated, "personas": personas,
+            "progress": [{"board": b["n"], "name": b["badge"],
+                          "role_title": P.ROLE_TITLES.get(b["role"], b["role"]),
+                          "tier": P.tier_of(b["n"]),
+                          "state": ("cleared" if (graduated or b["n"] < n)
+                                    else ("current" if b["n"] == n else "locked")),
+                          "objective_score": (100.0 if (graduated or b["n"] < n) else None),
+                          "objective_passed": (graduated or b["n"] < n),
+                          "report_status": ("approved" if (graduated or b["n"] < n) else None),
+                          "cleared": (graduated or b["n"] < n)} for b in P.BOARD_PLAN],
+            "cur_objective_score": None, "cur_objective_passed": False,
+            "cur_report_status": None, "cur_report_label": None,
+            "cur_report_pcls": None, "cur_report_dot": None, "cur_report_notes": None,
+            "report_open": not graduated, "pass_bar": P.PASS_BAR,
         }
 
     @app.get("/admin/preview")
@@ -1555,7 +1611,10 @@ def create_app():
         if c.is_active:
             _touch(c)
             db.session.commit()
-        return render_template("candidate_me.html", vm=_me_vm(c))
+        vm = _me_vm(c)
+        vm["report_ok"] = request.args.get("report_ok") == "1"
+        vm["report_error"] = request.args.get("report_error")
+        return render_template("candidate_me.html", vm=vm)
 
     @app.post("/me/start")
     def candidate_start():
@@ -1567,6 +1626,18 @@ def create_app():
             _touch(c)
             db.session.commit()
         return redirect(url_for("candidate_me"))
+
+    @app.post("/me/report")
+    def candidate_report():
+        """Submit the written report for the current board from the dashboard.
+        Session-authed (the ranger is signed in), CSRF-protected."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        _, rerr = _create_report(c, request.form.get("body") or "")
+        if rerr:
+            return redirect(url_for("candidate_me", report_error=rerr[0]))
+        return redirect(url_for("candidate_me", report_ok="1"))
 
     @app.get("/me/wireguard")
     def candidate_wireguard():

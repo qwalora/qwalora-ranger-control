@@ -329,6 +329,23 @@ h1.t{font:700 26px/1.08 var(--f);letter-spacing:-.8px;margin-top:12px;color:var(
 .pip.cert .ic{width:13px;height:13px}
 .pip.cert.on{background:var(--ok)}
 
+/* candidate: clear-board gate, report, record */
+.gate{display:flex;gap:18px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px}
+.gate-ch{display:flex;align-items:center;gap:8px}
+.note-ok{display:flex;align-items:center;gap:6px;color:var(--ok,#2aa567);font-size:12.5px;margin-top:8px}
+.note-warn{color:var(--amber,#9a7b1f);font-size:12.5px;margin-top:8px}
+.reviewnote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--amber,#caa23a);background:var(--light);border-radius:0 8px 8px 0;font-size:12.5px}
+textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f);padding:10px 12px}
+.record{display:flex;flex-direction:column;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.rec-row{display:grid;grid-template-columns:auto 1.3fr 1fr auto;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.rec-row:last-child{border-bottom:none}
+.rec-row.rec-locked{opacity:.55}
+.rec-pip{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font:700 11px/1 var(--f);color:#fff}
+.rec-id{display:flex;flex-direction:column;gap:1px}
+.rec-id b{font:600 13.5px/1.1 var(--f)}
+.rec-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px}
+@media(max-width:560px){.rec-row{grid-template-columns:auto 1fr auto;gap:8px}.rec-meta{display:none}}
+
 .prog{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0 2px}
 .prog-l{font:600 12.5px/1 var(--f);color:var(--med)}
 
