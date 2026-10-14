@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}{{ vm.org }} · Sponsor · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="pill pill-violet"><span class="dot dot-violet"></span>Sponsor · {{ vm.org }}</span>
+      <a class="btn btn-ghost btn-pill" href="/sponsor/logout">Sign out</a>
+    </div>
+  </div></header>
+
+  <div class="page-main" style="max-width:920px">
+    <div style="margin-bottom:6px">
+      <div class="ttl">{{ vm.org }}</div>
+      <div class="rg-sub">Your sponsored rangers. Read-only, scoped to your organization.</div>
+    </div>
+
+    <div class="rg-stats" style="margin:14px 0 6px">
+      <div class="rg-stat"><b>{{ vm.counts.active }}</b><span>Active</span></div>
+      <div class="rg-stat"><b>{{ vm.counts.graduated }}</b><span>Certified</span></div>
+      <div class="rg-stat"><b>{{ vm.counts.washed_out }}</b><span>Washed out</span></div>
+      <div class="rg-stat"><b>{{ vm.counts.all }}</b><span>Total</span></div>
+    </div>
+
+    <div class="co-list" style="padding:12px 0">
+      {% for r in vm.rows %}
+      <div class="co-row" style="grid-template-columns:1.4fr 1.2fr auto 1fr auto">
+        <div class="co-who">
+          <span class="av av-32">{{ r.ini }}</span>
+          <div class="co-id"><b>{{ r.name }}</b><span class="mono dim">@{{ r.handle }} · {{ r.cohort }}</span></div>
+        </div>
+        <div class="co-board">
+          {% if r.status == 'graduated' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Certified</span>
+          {% else %}<span class="co-bn">Board {{ r.board }}</span><span class="co-role">{{ r.role_title }}</span>{% endif %}
+        </div>
+        <div class="chain">
+          {% for b in r.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }}">{{ b.board }}</span>{% endfor %}
+          <span class="pip cert {% if r.certified %}on{% endif %}">{{ ic('medal','ic ic-sm') }}</span>
+        </div>
+        <div class="co-state">
+          <span class="pill {{ r.status_pcls }}"><span class="dot {{ r.status_dot }}"></span>{{ r.status_label }}</span>
+          {% if r.status == 'active' %}<span class="pill {{ r.range_pcls }}"><span class="dot {{ r.range_dot }}"></span>{{ r.range_label }}</span>{% endif %}
+        </div>
+        <a class="iconbtn" href="/verify/{{ r.handle }}" title="Verify credentials" target="_blank" rel="noopener">{{ ic('shield','ic ic-sm') }}</a>
+      </div>
+      {% else %}
+      <div class="empty"><div class="ring">{{ ic('users') }}</div><div>No rangers in {{ vm.org }} yet.</div></div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

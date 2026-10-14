@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Team · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('team', '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Team access</div>
+          <div class="rg-sub">Reviewers get full admin. Sponsors get a read-only view of their own org's rangers. GitHub-id based.</div>
+        </div>
+      </div>
+
+      <div class="co-list" style="padding-top:16px">
+        <label class="label" style="padding:0 0 6px">Reviewers (full admin)</label>
+        {% for gid in vm.env_reviewers %}
+        <div class="co-row" style="grid-template-columns:1fr auto">
+          <div class="co-id"><b class="mono">{{ gid }}</b><span class="mono dim">from REVIEWER_GITHUB_IDS config</span></div>
+          <span class="pill"><span class="dot"></span>config</span>
+        </div>
+        {% endfor %}
+        {% for r in vm.reviewers %}
+        <div class="co-row" style="grid-template-columns:1fr auto auto">
+          <div class="co-id"><b>{% if r.login %}@{{ r.login }}{% else %}reviewer{% endif %}</b><span class="mono dim">id {{ r.github_id }}</span></div>
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>reviewer</span>
+          <form method="post" action="/admin/team/remove"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="github_id" value="{{ r.github_id }}"><button class="btn btn-ghost btn-sm">Remove</button></form>
+        </div>
+        {% endfor %}
+
+        <label class="label" style="padding:16px 0 6px">Sponsors (read-only, per org)</label>
+        {% for s in vm.sponsors %}
+        <div class="co-row" style="grid-template-columns:1fr auto auto auto">
+          <div class="co-id"><b>{% if s.login %}@{{ s.login }}{% else %}sponsor{% endif %}</b><span class="mono dim">id {{ s.github_id }}</span></div>
+          <span class="orgtag">{{ s.org }}</span>
+          <span class="pill pill-ok"><span class="dot dot-ok"></span>sponsor</span>
+          <form method="post" action="/admin/team/remove"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="github_id" value="{{ s.github_id }}"><button class="btn btn-ghost btn-sm">Remove</button></form>
+        </div>
+        {% else %}
+        <div class="rec-row"><span class="muted" style="padding:6px 14px">No sponsors yet.</span></div>
+        {% endfor %}
+      </div>
+
+      <div class="co-newcohort">
+        <div class="eyebrow"><span class="d"></span>Grant access</div>
+        <form method="post" action="/admin/team/add" class="co-newform">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <input class="input" name="github_id" placeholder="GitHub numeric id" required style="max-width:160px">
+          <input class="input" name="login" placeholder="handle (optional)" style="max-width:150px">
+          <select class="input" name="role">
+            <option value="reviewer">reviewer (full admin)</option>
+            <option value="sponsor">sponsor (org, read-only)</option>
+          </select>
+          <input class="input" name="org" list="orglist" placeholder="org (sponsors)" style="max-width:150px">
+          <datalist id="orglist">{% for o in vm.orgs %}<option value="{{ o }}">{% endfor %}</datalist>
+          <button class="btn btn-primary btn-sm">{{ ic('plus','ic ic-sm') }} Grant</button>
+        </form>
+        <p class="dim" style="font-size:12px;margin-top:8px">Find a GitHub numeric id at api.github.com/users/&lt;handle&gt;. Sponsors sign in with the same "Reviewer" GitHub button; they are routed to their org dashboard automatically.</p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

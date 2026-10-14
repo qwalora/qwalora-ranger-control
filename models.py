@@ -236,6 +236,19 @@ class Cohort(db.Model):
     STATUSES = ("scheduled", "active", "completed")
 
 
+class AdminUser(db.Model):
+    """A non-candidate principal: a reviewer (full admin) or an org sponsor
+    (read-only, scoped to one org). GitHub-id based, managed in the UI, and
+    merged with the REVIEWER_GITHUB_IDS env allowlist for reviewers."""
+    __tablename__ = "admin_users"
+    id = db.Column(db.Integer, primary_key=True)
+    github_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    login = db.Column(db.String(120), nullable=True)   # GitHub handle, for display
+    role = db.Column(db.String(20), nullable=False, default="reviewer")  # reviewer | sponsor
+    org = db.Column(db.String(120), nullable=True)     # sponsors: the org they can see
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
 class Notification(db.Model):
     """A candidate-facing event: promotion, a report decision, a lab becoming
     ready. Shown on the ranger's dashboard and, when SMTP is configured, emailed."""

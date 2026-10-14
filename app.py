@@ -35,7 +35,7 @@ import notify
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import (Badge, BoardResult, Candidate, Cohort, Notification,
+from models import (AdminUser, Badge, BoardResult, Candidate, Cohort, Notification,
                     RangeRequest, Report, ScenarioAssignment, db, ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
@@ -324,6 +324,33 @@ def create_app():
                 if request.headers.get("Authorization") or request.path.endswith(".json"):
                     abort(401)
                 return redirect(url_for("admin_login", next=request.path))
+            return fn(*a, **k)
+        return wrapper
+
+    def _reviewer_ids():
+        """GitHub ids allowed as reviewers: the env allowlist plus any DB
+        reviewer rows."""
+        ids = set(githuboauth.reviewer_ids())
+        try:
+            ids |= {a.github_id for a in AdminUser.query.filter_by(role="reviewer").all()}
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+        return ids
+
+    def _sponsor_record(gid):
+        try:
+            return AdminUser.query.filter_by(github_id=str(gid), role="sponsor").first()
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+            return None
+
+    def sponsor_required(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            if not session.get("sponsor") or not session.get("sponsor_org"):
+                if githuboauth.enabled():
+                    return redirect(url_for("gh_login", role="reviewer", next=request.path))
+                abort(403)
             return fn(*a, **k)
         return wrapper
 
@@ -1279,6 +1306,82 @@ def create_app():
         db.session.commit()
         return redirect(url_for("admin_cohorts"))
 
+    def _sponsor_rows(cands):
+        rows = []
+        for c in cands:
+            bc = _badge_chain(c)
+            rr = _board_range(c, c.current_board)
+            rst = rr.status if rr else "none"
+            rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("None", "pill", "dot"))
+            slabel, spcls, sdot = STATUS_UI.get(c.status, ("-", "pill", "dot"))
+            rows.append({
+                "ini": _initials(c.name), "name": c.name, "handle": c.handle,
+                "cohort": c.cohort, "status": c.status, "status_label": slabel,
+                "status_pcls": spcls, "status_dot": sdot, "board": c.current_board,
+                "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(c.current_board), "-"),
+                "badges": bc["chain"], "certified": bc["certified"],
+                "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
+            })
+        return rows
+
+    @app.get("/sponsor")
+    @sponsor_required
+    def sponsor_home():
+        org = session.get("sponsor_org")
+        cands = (Candidate.query.filter_by(org=org)
+                 .order_by(Candidate.cohort.desc(), Candidate.current_board.desc(),
+                           Candidate.handle).limit(500).all())
+        counts = {k: sum(1 for c in cands if c.status == k)
+                  for k in ("active", "graduated", "washed_out", "withdrawn")}
+        counts["all"] = len(cands)
+        vm = {"org": org, "login": session.get("sponsor_login"),
+              "rows": _sponsor_rows(cands), "counts": counts}
+        return render_template("sponsor.html", vm=vm)
+
+    @app.get("/sponsor/logout")
+    def sponsor_logout():
+        session.pop("sponsor", None)
+        session.pop("sponsor_org", None)
+        session.pop("sponsor_login", None)
+        return redirect(url_for("index"))
+
+    @app.get("/admin/team")
+    @admin_required
+    def admin_team():
+        env_reviewers = sorted(githuboauth.reviewer_ids())
+        reviewers = AdminUser.query.filter_by(role="reviewer").order_by(AdminUser.login).all()
+        sponsors = AdminUser.query.filter_by(role="sponsor").order_by(AdminUser.org, AdminUser.login).all()
+        orgs = sorted({c.org for c in Candidate.query.all() if c.org})
+        vm = {"env_reviewers": env_reviewers,
+              "reviewers": [{"github_id": a.github_id, "login": a.login} for a in reviewers],
+              "sponsors": [{"github_id": a.github_id, "login": a.login, "org": a.org} for a in sponsors],
+              "orgs": orgs}
+        return render_template("admin_team.html", vm=vm)
+
+    @app.post("/admin/team/add")
+    @admin_required
+    def admin_team_add():
+        gid = (request.form.get("github_id") or "").strip()
+        login = (request.form.get("login") or "").strip() or None
+        role = request.form.get("role") if request.form.get("role") in ("reviewer", "sponsor") else "reviewer"
+        org = (request.form.get("org") or "").strip() or None
+        if gid.isdigit() and not AdminUser.query.filter_by(github_id=gid).first():
+            if role == "sponsor" and not org:
+                return redirect(url_for("admin_team"))
+            db.session.add(AdminUser(github_id=gid, login=login, role=role,
+                                     org=(org if role == "sponsor" else None)))
+            db.session.commit()
+        return redirect(url_for("admin_team"))
+
+    @app.post("/admin/team/remove")
+    @admin_required
+    def admin_team_remove():
+        a = AdminUser.query.filter_by(github_id=(request.form.get("github_id") or "").strip()).first()
+        if a:
+            db.session.delete(a)
+            db.session.commit()
+        return redirect(url_for("admin_team"))
+
     @app.get("/admin/cohort")
     @admin_required
     def admin_cohort():
@@ -1602,12 +1705,25 @@ def create_app():
             return render_template("oauth_error.html", msg="could not read your GitHub profile"), 400
 
         if role == "reviewer":
-            if gid not in githuboauth.reviewer_ids():
-                return render_template("oauth_error.html",
-                                       msg="this GitHub account is not authorized as a reviewer"), 403
-            session["admin"] = True
-            session["admin_login"] = login
-            return redirect(nxt or url_for("admin"))
+            if gid in _reviewer_ids():
+                session["admin"] = True
+                session["admin_login"] = login
+                session.pop("sponsor", None)
+                session.pop("sponsor_org", None)
+                return redirect(nxt or url_for("admin"))
+            sp = _sponsor_record(gid)
+            if sp:
+                session["sponsor"] = True
+                session["sponsor_org"] = sp.org
+                session["sponsor_login"] = login
+                session.pop("admin", None)
+                # keep the sponsor's login handle fresh
+                if sp.login != login:
+                    sp.login = login
+                    db.session.commit()
+                return redirect(url_for("sponsor_home"))
+            return render_template("oauth_error.html",
+                                   msg="this GitHub account is not authorized for staff access"), 403
 
         # Candidate: enforce the identity bar before letting anyone in.
         ok, reason, email = githuboauth.identity_ok(user, emails)
