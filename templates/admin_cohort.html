@@ -1,38 +1,11 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_adminnav.html" import adminnav, adminrail %}
 {% block title %}Cohort · Qwalora Ranger{% endblock %}
-{% macro navaside(active) %}
-<aside class="nav">
-  <div class="nav-top">
-    <div class="nav-brand">
-      <span class="l">{{ qlogo('light',26) }}<b>QWALORA <span>Ranger</span></b></span>
-      <a class="compose" href="/enroll" title="Enroll a ranger">{{ ic('plus','ic ic-sm') }}</a>
-    </div>
-    <div class="nav-group">
-      <div class="gl">Queue</div>
-      <a class="nav-item" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span></a>
-      <a class="nav-item" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span></a>
-      <a class="nav-item" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span></a>
-    </div>
-    <div class="nav-group">
-      <div class="gl">Program</div>
-      <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span>{% if vm.counts.active %}<span class="count {% if active=='cohort' %}count-on{% endif %}">{{ vm.counts.active }}</span>{% endif %}</a>
-      <a class="nav-item {% if active=='ranges' %}on{% endif %}" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
-      <a class="nav-item" href="/roster.json?cohort={{ vm.cohort }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">Roster JSON</span></a>
-    </div>
-  </div>
-  <div class="nav-user">
-    <span class="av av-32">FK</span>
-    <span class="nm"><b>Franck Kengne</b><span>Reviewer · Admin</span></span>
-    <a href="/admin/logout" class="iconbtn" title="Sign out">{{ ic('sliders','ic ic-sm') }}</a>
-  </div>
-</aside>
-{% endmacro %}
 {% block body %}
 <div class="shell">
   <div class="app app-2col">
-    {{ navaside('cohort') }}
+    {{ adminnav('cohort', vm.cohort, vm.q) }}
 
     <section class="ranges-main">
       <div class="rg-head">
@@ -119,12 +92,7 @@
       {% if vm.total >= 300 %}<div class="co-more mono dim">Showing first 300. Narrow with search.</div>{% endif %}
     </section>
 
-    <nav class="rail">
-      <a class="rb" href="/admin?status=pending" title="Reports">{{ ic('inbox') }}</a>
-      <a class="rb on" href="/admin/cohort" title="Cohort">{{ ic('users') }}</a>
-      <a class="rb" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
-      <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
-    </nav>
+    {{ adminrail('cohort', vm.cohort) }}
   </div>
 </div>
 {% endblock %}

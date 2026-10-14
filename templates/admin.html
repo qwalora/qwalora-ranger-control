@@ -1,56 +1,13 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_adminnav.html" import adminnav, adminrail %}
+{% set at = 'needs' if vm.active_status=='needs_changes' else (vm.active_status if vm.active_status in ['all','pending','approved'] else '') %}
 {% block title %}{{ vm.title }} · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="shell">
   <div class="app">
 
-    <!-- NAV -->
-    <aside class="nav">
-      <div class="nav-top">
-        <div class="nav-brand">
-          <span class="l">{{ qlogo('light',26) }}<b>QWALORA <span>Ranger</span></b></span>
-          <a class="compose" href="/enroll" title="Enroll a ranger">{{ ic('plus','ic ic-sm') }}</a>
-        </div>
-        <form class="nav-search" method="get" action="/admin">
-          {{ ic('search','ic ic-sm') }}
-          <input name="q" value="{{ vm.q }}" placeholder="Search rangers, boards" autocomplete="off">
-          <input type="hidden" name="status" value="{{ vm.active_status }}">
-        </form>
-
-        <div class="nav-group">
-          <div class="gl">Queue</div>
-          <a class="nav-item {% if vm.active_status=='all' and not vm.active_board %}on{% endif %}" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span>{% if vm.nav.all %}<span class="count {% if vm.active_status=='all' %}count-on{% endif %}">{{ vm.nav.all }}</span>{% endif %}</a>
-          <a class="nav-item {% if vm.active_status=='pending' and not vm.active_board %}on{% endif %}" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span>{% if vm.nav.pending %}<span class="count {% if vm.active_status=='pending' %}count-on{% endif %}">{{ vm.nav.pending }}</span>{% endif %}</a>
-          <a class="nav-item {% if vm.active_status=='approved' and not vm.active_board %}on{% endif %}" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span>{% if vm.nav.approved %}<span class="count {% if vm.active_status=='approved' %}count-on{% endif %}">{{ vm.nav.approved }}</span>{% endif %}</a>
-          <a class="nav-item {% if vm.active_status=='needs_changes' and not vm.active_board %}on{% endif %}" href="/admin?status=needs_changes"><span class="l">{{ ic('edit') }}</span><span class="lbl">Needs changes</span>{% if vm.nav.needs %}<span class="count">{{ vm.nav.needs }}</span>{% endif %}</a>
-        </div>
-
-        <div class="nav-group">
-          <div class="gl">Program</div>
-          <a class="nav-item" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
-          <a class="nav-item" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
-        </div>
-
-        <div class="nav-group">
-          <div class="gl">Pinned</div>
-          <a class="nav-item {% if vm.active_board=='board6' %}on{% endif %}" href="/admin?status=all&board=board6"><span class="l">{{ ic('tag') }}</span><span class="lbl">Capstone board</span></a>
-        </div>
-
-        <div class="nav-group">
-          <div class="gl">Cohort {{ vm.cohort }}</div>
-          {% for b in vm.nav.boards %}
-          <a class="nav-item {% if b.on %}on{% endif %}" href="/admin?status={{ vm.active_status }}&board={{ b.name }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">{{ b.name }}</span>{% if b.count %}<span class="count">{{ b.count }}</span>{% endif %}</a>
-          {% endfor %}
-        </div>
-      </div>
-      <div class="nav-user">
-        <span class="av av-32">FK</span>
-        <span class="nm"><b>Franck Kengne</b><span>Reviewer · Admin</span></span>
-        <a href="/admin/logout" class="iconbtn" title="Sign out">{{ ic('sliders','ic ic-sm') }}</a>
-      </div>
-    </aside>
+    {{ adminnav(at, vm.cohort, vm.q) }}
 
     <!-- LIST -->
     <section class="list">
@@ -176,18 +133,7 @@
       {% endif %}
     </section>
 
-    <!-- RAIL -->
-    <nav class="rail">
-      <a class="rb {% if vm.active_status=='all' %}on{% endif %}" href="/admin?status=all" title="All reports">{{ ic('grid') }}</a>
-      <a class="rb {% if vm.active_status=='pending' %}on{% endif %}" href="/admin?status=pending" title="Pending">{{ ic('inbox') }}</a>
-      <a class="rb {% if vm.active_status=='approved' %}on{% endif %}" href="/admin?status=approved" title="Approved">{{ ic('medal') }}</a>
-      <a class="rb {% if vm.active_status=='needs_changes' %}on{% endif %}" href="/admin?status=needs_changes" title="Needs changes">{{ ic('edit') }}</a>
-      <span class="sp"></span>
-      <a class="rb" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
-      <a class="rb" href="/roster.json?cohort={{ vm.cohort }}" title="Roster JSON">{{ ic('hash') }}</a>
-      <a class="rb" href="https://ranger.qwalora.com" title="Ranger site">{{ ic('help') }}</a>
-      <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
-    </nav>
+    {{ adminrail(at, vm.cohort) }}
 
   </div>
 </div>
