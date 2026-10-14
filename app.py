@@ -20,6 +20,7 @@ the human-review surface and the Ludus provisioning queue.
 """
 import datetime as _dt
 import functools
+import hashlib
 import os
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
@@ -77,6 +78,18 @@ def create_app():
         db.create_all()
 
     admin_token = os.environ.get("ADMIN_TOKEN")
+
+    # Cache-bust static assets: version the stylesheet URL by its content hash so a
+    # new deploy is never masked by a stale cached app.css on any origin.
+    try:
+        _css_bytes = open(os.path.join(app.static_folder, "app.css"), "rb").read()
+        asset_ver = hashlib.md5(_css_bytes).hexdigest()[:10]
+    except Exception:
+        asset_ver = "1"
+
+    @app.context_processor
+    def _inject_asset_ver():
+        return {"asset_ver": asset_ver}
 
     # --- auth helpers --------------------------------------------------------
     def _is_admin():
