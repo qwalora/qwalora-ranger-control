@@ -531,18 +531,202 @@ def score_board3(scenario, submission):
     return score, [feedback]
 
 
+# --- board 4: incident response / forensics ---------------------------------
+# The breach already happened. The ranger is handed multi-host forensic evidence
+# (an incident woven through benign noise) and must produce an IR report: scope
+# the compromise (which hosts and accounts), name the initial-access vector and
+# patient zero, reconstruct the kill-chain timeline in order, and flag the
+# persistence to remove. Graded answer-free against the incident ground truth
+# derived from the seed.
+_B4_HOSTS = ["WKS-0471", "WKS-0088", "WKS-1120", "WKS-0233", "WKS-0355",
+             "SRV-APP01", "SRV-FILE02", "SRV-SQL03", "SRV-DC01"]
+_B4_USERS = ["m.okafor", "s.petrov", "l.nguyen", "d.reyes", "a.haddad",
+             "k.yilmaz", "r.santos", "j.abara", "t.flores"]
+_B4_PRIV = ["svc_backup", "svc_sql", "adm.helpdesk", "da.admin"]
+_B4_C2 = ["cdn-telemetry-sync.com", "updates-cache-cdn.net", "api-metrics-collector.io",
+          "static-assets-pool.co", "edge-node-telemetry.net"]
+_B4_VECTORS = [
+    ("T1566.001", "Spearphishing Attachment", "process",
+     "winword.exe opened invoice_{tok}.docm then spawned powershell.exe -enc on {H} ({U})"),
+    ("T1078", "Valid Accounts",  "auth",
+     "VPN + interactive logon for {U} from external 203.0.113.{d} to {H}, no MFA challenge"),
+    ("T1190", "Exploit Public-Facing Application", "process",
+     "w3wp.exe on {H} spawned cmd.exe after POST /upload.aspx (webshell dropped) by {U}"),
+]
+
+
+def _b4_acct(u):
+    return "corp\\" + u
+
+
+def generate_board4(seed):
+    r = _random.Random("board4:" + str(seed))
+    pz = r.choice(_B4_HOSTS)                                   # patient zero
+    dst = r.choice([h for h in _B4_HOSTS if h != pz])         # lateral target
+    third = r.choice([h for h in _B4_HOSTS if h not in (pz, dst)]) if r.random() < 0.5 else None
+    u1 = r.choice(_B4_USERS)                                   # initial account
+    u2 = r.choice(_B4_PRIV)                                    # escalated account
+    c2 = r.choice(_B4_C2)
+    vtid, vtname, vet, vtmpl = r.choice(_B4_VECTORS)
+    base = _dt.datetime(2026, 5, r.randint(1, 20), r.randint(1, 6), r.randint(0, 59))
+
+    # Ordered kill chain: (technique, event_type, host, account, detail, persistence?)
+    steps = [
+        (vtid, vet, pz, u1, vtmpl.format(tok=_b3_tok(r, 5), H=pz, U=u1, d=r.randint(2, 250)), False),
+        ("T1059.001", "process", pz, u1,
+         "powershell.exe -nop -w hidden -enc JAB%s== on %s" % (_b3_tok(r, 12), pz), False),
+        ("T1087.002", "process", pz, u1,
+         'net.exe group "Domain Admins" /domain on %s' % pz, False),
+        ("T1003.001", "process", pz, u1,
+         "rundll32.exe comsvcs.dll MiniDump lsass -> %s.dmp on %s" % (_b3_tok(r, 4), pz), False),
+        ("T1021.002", "auth", dst, u2,
+         "ADMIN$ logon to %s as %s from %s, then service create" % (dst, _b4_acct(u2), pz), False),
+        ("T1053.005", "process", dst, u2,
+         "schtasks /create /ru SYSTEM /tn 'EdgeUpdateX' /tr powershell on %s" % dst, True),
+        ("T1071.001", "network", dst, u2,
+         "%s -> %s:443 HTTPS beacon every 60s, 8h" % (dst, c2), False),
+        ("T1048.003", "dns", dst, u2,
+         "%s -> %s 200+ TXT lookups, ~2MB exfil" % (dst, c2), False),
+    ]
+    if third:
+        steps.insert(7, ("T1021.002", "auth", third, u2,
+                         "ADMIN$ logon to %s as %s from %s" % (third, _b4_acct(u2), dst), False))
+
+    affected_hosts = sorted({pz, dst} | ({third} if third else set()))
+    affected_accounts = sorted({_b4_acct(u1), _b4_acct(u2)})
+
+    events = []
+    order_ids = []
+    persist_ids = []
+    t = 0
+    for i, (tid, et, host, acct, detail, is_persist) in enumerate(steps):
+        t += r.randint(2, 40)
+        ts = base + _dt.timedelta(minutes=t)
+        eid = "EVT-%04d" % (4000 + i)
+        events.append({"id": eid, "_ts": ts, "host": host, "user": acct,
+                       "event_type": et, "detail": detail,
+                       "_key": {"incident": True, "order": i, "technique": tid,
+                                "persistence": is_persist}})
+        order_ids.append((ts, eid))
+        if is_persist:
+            persist_ids.append(eid)
+
+    # benign noise spread across the estate and the whole day
+    benign_n = r.randint(26, 38)
+    for j in range(benign_n):
+        et, tmpl = r.choice(_B2_BENIGN)
+        bu, bh = r.choice(_B4_USERS), r.choice(_B4_HOSTS)
+        bdst = r.choice([h for h in _B4_HOSTS if h != bh])
+        ts = base + _dt.timedelta(minutes=r.randint(0, 1440))
+        events.append({"id": "EVT-%04d" % (4100 + j), "_ts": ts, "host": bh,
+                       "user": _b4_acct(bu), "event_type": et,
+                       "detail": tmpl.format(U=bu, H=bh, dst=bdst),
+                       "_key": {"incident": False}})
+
+    r.shuffle(events)
+    for e in events:
+        e["timestamp"] = e.pop("_ts").isoformat()
+
+    incident_order = [eid for _, eid in sorted(order_ids)]
+    return {"board": 4, "cohort_theme": "corp.local",
+            "truth": {"patient_zero": pz, "initial_access": vtid,
+                      "affected_hosts": affected_hosts, "affected_accounts": affected_accounts,
+                      "timeline": incident_order, "persistence": persist_ids},
+            "alerts": events}
+
+
+def public_board4(scenario):
+    """The evidence: forensic events across the estate, incident labels stripped."""
+    return {"board": 4, "theme": scenario["cohort_theme"],
+            "alerts": [{"id": a["id"], "timestamp": a["timestamp"], "host": a["host"],
+                        "user": a["user"], "event_type": a["event_type"],
+                        "detail": a["detail"]} for a in scenario["alerts"]]}
+
+
+def _b4_norm_host(h):
+    return _norm(h)
+
+
+def _b4_norm_acct(a):
+    a = _norm(a)
+    return a.split("\\")[-1] if "\\" in a else a
+
+
+def _set_f1(submitted, truth, normfn):
+    sub = {normfn(x) for x in (submitted or []) if str(x).strip()}
+    tru = {normfn(x) for x in truth}
+    if not tru:
+        return 1.0 if not sub else 0.0
+    tp = len(sub & tru)
+    prec = tp / len(sub) if sub else 0.0
+    rec = tp / len(tru)
+    return (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+
+
+def _order_score(submitted_ids, truth_order):
+    """Fraction of adjacent pairs in the submitted timeline that are in the
+    correct relative order per the truth, counting only ids that are real
+    incident events. Rewards a correctly sequenced chain."""
+    rank = {eid: i for i, eid in enumerate(truth_order)}
+    seq = [rank[str(e).strip()] for e in (submitted_ids or []) if str(e).strip() in rank]
+    if len(seq) < 2:
+        return 1.0 if len(seq) == 1 else 0.0
+    good = sum(1 for a, b in zip(seq, seq[1:]) if a < b)
+    return good / (len(seq) - 1)
+
+
+def score_board4(scenario, submission):
+    """Grade the IR report against the incident ground truth. Feedback is
+    per-section correctness, never the answer."""
+    t = scenario["truth"]
+    s = submission if isinstance(submission, dict) else {}
+
+    pz_ok = _b4_norm_host(s.get("patient_zero")) == _b4_norm_host(t["patient_zero"])
+    ia_ok = _norm(s.get("initial_access")) == _norm(t["initial_access"])
+    hosts_f1 = _set_f1(s.get("affected_hosts"), t["affected_hosts"], _b4_norm_host)
+    accts_f1 = _set_f1(s.get("affected_accounts"), t["affected_accounts"], _b4_norm_acct)
+    persist_f1 = _set_f1(s.get("persistence"), t["persistence"], _norm)
+
+    tl = [str(x).strip() for x in (s.get("timeline") or [])]
+    tl_membership = _set_f1(tl, t["timeline"], _norm)
+    tl_order = _order_score(tl, t["timeline"])
+    timeline_score = 0.6 * tl_membership + 0.4 * tl_order
+
+    weights = {"patient_zero": 0.15, "initial_access": 0.15, "affected_hosts": 0.15,
+               "affected_accounts": 0.15, "timeline": 0.25, "persistence": 0.15}
+    earned = (weights["patient_zero"] * (1.0 if pz_ok else 0.0)
+              + weights["initial_access"] * (1.0 if ia_ok else 0.0)
+              + weights["affected_hosts"] * hosts_f1
+              + weights["affected_accounts"] * accts_f1
+              + weights["timeline"] * timeline_score
+              + weights["persistence"] * persist_f1)
+    score = round(100.0 * earned, 1)
+
+    feedback = {
+        "patient_zero_correct": pz_ok,
+        "initial_access_correct": ia_ok,
+        "affected_hosts_f1": round(hosts_f1, 2),
+        "affected_accounts_f1": round(accts_f1, 2),
+        "timeline_membership_f1": round(tl_membership, 2),
+        "timeline_order_score": round(tl_order, 2),
+        "persistence_f1": round(persist_f1, 2),
+    }
+    return score, [feedback]
+
+
 # --- dispatch ---------------------------------------------------------------
 _GENERATORS = {
     1: (generate_board1, public_board1, score_board1),
     2: (generate_board2, public_board2, score_board2),
     3: (generate_board3, public_board3, score_board3),
+    4: (generate_board4, public_board4, score_board4),
 }
 
 
 # What kind of exercise each board is, so the lab client knows what file to
 # scaffold and submit. "triage": per-event verdicts (triage.yml). "detection":
 # a detection ruleset (rules.yml).
-_KINDS = {1: "triage", 2: "triage", 3: "detection"}
+_KINDS = {1: "triage", 2: "triage", 3: "detection", 4: "ir"}
 
 
 def has_board(n):

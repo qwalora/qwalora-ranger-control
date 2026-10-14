@@ -1158,19 +1158,15 @@ def create_app():
         cid = session.get("cand")
         return Candidate.query.get(cid) if cid else None
 
-    @app.get("/me")
-    def candidate_me():
-        c = _current_candidate()
-        if not c:
-            if githuboauth.enabled():
-                return redirect(url_for("gh_login"))
-            abort(401)
+    def _me_vm(c):
+        """The candidate dashboard view model. Shared by /me and the admin
+        preview so both render exactly what the ranger sees."""
         n = c.current_board
         rr = _board_range(c, n)
         bc = _badge_chain(c)
         rst = rr.status if rr else "none"
         rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("Not started", "pill", "dot"))
-        vm = {
+        return {
             "name": c.name, "handle": c.handle, "status": c.status,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
@@ -1179,8 +1175,17 @@ def create_app():
             "has_wg": bool(rr and rr.wireguard_config),
             "seed": _current_seed(c), "token": c.token,
             "range_detail": (rr.detail if rr else ""),
+            "preview": False,
         }
-        return render_template("candidate_me.html", vm=vm)
+
+    @app.get("/me")
+    def candidate_me():
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))
+            abort(401)
+        return render_template("candidate_me.html", vm=_me_vm(c))
 
     @app.post("/me/start")
     def candidate_start():
@@ -1203,6 +1208,23 @@ def create_app():
         from flask import Response
         return Response(rr.wireguard_config, mimetype="text/plain",
                         headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
+
+    @app.get("/admin/preview/<int:cid>")
+    @admin_required
+    def admin_preview(cid):
+        """Read-only preview of a ranger's own dashboard, so an operator can see
+        exactly what a candidate sees. Candidate actions are disabled here; this
+        never signs in as the candidate or changes anything on their behalf."""
+        c = Candidate.query.get_or_404(cid)
+        vm = _me_vm(c)
+        vm["preview"] = True
+        roster = (Candidate.query.filter_by(cohort=c.cohort)
+                  .order_by(Candidate.handle).all())
+        vm["preview_candidates"] = [
+            {"id": o.id, "handle": o.handle, "board": o.current_board,
+             "status": o.status, "current": o.id == c.id} for o in roster]
+        vm["preview_cohort"] = c.cohort
+        return render_template("candidate_me.html", vm=vm)
 
     return app
 

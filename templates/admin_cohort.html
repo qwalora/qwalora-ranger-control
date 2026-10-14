@@ -76,6 +76,7 @@
           </div>
 
           <div class="co-actions">
+            <a class="iconbtn" href="/admin/preview/{{ r.cid }}" title="Preview this ranger's dashboard">{{ ic('user','ic ic-sm') }}</a>
             <a class="iconbtn" href="/admin?q={{ r.handle }}&status=all" title="Reports">{{ ic('inbox','ic ic-sm') }}</a>
             {% if not r.terminal %}
             <form method="post" action="/admin/candidates/{{ r.cid }}/exit" onsubmit="return confirm('Exit {{ r.name }} from the cohort? Their ranges are torn down; earned badges are kept.');">

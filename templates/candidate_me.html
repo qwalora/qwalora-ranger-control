@@ -4,9 +4,28 @@
 {% block title %}Your Ranger · Qwalora{% endblock %}
 {% block body %}
 <div class="page">
+  {% if vm.preview %}
+  <div style="background:var(--amber-bg,#2a2410);border-bottom:1px solid var(--amber,#8a6d1f);padding:10px 16px">
+    <div style="max-width:980px;margin:0 auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('user','ic ic-sm') }} Admin preview</span>
+      <span class="muted" style="font-size:12.5px">Read-only. You are viewing a ranger's dashboard, not acting as them.</span>
+      <form method="get" style="margin-left:auto;display:flex;align-items:center;gap:8px"
+            onchange="if(this.cid.value)window.location='/admin/preview/'+this.cid.value">
+        <label class="muted" style="font-size:12px">Switch ranger</label>
+        <select name="cid" class="input" style="padding:6px 10px;font:500 13px/1 var(--f)">
+          {% for o in vm.preview_candidates %}
+          <option value="{{ o.id }}" {% if o.current %}selected{% endif %}>@{{ o.handle }} · board {{ o.board }} · {{ o.status }}</option>
+          {% endfor %}
+        </select>
+        <a class="btn btn-ghost btn-sm" href="/admin/cohort?cohort={{ vm.preview_cohort }}">Back to admin</a>
+      </form>
+    </div>
+  </div>
+  {% endif %}
   <header class="anav"><div class="anav-in">
     <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+    {% if vm.preview %}<span class="btn btn-ghost btn-pill" style="opacity:.5;pointer-events:none">Sign out</span>
+    {% else %}<a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>{% endif %}
   </div></header>
 
   <div class="page-main">
@@ -43,11 +62,20 @@
             <span class="muted" style="font-size:12.5px">{{ vm.range_detail }}</span>
           </div>
           <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+            {% if vm.preview %}
+            {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
+            <span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>
+            {% endif %}
+            {% if vm.has_wg %}
+            <span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('key','ic ic-sm') }} Download WireGuard</span>
+            {% endif %}
+            {% else %}
             {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
             <form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>
             {% endif %}
             {% if vm.has_wg %}
             <a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>
+            {% endif %}
             {% endif %}
           </div>
           {% if vm.tier == 'shared' and vm.range_status == 'deployed' %}
