@@ -1178,6 +1178,44 @@ def create_app():
             "preview": False,
         }
 
+    def _demo_vm(n, graduated):
+        """A synthetic dashboard for the admin demo preview: no real candidate,
+        just the persona at board n (or graduated) so an operator can walk the
+        whole ladder from SOC to capstone without enrolling anyone."""
+        isolated = P.tier_of(n) == "isolated"
+        rst = "deployed"
+        rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("Deployed", "pill-ok", "dot-ok"))
+        chain = [{"level": str(b["n"]), "name": b["badge"], "role": b["role"],
+                  "board": b["n"], "earned": (graduated or b["n"] < n)}
+                 for b in P.BOARD_PLAN]
+        personas = [{"n": b["n"], "role_title": P.ROLE_TITLES.get(b["role"], b["role"]),
+                     "badge": b["badge"], "tier": P.tier_of(b["n"])} for b in P.BOARD_PLAN]
+        return {
+            "name": "Demo Ranger", "handle": "demo",
+            "status": ("graduated" if graduated else "active"),
+            "board": n, "role_title": P.ROLE_TITLES.get(P.role_of(n), "-"),
+            "tier": P.tier_of(n), "cohort": "DEMO",
+            "badges": chain, "certified": graduated,
+            "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
+            "has_wg": isolated, "seed": "demo-seed-b%d" % n, "token": "demo-preview-token",
+            "range_detail": "Demo range (preview only)",
+            "preview": True, "demo": True,
+            "persona_board": n, "persona_graduated": graduated, "personas": personas,
+        }
+
+    @app.get("/admin/preview")
+    @admin_required
+    def admin_preview_demo():
+        """Persona preview, independent of enrolled rangers. ?board=1..6 walks
+        the ladder; ?state=graduated shows the certified end."""
+        graduated = request.args.get("state") == "graduated"
+        try:
+            n = int(request.args.get("board", 1))
+        except (TypeError, ValueError):
+            n = 1
+        n = max(1, min(P.LAST_BOARD, n))
+        return render_template("candidate_me.html", vm=_demo_vm(n, graduated))
+
     @app.get("/me")
     def candidate_me():
         c = _current_candidate()

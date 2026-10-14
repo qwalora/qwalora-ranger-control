@@ -7,18 +7,31 @@
   {% if vm.preview %}
   <div style="background:var(--amber-bg,#2a2410);border-bottom:1px solid var(--amber,#8a6d1f);padding:10px 16px">
     <div style="max-width:980px;margin:0 auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('user','ic ic-sm') }} Admin preview</span>
-      <span class="muted" style="font-size:12.5px">Read-only. You are viewing a ranger's dashboard, not acting as them.</span>
-      <form method="get" style="margin-left:auto;display:flex;align-items:center;gap:8px"
-            onchange="if(this.cid.value)window.location='/admin/preview/'+this.cid.value">
+      <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('user','ic ic-sm') }} Admin preview{% if vm.demo %} · demo{% endif %}</span>
+      <span class="muted" style="font-size:12.5px">Read-only. {% if vm.demo %}A sample dashboard, no real ranger.{% else %}You are viewing a ranger's dashboard, not acting as them.{% endif %}</span>
+      {% if vm.demo %}
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <label class="muted" style="font-size:12px">Persona</label>
+        <select class="input" style="padding:6px 10px;font:500 13px/1 var(--f)" onchange="window.location=this.value">
+          {% for p in vm.personas %}
+          <option value="/admin/preview?board={{ p.n }}" {% if not vm.persona_graduated and vm.persona_board == p.n %}selected{% endif %}>Board {{ p.n }} · {{ p.role_title }} ({{ p.badge }}){% if p.tier=='isolated' %} · isolated{% endif %}</option>
+          {% endfor %}
+          <option value="/admin/preview?state=graduated" {% if vm.persona_graduated %}selected{% endif %}>Graduated · Qwalora Ranger, Certified</option>
+        </select>
+        <a class="btn btn-ghost btn-sm" href="/admin/cohort">Back to admin</a>
+      </div>
+      {% else %}
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
         <label class="muted" style="font-size:12px">Switch ranger</label>
-        <select name="cid" class="input" style="padding:6px 10px;font:500 13px/1 var(--f)">
+        <select class="input" style="padding:6px 10px;font:500 13px/1 var(--f)"
+                onchange="if(this.value)window.location='/admin/preview/'+this.value">
           {% for o in vm.preview_candidates %}
           <option value="{{ o.id }}" {% if o.current %}selected{% endif %}>@{{ o.handle }} · board {{ o.board }} · {{ o.status }}</option>
           {% endfor %}
         </select>
         <a class="btn btn-ghost btn-sm" href="/admin/cohort?cohort={{ vm.preview_cohort }}">Back to admin</a>
-      </form>
+      </div>
+      {% endif %}
     </div>
   </div>
   {% endif %}
