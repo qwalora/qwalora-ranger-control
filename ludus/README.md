@@ -63,6 +63,17 @@ ranges are needed vs deployed right now, so you can watch an org's batch drain
 through the queue. To add capacity, stand up another Ludus host and set the
 range's `host` field; the slot accounting is per host.
 
+## Cohorts and range naming
+
+Several cohorts can run in sequence (one active at a time; the next activates on
+its own when the current finishes). To keep their ranges from colliding and to
+make every range self-identifying, the Ludus user id and range name are scoped
+by cohort: `<COHORT>-<HANDLE>-<SIG>`, e.g. `026A-RSTARK-FF59` with range
+`026A-RSTARK-RANGE`. The same person in a later cohort gets a distinct id
+(`026B-RSTARK-...`), so re-runs never clash and `ludus user list` on the server
+reads cleanly per cohort. The VM names inside a range still use Ludus's
+`{{ range_id }}`, so they inherit the same cohort-scoped prefix.
+
 ## Sharing a range across an org? No.
 
 Rangers from the same org are grouped for enrollment, progress and capacity

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Cohorts · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('cohort', vm.active, '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Cohorts</div>
+          <div class="rg-sub">Pick a cohort to open. One cohort is active at a time; when it finishes, the next scheduled one starts on its own.</div>
+        </div>
+      </div>
+
+      <div class="co-list" style="padding-top:18px">
+        {% for c in vm.cohorts %}
+        <div class="co-row" style="grid-template-columns:1.2fr auto 1fr auto;align-items:center">
+          <div class="co-who">
+            <span class="av av-32">{{ c.name[:2] }}</span>
+            <div class="co-id">
+              <b><a class="orgtag" style="color:var(--ink)" href="/admin/cohort?cohort={{ c.name }}">{{ c.name }}</a></b>
+              <span class="mono dim">seq {{ c.sequence }}{% if c.start_at %} · starts {{ c.start_at }}{% endif %}</span>
+            </div>
+          </div>
+          <div>
+            {% if c.status=='active' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Active</span>
+            {% elif c.status=='completed' %}<span class="pill"><span class="dot"></span>Completed</span>
+            {% else %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Scheduled</span>{% endif %}
+          </div>
+          <div class="mono dim" style="font-size:12.5px">
+            {{ c.total }} ranger{{ '' if c.total==1 else 's' }} · {{ c.active }} active · {{ c.graduated }} certified
+          </div>
+          <div class="co-actions">
+            <a class="btn btn-outline btn-sm" href="/admin/cohort?cohort={{ c.name }}">Open</a>
+            {% if c.status!='active' %}
+            <form method="post" action="/admin/cohorts/{{ c.name }}/activate">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <button class="btn btn-ghost btn-sm">Make active</button>
+            </form>
+            {% endif %}
+            {% if c.status=='active' %}
+            <form method="post" action="/admin/cohorts/{{ c.name }}/complete" onsubmit="return confirm('Mark {{ c.name }} completed? The next scheduled cohort will activate.');">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <button class="btn btn-ghost btn-sm">Complete</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="empty"><div class="ring">{{ ic('users') }}</div><div>No cohorts yet.</div></div>
+        {% endfor %}
+      </div>
+
+      <div class="co-newcohort">
+        <div class="eyebrow"><span class="d"></span>New cohort</div>
+        <form method="post" action="/admin/cohorts/new" class="co-newform">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <input class="input" name="name" placeholder="2026-B" required style="max-width:140px">
+          <input class="input" type="date" name="start_at" title="Intended start (optional)">
+          <input class="input" name="note" placeholder="Note (optional)">
+          <label class="muted" style="display:flex;align-items:center;gap:6px;font-size:12.5px">
+            <input type="checkbox" name="activate" value="1"> activate now
+          </label>
+          <button class="btn btn-primary btn-sm">{{ ic('plus','ic ic-sm') }} Create cohort</button>
+        </form>
+        <p class="dim" style="font-size:12px;margin-top:8px">The board plan, scenarios and Ludus blueprints are shared across cohorts, so a new cohort needs no rebuild. New rangers enrolling land in the active cohort.</p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

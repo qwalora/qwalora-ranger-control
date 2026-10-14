@@ -212,6 +212,26 @@ class ScenarioAssignment(db.Model):
                                           name="uq_seed_per_person_board"),)
 
 
+class Cohort(db.Model):
+    """A run of the program. Cohorts are first-class so several can exist at
+    once and advance in sequence: exactly one is 'active' (new enrollees land
+    there), and when it completes the next 'scheduled' one activates on its own.
+    The board plan, scenarios and Ludus blueprints are cohort-agnostic, so a new
+    cohort is just a row, no rebuild."""
+    __tablename__ = "cohorts"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(40), unique=True, nullable=False, index=True)  # e.g. 2026-A
+    sequence = db.Column(db.Integer, nullable=False, default=0)   # order for auto-advance
+    status = db.Column(db.String(20), nullable=False, default="scheduled", index=True)
+    start_at = db.Column(db.DateTime(timezone=True), nullable=True)   # intended start
+    activated_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    note = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    STATUSES = ("scheduled", "active", "completed")
+
+
 class Badge(db.Model):
     """A signed, verifiable rank credential, minted on each board clearance."""
     __tablename__ = "badges"

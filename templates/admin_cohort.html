@@ -10,10 +10,27 @@
     <section class="ranges-main">
       <div class="rg-head">
         <div>
-          <div class="ttl">Cohort {{ vm.cohort }} <span class="count">{{ vm.counts.all }}</span></div>
-          <div class="rg-sub">SOC to capstone · 6 boards · isolated slots {{ vm.slots_used }}/{{ vm.cap }} in use</div>
+          <div class="ttl" style="display:flex;align-items:center;gap:10px">
+            <select class="input" style="padding:6px 12px;font:700 17px/1 var(--f);border:none;background:transparent;-webkit-appearance:menulist"
+                    onchange="if(this.value)window.location='/admin/cohort?cohort='+this.value">
+              {% for c in vm.cohorts %}
+              <option value="{{ c.name }}" {% if c.name==vm.cohort %}selected{% endif %}>Cohort {{ c.name }}{% if c.status=='active' %} (active){% elif c.status=='completed' %} (done){% endif %}</option>
+              {% endfor %}
+            </select>
+            <span class="count">{{ vm.counts.all }}</span>
+            {% if vm.cohort_status=='active' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Active</span>
+            {% elif vm.cohort_status=='completed' %}<span class="pill"><span class="dot"></span>Completed</span>
+            {% else %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Scheduled</span>{% endif %}
+          </div>
+          <div class="rg-sub">SOC to capstone · 6 boards · isolated slots {{ vm.slots_used }}/{{ vm.cap }} in use · <a class="orgtag" href="/admin/cohorts">all cohorts</a></div>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
+          {% if not vm.is_active_cohort %}
+          <form method="post" action="/admin/cohorts/{{ vm.cohort }}/activate">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <button class="btn btn-ghost btn-sm">Make active</button>
+          </form>
+          {% endif %}
           <a class="btn btn-outline btn-sm" href="/admin/preview" title="Preview the ranger dashboard for any persona, SOC to capstone (no enrollment needed)">{{ ic('user','ic ic-sm') }} Preview a ranger</a>
           <a class="btn btn-outline btn-sm" href="/roster.json?cohort={{ vm.cohort }}" target="_blank" rel="noopener" title="Machine-readable roster feed for cohort-sync and grading">{{ ic('hash','ic ic-sm') }} Roster feed</a>
           <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">

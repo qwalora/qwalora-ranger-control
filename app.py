@@ -34,12 +34,48 @@ import scenarios
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import (Badge, BoardResult, Candidate, RangeRequest, Report,
+from models import (Badge, BoardResult, Candidate, Cohort, RangeRequest, Report,
                     ScenarioAssignment, db, ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_RANGES", "2"))
+
+
+def _bootstrap_cohorts():
+    """Make sure the cohorts table reflects reality on boot: a row for every
+    cohort any candidate is in, a row for DEFAULT_COHORT, and exactly one active
+    cohort. Idempotent and race-safe (two workers may both run it)."""
+    try:
+        names = {DEFAULT_COHORT}
+        for (nm,) in db.session.query(Candidate.cohort).distinct().all():
+            if nm:
+                names.add(nm)
+        existing = {c.name: c for c in Cohort.query.all()}
+        seq = max([c.sequence for c in existing.values()], default=0)
+        for nm in sorted(names):
+            if nm not in existing:
+                seq += 1
+                db.session.add(Cohort(name=nm, sequence=seq, status="scheduled"))
+        db.session.commit()
+        # Ensure exactly one active cohort. If none, activate the lowest-sequence
+        # one that still has non-terminal candidates, else DEFAULT_COHORT.
+        if not Cohort.query.filter_by(status="active").first():
+            cohorts = Cohort.query.order_by(Cohort.sequence.asc()).all()
+            pick = None
+            for c in cohorts:
+                total = Candidate.query.filter_by(cohort=c.name).count()
+                active = Candidate.query.filter_by(cohort=c.name, status="active").count()
+                if total == 0 or active > 0:
+                    pick = c
+                    break
+            pick = pick or next((c for c in cohorts if c.name == DEFAULT_COHORT), None) or (cohorts[0] if cohorts else None)
+            if pick:
+                pick.status = "active"
+                pick.activated_at = _dt.datetime.now(_dt.timezone.utc)
+                db.session.commit()
+    except Exception:
+        db.session.rollback()
 ROLES = list(dict.fromkeys(P.ROLES + [
     "red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]))
 BOARDS = [P.bstr(b["n"]) for b in P.BOARD_PLAN]
@@ -136,6 +172,7 @@ def create_app():
         except Exception:
             db.session.rollback()
         ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
+        _bootstrap_cohorts()  # make sure cohort rows exist and one is active
 
     admin_token = os.environ.get("ADMIN_TOKEN")
     # Once GitHub reviewer sign-in is confirmed, set DISABLE_ADMIN_TOKEN=1 to
@@ -438,6 +475,38 @@ def create_app():
                 freed_hosts.add(rr.host or "primary")
         return freed_hosts
 
+    def _active_cohort():
+        return Cohort.query.filter_by(status="active").order_by(Cohort.sequence.asc()).first()
+
+    def _active_cohort_name():
+        c = _active_cohort()
+        return c.name if c else DEFAULT_COHORT
+
+    def _advance_cohorts(just_touched=None):
+        """If the active cohort is done, every candidate in it has exited, mark
+        it completed and activate the next scheduled cohort. Called whenever a
+        candidate reaches a terminal state, so cohort B kicks off on its own when
+        A finishes, with no rebuild. A cohort with zero candidates is never
+        auto-completed (it is just new/empty)."""
+        active = _active_cohort()
+        if not active:
+            return
+        total = Candidate.query.filter_by(cohort=active.name).count()
+        remaining = Candidate.query.filter_by(cohort=active.name, status="active").count()
+        if total == 0 or remaining > 0:
+            return  # nothing enrolled yet, or still in progress
+        active.status = "completed"
+        active.completed_at = _dt.datetime.now(_dt.timezone.utc)
+        nxt = (Cohort.query.filter_by(status="scheduled")
+               .filter(Cohort.sequence > active.sequence)
+               .order_by(Cohort.sequence.asc()).first()
+               or Cohort.query.filter_by(status="scheduled")
+               .order_by(Cohort.sequence.asc()).first())
+        if nxt:
+            nxt.status = "active"
+            nxt.activated_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.flush()
+
     def _exit_candidate(c, status, reason):
         """Terminal exit: set status, tear down ranges, revoke token. Earned
         badges and signed clearances are kept."""
@@ -451,6 +520,7 @@ def create_app():
         db.session.flush()
         for h in freed:
             _reconcile(h)
+        _advance_cohorts(c.cohort)
 
     def _promote(c):
         """Clear the current board, sign it, mint the badge, and open the next
@@ -530,7 +600,8 @@ def create_app():
 
     @app.get("/enroll")
     def enroll_form():
-        return render_template("enroll.html", cohort=request.args.get("cohort", DEFAULT_COHORT),
+        return render_template("enroll.html",
+                               cohort=request.args.get("cohort") or _active_cohort_name(),
                                org=request.args.get("org", ""))
 
     def _enrollment_decision(github_id):
@@ -554,7 +625,7 @@ def create_app():
         handle = (request.form.get("handle") or "").strip().lstrip("@")
         name = (request.form.get("name") or "").strip()
         email = (request.form.get("email") or "").strip()
-        cohort = (request.form.get("cohort") or DEFAULT_COHORT).strip()
+        cohort = (request.form.get("cohort") or _active_cohort_name()).strip()
         org = (request.form.get("org") or "").strip() or None
         repo = (request.form.get("repo") or "").strip() or None
         if not (handle and name and email):
@@ -861,7 +932,7 @@ def create_app():
             sel = {
                 "id": target.id, "ini": _initials(c.name), "name": c.name, "handle": c.handle,
                 "board": target.board, "role_title": ROLE_TITLES.get(target.role, target.role),
-                "time": _ago(target.created_at), "rid": f"RGR-{DEFAULT_COHORT}-{target.id:02d}",
+                "time": _ago(target.created_at), "rid": f"RGR-{c.cohort}-{target.id:02d}",
                 "subject_line": f"{c.name.split()[0]} submitted {target.board} "
                                 f"{ROLE_TITLES.get(target.role, target.role)} for review.",
                 "participants": [_initials(c.name), "FK"], "participants_more": 0,
@@ -879,7 +950,7 @@ def create_app():
 
         title_map = {"pending": "Pending", "approved": "Approved",
                      "needs_changes": "Needs changes", "rejected": "Rejected", "all": "All reports"}
-        vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
+        vm = {"cohort": _active_cohort_name(), "broker": broker_status(),
               "nav": {"all": all_n, "pending": pending_n, "approved": approved_n,
                       "needs": needs_n, "boards": boards_vm, "flagged": needs_n},
               "queue": items, "selected": sel,
@@ -922,10 +993,92 @@ def create_app():
         "none": ("Not provisioned", "pill", "dot"),
     }
 
+    def _cohort_rows():
+        """All cohorts with live counts, newest sequence first, for the chooser
+        and the header switcher."""
+        out = []
+        for co in Cohort.query.order_by(Cohort.sequence.desc()).all():
+            base = Candidate.query.filter_by(cohort=co.name)
+            out.append({
+                "name": co.name, "status": co.status, "sequence": co.sequence,
+                "total": base.count(),
+                "active": base.filter_by(status="active").count(),
+                "graduated": base.filter_by(status="graduated").count(),
+                "start_at": co.start_at.date().isoformat() if co.start_at else None,
+            })
+        return out
+
+    @app.get("/admin/cohorts")
+    @admin_required
+    def admin_cohorts():
+        return render_template("admin_cohorts.html",
+                               vm={"cohorts": _cohort_rows(),
+                                   "active": _active_cohort_name()})
+
+    @app.post("/admin/cohorts/new")
+    @admin_required
+    def admin_cohort_new():
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            return redirect(url_for("admin_cohorts"))
+        if Cohort.query.filter_by(name=name).first():
+            return redirect(url_for("admin_cohort", cohort=name))
+        start = (request.form.get("start_at") or "").strip()
+        start_at = None
+        if start:
+            try:
+                start_at = _dt.datetime.fromisoformat(start)
+            except ValueError:
+                start_at = None
+        seq = (db.session.query(db.func.max(Cohort.sequence)).scalar() or 0) + 1
+        activate = request.form.get("activate") == "1" and not _active_cohort()
+        co = Cohort(name=name, sequence=seq,
+                    status=("active" if activate else "scheduled"),
+                    start_at=start_at,
+                    activated_at=(_dt.datetime.now(_dt.timezone.utc) if activate else None),
+                    note=(request.form.get("note") or "").strip() or None)
+        db.session.add(co)
+        db.session.commit()
+        return redirect(url_for("admin_cohort", cohort=name))
+
+    @app.post("/admin/cohorts/<name>/activate")
+    @admin_required
+    def admin_cohort_activate(name):
+        co = Cohort.query.filter_by(name=name).first_or_404()
+        # Only one active at a time: demote any current active back to scheduled.
+        for other in Cohort.query.filter_by(status="active").all():
+            if other.id != co.id:
+                other.status = "scheduled"
+        co.status = "active"
+        co.activated_at = co.activated_at or _dt.datetime.now(_dt.timezone.utc)
+        co.completed_at = None
+        db.session.commit()
+        return redirect(url_for("admin_cohort", cohort=name))
+
+    @app.post("/admin/cohorts/<name>/complete")
+    @admin_required
+    def admin_cohort_complete(name):
+        co = Cohort.query.filter_by(name=name).first_or_404()
+        co.status = "completed"
+        co.completed_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.flush()
+        # Activating the next scheduled cohort, same rule as auto-advance.
+        if not _active_cohort():
+            nxt = (Cohort.query.filter_by(status="scheduled")
+                   .order_by(Cohort.sequence.asc()).first())
+            if nxt:
+                nxt.status = "active"
+                nxt.activated_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.commit()
+        return redirect(url_for("admin_cohorts"))
+
     @app.get("/admin/cohort")
     @admin_required
     def admin_cohort():
-        cohort = request.args.get("cohort", DEFAULT_COHORT)
+        # No cohort chosen -> show the chooser, rather than defaulting to one.
+        cohort = (request.args.get("cohort") or "").strip()
+        if not cohort:
+            return redirect(url_for("admin_cohorts"))
         status = request.args.get("status", "active")
         org = (request.args.get("org") or "").strip()
         qtext = (request.args.get("q") or "").strip()
@@ -986,9 +1139,12 @@ def create_app():
                 "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
                 "terminal": (c.status in Candidate.TERMINAL),
             })
+        this_co = Cohort.query.filter_by(name=cohort).first()
         vm = {"cohort": cohort, "active_status": status, "q": qtext,
               "counts": counts, "rows": rows, "total": len(rows),
               "org": org, "orgs": orgs_present, "groups": groups,
+              "cohorts": _cohort_rows(), "cohort_status": (this_co.status if this_co else "scheduled"),
+              "is_active_cohort": bool(this_co and this_co.status == "active"),
               "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT,
               "mode": broker.mode()}
         return render_template("admin_cohort.html", vm=vm)
@@ -996,7 +1152,7 @@ def create_app():
     @app.get("/admin/ranges")
     @admin_required
     def admin_ranges():
-        cohort = request.args.get("cohort", DEFAULT_COHORT)
+        cohort = request.args.get("cohort") or _active_cohort_name()
         # Ranges matter for active candidates; show them ordered by board.
         cands = (Candidate.query.filter_by(cohort=cohort, status="active")
                  .order_by(Candidate.current_board.desc(), Candidate.handle).limit(300).all())
@@ -1022,7 +1178,7 @@ def create_app():
                 "checked": _ago(rr.last_checked_at) if rr and rr.last_checked_at else "",
                 "detail": (rr.detail if rr else "no range provisioned"),
             })
-        vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
+        vm = {"cohort": _active_cohort_name(), "broker": broker_status(),
               "mode": broker.mode(), "template": broker.GOAD_TEMPLATE,
               "rows": rows, "counts": counts, "total": len(rows),
               "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT}
@@ -1114,7 +1270,7 @@ def create_app():
     @app.get("/roster.json")
     @admin_required
     def roster_json():
-        cohort = request.args.get("cohort", DEFAULT_COHORT)
+        cohort = request.args.get("cohort") or _active_cohort_name()
         org = (request.args.get("org") or "").strip()
         q = Candidate.query.filter_by(cohort=cohort)
         if org:
@@ -1183,7 +1339,7 @@ def create_app():
                 if decision in ("blocked_active", "blocked_graduate"):
                     return render_template("oauth_error.html", msg=msg), 409
                 c = Candidate(handle=login, name=name, email=email,
-                              cohort=DEFAULT_COHORT, github_id=gid,
+                              cohort=_active_cohort_name(), github_id=gid,
                               current_board=1, current_role=P.role_of(1))
                 db.session.add(c)
                 db.session.flush()

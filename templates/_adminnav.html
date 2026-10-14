@@ -27,7 +27,7 @@
 
     <div class="nav-group">
       <div class="gl">Program</div>
-      <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
+      <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohorts"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
       <a class="nav-item {% if active=='ranges' %}on{% endif %}" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
     </div>
   </div>
@@ -42,7 +42,7 @@
 {%- macro adminrail(active='', cohort='2026-A') -%}
 <nav class="rail">
   <a class="rb {% if active in ('all','pending','approved','needs') %}on{% endif %}" href="/admin?status=pending" title="Reports">{{ ic('inbox') }}</a>
-  <a class="rb {% if active=='cohort' %}on{% endif %}" href="/admin/cohort" title="Cohort">{{ ic('users') }}</a>
+  <a class="rb {% if active=='cohort' %}on{% endif %}" href="/admin/cohorts" title="Cohort">{{ ic('users') }}</a>
   <a class="rb {% if active=='ranges' %}on{% endif %}" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
   <span class="sp"></span>
   <a class="rb" href="https://ranger.qwalora.com" title="Ranger site">{{ ic('help') }}</a>

@@ -64,20 +64,30 @@ def mode():
 
 
 # --- mock helpers ------------------------------------------------------------
+def _cohort_tag(candidate):
+    """A short alnum tag for the candidate's cohort, so Ludus users and ranges
+    are scoped per cohort and never collide across runs (2026-A vs 2026-B)."""
+    raw = "".join(ch for ch in (getattr(candidate, "cohort", "") or "") if ch.isalnum()).upper()
+    return (raw[-4:] or "C0")  # e.g. "2026-A" -> "026A"
+
+
 def _mock_user_id(candidate):
-    # Ludus userIDs are short and alnum; derive a stable one from the handle.
+    # Ludus userIDs are short and alnum; derive a stable, cohort-scoped one.
     h = "".join(ch for ch in candidate.handle if ch.isalnum()).upper()
-    return (h[:6] or "RGR") + "-" + hashlib.md5(
-        candidate.handle.encode()).hexdigest()[:4].upper()
+    sig = hashlib.md5(f"{_cohort_tag(candidate)}:{candidate.handle}".encode()).hexdigest()[:4].upper()
+    return _cohort_tag(candidate) + "-" + (h[:6] or "RGR") + "-" + sig
 
 
 def _mock_key(candidate):
     return "mock_" + hashlib.sha256(
-        f"ludus:{candidate.handle}".encode()).hexdigest()[:40]
+        f"ludus:{_cohort_tag(candidate)}:{candidate.handle}".encode()).hexdigest()[:40]
 
 
 def _mock_range_id(candidate):
-    return _mock_user_id(candidate).split("-")[0] + "-RANGE"
+    uid = _mock_user_id(candidate)
+    # Ludus derives range_id from the userID; keep the cohort tag in front so a
+    # range name tells you which cohort it belongs to.
+    return "-".join(uid.split("-")[:2]) + "-RANGE"
 
 
 def _mock_wireguard(candidate):
