@@ -6,10 +6,10 @@
 </svg>
 {%- endmacro -%}
 
-{%- macro authnav(other_label='', other_href='') -%}
+{%- macro authnav(other_label='', other_href='', other_variant='ghost') -%}
 <header class="anav"><div class="anav-in">
   <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-  {% if other_label %}<a class="anav-link" href="{{ other_href }}">{{ other_label }}</a>{% endif %}
+  {% if other_label %}<a class="btn btn-{{ other_variant }} btn-pill" href="{{ other_href }}">{{ other_label }}</a>{% endif %}
 </div></header>
 {%- endmacro -%}
 
