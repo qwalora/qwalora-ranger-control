@@ -27,6 +27,38 @@ def _token():
     return secrets.token_urlsafe(24)
 
 
+def ensure_schema(db):
+    """Add columns introduced after the first deploy, idempotently.
+
+    create_all() creates missing tables but never alters existing ones, so a
+    production DB that predates the Ludus-linkage columns needs these added.
+    Portable across SQLite and Postgres: inspect existing columns, ALTER only
+    what is missing. Safe to run on every boot.
+    """
+    from sqlalchemy import inspect as _inspect
+    wanted = {
+        "candidates": [
+            ("ludus_user_id", "VARCHAR(64)"),
+            ("ludus_key_enc", "TEXT"),
+        ],
+        "range_requests": [
+            ("template", "VARCHAR(60)"),
+            ("wireguard_config", "TEXT"),
+            ("last_checked_at", "TIMESTAMP"),
+        ],
+    }
+    insp = _inspect(db.engine)
+    existing_tables = set(insp.get_table_names())
+    for table, cols in wanted.items():
+        if table not in existing_tables:
+            continue  # create_all will have made it with the full schema
+        have = {c["name"] for c in insp.get_columns(table)}
+        for name, ddl in cols:
+            if name not in have:
+                db.session.execute(db.text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+    db.session.commit()
+
+
 class Candidate(db.Model):
     __tablename__ = "candidates"
     id = db.Column(db.Integer, primary_key=True)
@@ -36,6 +68,9 @@ class Candidate(db.Model):
     cohort = db.Column(db.String(40), nullable=False, index=True)
     repo = db.Column(db.String(200), nullable=True)  # owner/name of their fork, optional at enroll
     token = db.Column(db.String(64), nullable=False, default=_token)  # report-submission secret
+    # Ludus linkage: one candidate maps to exactly one Ludus user, which owns one range.
+    ludus_user_id = db.Column(db.String(64), nullable=True)   # Ludus userID
+    ludus_key_enc = db.Column(db.Text, nullable=True)         # Fernet-encrypted Ludus user API key
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     reports = db.relationship("Report", backref="candidate", lazy=True,
@@ -65,8 +100,19 @@ class RangeRequest(db.Model):
     __tablename__ = "range_requests"
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
-    status = db.Column(db.String(20), nullable=False, default="queued", index=True)  # queued/provisioned/failed
+    # Lifecycle: configured -> deploying -> deployed -> destroyed  (or failed at any step).
+    # Legacy "queued" rows are treated as "configured".
+    status = db.Column(db.String(20), nullable=False, default="configured", index=True)
+    template = db.Column(db.String(60), nullable=True, default="goad")  # range config template
     ludus_range_id = db.Column(db.String(120), nullable=True)
+    wireguard_config = db.Column(db.Text, nullable=True)  # per-candidate WG config to reach the range
     detail = db.Column(db.Text, nullable=True)         # broker message / error
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    last_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)  # last status poll
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    ACTIVE = ("configured", "deploying", "deployed")
+
+    @property
+    def is_deployed(self):
+        return self.status == "deployed"

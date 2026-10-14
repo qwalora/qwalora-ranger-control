@@ -27,8 +27,10 @@ import urllib.parse
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
-from broker import broker_status, queue_range
-from models import Candidate, RangeRequest, Report, db
+import broker
+from broker import broker_status
+from crypto import decrypt, encrypt
+from models import Candidate, RangeRequest, Report, db, ensure_schema
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 ROLES = ["red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]
@@ -77,6 +79,7 @@ def create_app():
     db.init_app(app)
     with app.app_context():
         db.create_all()
+        ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
 
     admin_token = os.environ.get("ADMIN_TOKEN")
 
@@ -113,6 +116,34 @@ def create_app():
                 return redirect(url_for("admin_login", next=request.path))
             return fn(*a, **k)
         return wrapper
+
+    # --- range helpers -------------------------------------------------------
+    def _candidate_key(c):
+        """Decrypted per-user Ludus API key, or None (mock has no real key)."""
+        return decrypt(c.ludus_key_enc)
+
+    def _latest_range(c):
+        return (RangeRequest.query.filter_by(candidate_id=c.id)
+                .order_by(RangeRequest.id.desc()).first())
+
+    def _provision_user_and_config(c):
+        """Create the Ludus user and stage the GOAD config. Best-effort.
+
+        Enrollment never fails because Ludus is unreachable; the detail is
+        recorded on the RangeRequest and ops can retry a deploy later.
+        """
+        uid, key, udetail = broker.ensure_user(c)
+        c.ludus_user_id = uid
+        if key:
+            c.ludus_key_enc = encrypt(key)
+        ok, cdetail = broker.set_range_config(c, broker.GOAD_TEMPLATE, user_key=key)
+        rr = RangeRequest(candidate_id=c.id,
+                          status="configured" if ok else "failed",
+                          template="goad",
+                          ludus_range_id=broker._mock_range_id(c) if broker.mode() == "mock" else None,
+                          detail=f"{udetail}; {cdetail}")
+        db.session.add(rr)
+        return rr
 
     # --- public --------------------------------------------------------------
     ranger_site = os.environ.get("RANGER_SITE_URL", "https://ranger.qwalora.com")
@@ -155,31 +186,103 @@ def create_app():
 
         c = Candidate(handle=handle, name=name, email=email, cohort=cohort, repo=repo)
         db.session.add(c)
-        db.session.flush()  # assign id before queuing
+        db.session.flush()  # assign id before provisioning
 
-        status, range_id, detail = queue_range(c)
-        db.session.add(RangeRequest(candidate_id=c.id, status=status,
-                                    ludus_range_id=range_id, detail=detail))
+        # Hybrid model: enrollment mints the Ludus user and stages the GOAD
+        # config. No VMs are built here. The ranger deploys the range when they
+        # start their lab (POST /labs/start).
+        rr = _provision_user_and_config(c)
         db.session.commit()
-        return render_template("enroll_done.html", candidate=c, range_status=status,
-                               range_detail=detail)
+        return render_template("enroll_done.html", candidate=c,
+                               range_status=rr.status, range_detail=rr.detail,
+                               broker_mode=broker.mode())
+
+    def _auth_candidate(data):
+        """Resolve + authenticate a candidate from X-Candidate-Token + handle."""
+        token = request.headers.get("X-Candidate-Token", "")
+        handle = (data.get("handle") or "").strip().lstrip("@")
+        if not handle:
+            return None, (jsonify(error="handle is required"), 400)
+        c = Candidate.query.filter_by(handle=handle).first()
+        if not c or not token or token != c.token:
+            return None, (jsonify(error="invalid candidate token"), 401)
+        return c, None
+
+    @app.post("/labs/start")
+    def lab_start():
+        """Deploy the candidate's range. This is 'starting a lab' in the hybrid
+        model: enrollment staged the config, this builds it. Returns the range
+        status and the WireGuard config the ranger connects with.
+        """
+        data = request.get_json(silent=True) or request.form
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+        rr = _latest_range(c)
+        if rr is None:
+            rr = _provision_user_and_config(c)
+            db.session.flush()
+
+        key = _candidate_key(c)
+        status, range_id, detail = broker.deploy_range(c, user_key=key)
+        rr.status = status
+        if range_id:
+            rr.ludus_range_id = range_id
+        rr.detail = detail
+        # Fetch the WireGuard profile and the settled state.
+        rr.wireguard_config = broker.wireguard_config(c, user_key=key)
+        st, sdetail = broker.range_status(c, user_key=key)
+        rr.status = st
+        rr.detail = f"{detail}; {sdetail}"
+        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.commit()
+        return jsonify(ok=True, handle=c.handle, range_status=rr.status,
+                       range_id=rr.ludus_range_id, wireguard=rr.wireguard_config,
+                       detail=rr.detail, mode=broker.mode()), 200
+
+    @app.post("/labs/status")
+    def lab_status():
+        data = request.get_json(silent=True) or request.form
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+        rr = _latest_range(c)
+        if rr is None:
+            return jsonify(ok=True, handle=c.handle, range_status="none",
+                           detail="no range provisioned yet"), 200
+        key = _candidate_key(c)
+        st, sdetail = broker.range_status(c, user_key=key)
+        rr.status = st
+        rr.detail = sdetail
+        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.commit()
+        return jsonify(ok=True, handle=c.handle, range_status=rr.status,
+                       range_id=rr.ludus_range_id, detail=sdetail,
+                       mode=broker.mode()), 200
 
     @app.post("/reports")
     def submit_report():
-        token = request.headers.get("X-Candidate-Token", "")
         data = request.get_json(silent=True) or request.form
-        handle = (data.get("handle") or "").strip().lstrip("@")
         board = (data.get("board") or "").strip()
         role = (data.get("role") or "").strip()
         body = (data.get("body") or "").strip()
-        if not (handle and board and role and body):
+        if not (board and role and body):
             return jsonify(error="handle, board, role, body are required"), 400
         if board not in BOARDS or role not in ROLES:
             return jsonify(error="unknown board or role", boards=BOARDS, roles=ROLES), 400
 
-        c = Candidate.query.filter_by(handle=handle).first()
-        if not c or not token or token != c.token:
-            return jsonify(error="invalid candidate token"), 401
+        c, err = _auth_candidate(data)
+        if err:
+            return err
+
+        # A report must tie back to real lab work: the range has to be deployed.
+        # REPORTS_REQUIRE_RANGE=0 disables the gate (useful for seed/demo data).
+        if os.environ.get("REPORTS_REQUIRE_RANGE", "1") != "0":
+            rr = _latest_range(c)
+            if rr is None or not rr.is_deployed:
+                return jsonify(error="deploy your lab before submitting a report",
+                               hint="POST /labs/start first",
+                               range_status=(rr.status if rr else "none")), 409
 
         r = Report(candidate_id=c.id, board=board, role=role, body=body)
         db.session.add(r)
@@ -320,6 +423,76 @@ def create_app():
             r.reviewed_at = _dt.datetime.now(_dt.timezone.utc)
             db.session.commit()
         return redirect(url_for("admin", status=request.form.get("return_status", "pending")))
+
+    _RANGE_UI = {
+        "deployed": ("Deployed", "pill-ok", "dot-ok"),
+        "deploying": ("Deploying", "pill-amber", "dot-amber"),
+        "configured": ("Configured", "pill-violet", "dot-violet"),
+        "failed": ("Failed", "pill-amber", "dot-amber"),
+        "destroyed": ("Destroyed", "pill", "dot"),
+        "queued": ("Configured", "pill-violet", "dot-violet"),  # legacy
+    }
+
+    @app.get("/admin/ranges")
+    @admin_required
+    def admin_ranges():
+        cohort = request.args.get("cohort", DEFAULT_COHORT)
+        cands = (Candidate.query.filter_by(cohort=cohort)
+                 .order_by(Candidate.handle).all())
+        rows = []
+        counts = {"deployed": 0, "deploying": 0, "configured": 0, "failed": 0}
+        for c in cands:
+            rr = _latest_range(c)
+            st = rr.status if rr else "none"
+            label, pcls, dot = _RANGE_UI.get(st, ("None", "pill", "dot"))
+            key = "configured" if st in ("configured", "queued") else st
+            if key in counts:
+                counts[key] += 1
+            rows.append({
+                "cid": c.id, "ini": _initials(c.name), "name": c.name,
+                "handle": c.handle, "ludus_user": c.ludus_user_id or "-",
+                "status": st, "label": label, "pcls": pcls, "dot": dot,
+                "range_id": (rr.ludus_range_id if rr else None),
+                "template": (rr.template if rr else None),
+                "has_wg": bool(rr and rr.wireguard_config),
+                "checked": _ago(rr.last_checked_at) if rr and rr.last_checked_at else "",
+                "detail": (rr.detail if rr else "no range provisioned"),
+            })
+        vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
+              "mode": broker.mode(), "template": broker.GOAD_TEMPLATE,
+              "rows": rows, "counts": counts, "total": len(rows)}
+        return render_template("admin_ranges.html", vm=vm)
+
+    @app.post("/admin/ranges/<int:cid>")
+    @admin_required
+    def admin_range_action(cid):
+        c = Candidate.query.get_or_404(cid)
+        action = request.form.get("action")
+        rr = _latest_range(c)
+        key = _candidate_key(c)
+        if rr is None and action in ("deploy", "refresh"):
+            rr = _provision_user_and_config(c)
+            db.session.flush()
+        if action == "deploy":
+            status, range_id, detail = broker.deploy_range(c, user_key=key)
+            rr.status = status
+            if range_id:
+                rr.ludus_range_id = range_id
+            rr.wireguard_config = broker.wireguard_config(c, user_key=key)
+            st, sdetail = broker.range_status(c, user_key=key)
+            rr.status, rr.detail = st, f"{detail}; {sdetail}"
+            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        elif action == "refresh" and rr is not None:
+            st, sdetail = broker.range_status(c, user_key=key)
+            rr.status, rr.detail = st, sdetail
+            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        elif action == "destroy" and rr is not None:
+            ok, detail = broker.destroy_range(c, user_key=key)
+            rr.status = "destroyed" if ok else "failed"
+            rr.detail = detail
+            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.commit()
+        return redirect(url_for("admin_ranges"))
 
     @app.get("/roster.json")
     @admin_required

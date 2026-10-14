@@ -262,3 +262,25 @@ h1.t{font:700 26px/1.08 var(--f);letter-spacing:-.8px;margin-top:12px;color:var(
   .snav-links{display:none}
   .hero h1{font-size:40px;letter-spacing:-1.5px}
 }
+
+/* ---- Ranges admin (infrastructure view) ------------------------------- */
+.app.app-2col{grid-template-columns:238px 1fr 60px}
+.ranges-main{background:#fff;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
+.rg-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px;border-bottom:1px solid var(--line)}
+.rg-head .ttl{display:flex;align-items:center;gap:8px;font:600 17px/1 var(--f);letter-spacing:-.3px}
+.rg-sub{margin-top:5px;font-size:12.5px;color:var(--mut)}
+.rg-note{display:flex;gap:9px;align-items:flex-start;margin:16px 24px 0;padding:12px 14px;background:var(--sub);border:1px solid var(--line2);border-radius:10px;font-size:12.5px;line-height:1.5;color:var(--med)}
+.rg-note svg{flex:none;margin-top:1px;color:var(--violet)}
+.rg-stats{display:flex;gap:10px;padding:16px 24px 4px}
+.rg-stat{flex:1;border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px;background:#fff}
+.rg-stat b{font:700 22px/1 var(--f);letter-spacing:-.5px;color:var(--ink)}
+.rg-stat span{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
+.rg-list{display:flex;flex-direction:column;padding:12px 24px 24px}
+.rg-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+.rg-row:last-child{border-bottom:none}
+.rg-who{display:flex;align-items:center;gap:11px;min-width:0}
+.rg-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.rg-id b{font:600 14px/1.2 var(--f);color:var(--ink)}
+.rg-id .mono{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rg-state{display:flex;align-items:center;gap:8px}
+.rg-actions{display:flex;align-items:center;gap:7px}

@@ -19,13 +19,19 @@
           <span class="mono">/reports</span>. Shown once.</p>
       </div>
       <div class="field">
-        <label class="label">Range</label>
+        <label class="label">Range · GOAD (Game of Active Directory)</label>
         <div style="display:flex;align-items:center;gap:9px;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
-          <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ range_status }}</span>
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ range_status }}</span>
           <span class="muted" style="font-size:12.5px">{{ range_detail }}</span>
         </div>
+        <p class="dim" style="font-size:12px;line-height:1.5">Your isolated range is configured but not built yet.
+          Start the lab to deploy it and get your WireGuard profile:</p>
+        <div class="tokenbox" style="margin-top:6px"><code>curl -X POST https://portal.qwalora.com/labs/start \
+  -H "X-Candidate-Token: &lt;your token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"handle":"{{ candidate.handle }}"}'</code></div>
       </div>
-      <p class="lead" style="font-size:13px">Next: fork the lab template, work the four roles per board, and open
+      <p class="lead" style="font-size:13px">Then: connect over WireGuard, work the four roles per board, and open
         one pull request per day. The program grades your repo at cohort sync and publishes a signed result you can verify yourself.</p>
       <a class="btn btn-ghost" href="https://ranger.qwalora.com" style="align-self:flex-start">Back to the range</a>
     </div>

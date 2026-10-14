@@ -28,6 +28,11 @@
         </div>
 
         <div class="nav-group">
+          <div class="gl">Infrastructure</div>
+          <a class="nav-item" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
+        </div>
+
+        <div class="nav-group">
           <div class="gl">Pinned</div>
           <a class="nav-item {% if vm.active_board=='board6' %}on{% endif %}" href="/admin?status=all&board=board6"><span class="l">{{ ic('tag') }}</span><span class="lbl">Capstone board</span></a>
         </div>
@@ -168,7 +173,8 @@
       <a class="rb {% if vm.active_status=='approved' %}on{% endif %}" href="/admin?status=approved" title="Approved">{{ ic('medal') }}</a>
       <a class="rb {% if vm.active_status=='needs_changes' %}on{% endif %}" href="/admin?status=needs_changes" title="Needs changes">{{ ic('edit') }}</a>
       <span class="sp"></span>
-      <a class="rb" href="/roster.json?cohort={{ vm.cohort }}" title="Roster JSON">{{ ic('layers') }}</a>
+      <a class="rb" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
+      <a class="rb" href="/roster.json?cohort={{ vm.cohort }}" title="Roster JSON">{{ ic('hash') }}</a>
       <a class="rb" href="https://ranger.qwalora.com" title="Ranger site">{{ ic('help') }}</a>
       <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
     </nav>
