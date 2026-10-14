@@ -341,7 +341,16 @@ def create_app():
             return rr.status
         _ensure_ludus_user(c)
         key = _candidate_key(c)
-        broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE, user_key=key)
+        # For flag-capture boards, hand the range its per-seed flags to plant, so
+        # each ranger's range holds their own secrets. The grader derives the same
+        # flags from the seed independently, so this only affects the live range.
+        tvars = None
+        if scenarios.kind(rr.board) == "flags" and hasattr(scenarios, "board5_flags"):
+            seed = _current_seed(c)
+            if seed:
+                tvars = {"ranger_flags": scenarios.board5_flags(seed)}
+        broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
+                                user_key=key, template_vars=tvars)
         status, range_id, detail = broker.deploy_range(c, user_key=key)
         rr.status = status
         if range_id:

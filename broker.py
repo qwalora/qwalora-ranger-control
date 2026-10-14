@@ -136,18 +136,23 @@ def ensure_user(candidate):
         return (uid, None, f"user create error: {e}")
 
 
-def set_range_config(candidate, template=GOAD_TEMPLATE, user_key=None):
+def set_range_config(candidate, template=GOAD_TEMPLATE, user_key=None, template_vars=None):
     """Push the range config for this candidate's Ludus user.
 
-    Returns (ok, detail).
+    template_vars carries per-range variables for the template to consume at
+    deploy time, e.g. the board-5 flags to plant (so each ranger's range holds
+    their own seed-bound flags). Returns (ok, detail).
     """
+    nvars = len(template_vars or {})
     if not is_live():
-        return (True, f"mock: {template} config staged")
+        extra = f" with {nvars} template vars" if nvars else ""
+        return (True, f"mock: {template} config staged{extra}")
     try:
-        _req("POST", "/range/config",
-             {"template": template, "userID": candidate.ludus_user_id},
-             key=user_key or _admin_key())
-        return (True, f"{template} config set")
+        payload = {"template": template, "userID": candidate.ludus_user_id}
+        if template_vars:
+            payload["templateVars"] = template_vars
+        _req("POST", "/range/config", payload, key=user_key or _admin_key())
+        return (True, f"{template} config set" + (f" (+{nvars} vars)" if nvars else ""))
     except Exception as e:  # noqa: BLE001
         return (False, f"config set error: {e}")
 

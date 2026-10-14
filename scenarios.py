@@ -12,6 +12,7 @@ follow the same shape: generate(seed) -> scenario, public_view(scenario),
 score(scenario, sub).
 """
 import datetime as _dt
+import hashlib as _hashlib
 import random as _random
 
 import detect as _detect
@@ -714,19 +715,122 @@ def score_board4(scenario, submission):
     return score, [feedback]
 
 
+# --- board 5: red team on GOAD (flag capture) -------------------------------
+# The first live-range board. The ranger attacks their own isolated Game of
+# Active Directory range over WireGuard. Proof is not a submitted analysis but
+# CAPTURED FLAGS: per-seed, high-entropy tokens planted at locations reachable
+# only by completing each objective. The server re-derives the expected flags
+# from the seed (board5_flags), so a correct flag IS proof of the action; flags
+# are unique per ranger (useless to share) and cannot be guessed. The same
+# board5_flags() feeds the range provisioner, which plants them at deploy time.
+_B5_DOMAIN = "sevenkingdoms.local"
+_B5_DCS = ["kingslanding", "winterfell", "braavos"]
+_B5_SERVERS = ["castelblack", "meereen"]
+_B5_SVC_ACCTS = ["sql_svc", "http_svc", "backup_svc", "web_svc"]
+_B5_ASREP_USERS = ["brandon.stark", "missandei", "jon.snow", "samwell.tarly"]
+
+# Objectives: fixed GOAD attack path, points sum to 100. Target host/account are
+# seed-flavored in the brief; the flag value is derived from seed + id.
+_B5_OBJECTIVES = [
+    ("recon", "Enumerate the domain", "T1087 / T1046",
+     "Null or guest SMB/LDAP enumeration of {domain}. The flag sits on a world-readable share.", 5),
+    ("foothold", "Establish a foothold", "T1110 / T1078",
+     "Spray or guess a weak credential and land a session. The flag is in the user's profile.", 10),
+    ("asreproast", "AS-REP roast a pre-auth-disabled user", "T1558.004",
+     "Roast {asrep_user} (no Kerberos pre-auth), crack it offline. The flag unlocks with that user.", 12),
+    ("kerberoast", "Kerberoast a service account", "T1558.003",
+     "Request the SPN ticket for {svc}, crack it. The flag is on a share only {svc} can read.", 15),
+    ("lateral", "Move laterally to a server", "T1021",
+     "Pivot to {lateral_host} (WinRM/SMB/PsExec). The flag is on that host.", 13),
+    ("credaccess", "Dump credentials", "T1003",
+     "Dump LSASS or the SAM on a compromised host. The flag is readable only by SYSTEM/local admin.", 13),
+    ("aclabuse", "Abuse a dangerous ACL", "T1222 / T1484",
+     "Find and abuse a GenericAll/WriteDACL edge to escalate. The flag is the proof of the takeover.", 12),
+    ("domainadmin", "Become Domain Admin", "T1078.002",
+     "Reach Domain Admin on {domain}. The flag is on the Administrator desktop of a DC.", 10),
+    ("dcsync", "DCSync the krbtgt", "T1003.006",
+     "DCSync to pull the krbtgt hash. The flag is derived from the directory's crown jewels.", 10),
+]
+
+
+def board5_flags(seed):
+    """The per-seed flag for each objective. Used by BOTH the grader and the
+    range provisioner (which plants these at deploy time), so they always
+    agree. High-entropy and seed-bound, so a flag proves the action and does
+    not transfer between rangers."""
+    out = {}
+    for oid, *_ in _B5_OBJECTIVES:
+        h = _hashlib.sha256(("board5:%s:%s" % (seed, oid)).encode()).hexdigest()[:16]
+        out[oid] = "QR5{%s}" % h
+    return out
+
+
+def generate_board5(seed):
+    r = _random.Random("board5:" + str(seed))
+    svc = r.choice(_B5_SVC_ACCTS)
+    asrep_user = r.choice(_B5_ASREP_USERS)
+    lateral_host = r.choice(_B5_SERVERS)
+    fill = {"domain": _B5_DOMAIN, "svc": svc, "asrep_user": asrep_user, "lateral_host": lateral_host}
+    objectives = [{"id": oid, "name": name, "technique": tech,
+                   "hint": hint.format(**fill), "points": pts}
+                  for (oid, name, tech, hint, pts) in _B5_OBJECTIVES]
+    return {"board": 5, "cohort_theme": _B5_DOMAIN,
+            "targets": {"domain": _B5_DOMAIN, "dcs": _B5_DCS, "servers": _B5_SERVERS,
+                        "kerberoast_account": svc, "asrep_user": asrep_user,
+                        "lateral_host": lateral_host},
+            "objectives": objectives,
+            "_flags": board5_flags(seed)}
+
+
+def public_board5(scenario):
+    """The mission brief: objectives, targets, points. Flags are never sent."""
+    return {"board": 5, "theme": scenario["cohort_theme"],
+            "domain": scenario["targets"]["domain"], "targets": scenario["targets"],
+            "total_points": sum(o["points"] for o in scenario["objectives"]),
+            "objectives": scenario["objectives"]}
+
+
+def score_board5(scenario, submission):
+    """Score captured flags against the seed-derived expected flags. Points-
+    weighted; feedback is which objectives are captured, never the flag value."""
+    expected = scenario["_flags"]
+    by_id = {o["id"]: o for o in scenario["objectives"]}
+    sub = submission.get("flags") if isinstance(submission, dict) else None
+    if not isinstance(sub, dict):
+        sub = {}
+
+    total = sum(o["points"] for o in scenario["objectives"])
+    earned = 0
+    per_obj = []
+    for oid, o in by_id.items():
+        want = _norm(expected.get(oid))
+        got = _norm(sub.get(oid))
+        ok = bool(want) and got == want
+        if ok:
+            earned += o["points"]
+        per_obj.append({"id": oid, "name": o["name"], "points": o["points"], "captured": ok})
+
+    score = round(100.0 * earned / total, 1) if total else 0.0
+    captured = sum(1 for p in per_obj if p["captured"])
+    feedback = {"objectives_captured": "%d/%d" % (captured, len(per_obj)),
+                "points": "%d/%d" % (earned, total), "objectives": per_obj}
+    return score, [feedback]
+
+
 # --- dispatch ---------------------------------------------------------------
 _GENERATORS = {
     1: (generate_board1, public_board1, score_board1),
     2: (generate_board2, public_board2, score_board2),
     3: (generate_board3, public_board3, score_board3),
     4: (generate_board4, public_board4, score_board4),
+    5: (generate_board5, public_board5, score_board5),
 }
 
 
 # What kind of exercise each board is, so the lab client knows what file to
 # scaffold and submit. "triage": per-event verdicts (triage.yml). "detection":
 # a detection ruleset (rules.yml).
-_KINDS = {1: "triage", 2: "triage", 3: "detection", 4: "ir"}
+_KINDS = {1: "triage", 2: "triage", 3: "detection", 4: "ir", 5: "flags"}
 
 
 def has_board(n):
