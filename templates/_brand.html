@@ -6,6 +6,11 @@
 </svg>
 {%- endmacro -%}
 
+{%- macro qwmark(size=96) -%}
+<img class="qwmark" src="{{ url_for('static', filename='qwalora-mark.png') }}"
+     width="{{size}}" height="{{size}}" alt="Qwalora" decoding="async">
+{%- endmacro -%}
+
 {%- macro authnav(other_label='', other_href='', other_variant='ghost') -%}
 <header class="anav"><div class="anav-in">
   <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>

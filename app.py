@@ -22,6 +22,7 @@ import datetime as _dt
 import functools
 import hashlib
 import os
+import secrets
 import urllib.parse
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
@@ -57,6 +58,62 @@ RANGE_IDLE_HOURS = float(os.environ.get("RANGE_IDLE_HOURS", "8"))
 PROGRAM_DAYS = int(os.environ.get("PROGRAM_DAYS", "130"))
 WASHOUT_IDLE_DAYS = int(os.environ.get("WASHOUT_IDLE_DAYS", "21"))
 ENFORCE_DEADLINES = os.environ.get("ENFORCE_DEADLINES", "0") == "1"
+# Certification validity. A Qwalora Ranger certificate is valid for this many
+# years from its issue date, then lapses. Expiry is derived at read time from
+# the signed issued_at, so it is always correct without a background job and the
+# signed claim never changes.
+CERT_VALIDITY_YEARS = int(os.environ.get("CERT_VALIDITY_YEARS", "2"))
+# Unambiguous alphabet for the public credential id: no 0/O/1/I to keep it
+# readable and typeable off a printed certificate.
+_CERT_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _gen_cert_id(exists=None):
+    """A human-typeable certificate id, QR-XXXX-XXXX. `exists(cid)->bool` is an
+    optional uniqueness check; regenerate on collision."""
+    for _ in range(64):
+        body = "".join(secrets.choice(_CERT_ALPHABET) for _ in range(8))
+        cid = "QR-%s-%s" % (body[:4], body[4:])
+        if exists is None or not exists(cid):
+            return cid
+    # Extremely unlikely fall-through: widen with a 3rd group.
+    tail = "".join(secrets.choice(_CERT_ALPHABET) for _ in range(4))
+    return "QR-%s-%s-%s" % (body[:4], body[4:], tail)
+
+
+def _norm_cert_id(raw):
+    """Normalize user-typed input to the canonical QR-XXXX-XXXX form. Accepts
+    lower case, missing/extra dashes and surrounding spaces; returns None if it
+    cannot be a cert id."""
+    if not raw:
+        return None
+    s = "".join(ch for ch in raw.upper() if ch.isalnum())
+    if s.startswith("QR"):
+        s = s[2:]
+    s = "".join(ch for ch in s if ch in _CERT_ALPHABET)
+    if len(s) < 8:
+        return None
+    if len(s) == 8:
+        return "QR-%s-%s" % (s[:4], s[4:])
+    # longer (collision-widened) ids: group in fours
+    groups = [s[i:i + 4] for i in range(0, len(s), 4)]
+    return "QR-" + "-".join(groups)
+
+
+def _cert_dates(issued_at):
+    """(issued, expires, now, valid, status, days_left) for a certified badge,
+    anchored on the signed issue date. Leap-safe year arithmetic."""
+    issued = _aware(issued_at)
+    now = _dt.datetime.now(_dt.timezone.utc)
+    try:
+        expires = issued.replace(year=issued.year + CERT_VALIDITY_YEARS)
+    except ValueError:  # Feb 29 -> Feb 28
+        expires = issued.replace(year=issued.year + CERT_VALIDITY_YEARS, day=28)
+    valid = now < expires
+    days_left = (expires - now).days if valid else 0
+    return {"issued": issued, "expires": expires, "valid": valid,
+            "status": ("valid" if valid else "expired"),
+            "days_left": days_left}
 
 
 def _aware(d):
@@ -98,6 +155,24 @@ def _bootstrap_cohorts():
                 pick.status = "active"
                 pick.activated_at = _dt.datetime.now(_dt.timezone.utc)
                 db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _backfill_cert_ids():
+    """Assign a public cert_id to any certified badge that predates the field.
+    Idempotent and race-safe; a unique-collision just retries in-process."""
+    try:
+        used = {cid for (cid,) in db.session.query(Badge.cert_id)
+                .filter(Badge.cert_id.isnot(None)).all()}
+        pending = Badge.query.filter_by(level="certified").filter(
+            Badge.cert_id.is_(None)).all()
+        for b in pending:
+            cid = _gen_cert_id(exists=lambda x: x in used)
+            used.add(cid)
+            b.cert_id = cid
+        if pending:
+            db.session.commit()
     except Exception:
         db.session.rollback()
 ROLES = list(dict.fromkeys(P.ROLES + [
@@ -197,6 +272,7 @@ def create_app():
             db.session.rollback()
         ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
         _bootstrap_cohorts()  # make sure cohort rows exist and one is active
+        _backfill_cert_ids()  # give any pre-existing certified badge a cert_id
 
     admin_token = os.environ.get("ADMIN_TOKEN")
     # Once GitHub reviewer sign-in is confirmed, set DISABLE_ADMIN_TOKEN=1 to
@@ -617,17 +693,27 @@ def create_app():
             db.session.flush()
         return br
 
+    def _new_cert_id():
+        """Unique public credential id across all badges."""
+        return _gen_cert_id(
+            exists=lambda cid: db.session.query(Badge.id)
+            .filter_by(cert_id=cid).first() is not None)
+
     def _mint_badge(c, level, name, role):
-        """Create a signed badge once per (candidate, level). Idempotent."""
+        """Create a signed badge once per (candidate, level). Idempotent. The
+        certified badge also gets a public, human-typeable cert_id."""
         existing = Badge.query.filter_by(candidate_id=c.id, level=level).first()
         if existing:
+            if level == "certified" and not existing.cert_id:
+                existing.cert_id = _new_cert_id()
             return existing
         issued = _dt.datetime.now(_dt.timezone.utc)
         claim = {"kind": "badge", "handle": c.handle, "cohort": c.cohort,
                  "level": level, "name": name, "role": role,
                  "issued_at": _iso(issued)}
         b = Badge(candidate_id=c.id, level=level, name=name, role=role,
-                  issued_at=issued, signature=signing.sign(claim))
+                  issued_at=issued, signature=signing.sign(claim),
+                  cert_id=(_new_cert_id() if level == "certified" else None))
         db.session.add(b)
         return b
 
@@ -1585,7 +1671,8 @@ def create_app():
             return jsonify(error="unknown candidate"), 404
         badges = [{"level": b.level, "name": b.name, "role": b.role,
                    "issued_at": _iso(b.issued_at),
-                   "signature": b.signature, "revoked": b.revoked}
+                   "signature": b.signature, "revoked": b.revoked,
+                   **({"cert_id": b.cert_id} if b.level == "certified" else {})}
                   for b in sorted(c.badges, key=lambda x: str(x.level))]
         clearances = [{"board": br.board, "role": br.role,
                        "objective_score": br.objective_score,
@@ -1593,10 +1680,20 @@ def create_app():
                        "signature": br.signature}
                       for br in sorted(c.board_results, key=lambda x: x.board)
                       if br.cleared]
+        cert_badge = next((b for b in c.badges if b.level == "certified"), None)
+        cert = None
+        if cert_badge:
+            d = _cert_dates(cert_badge.issued_at)
+            cert = {"cert_id": cert_badge.cert_id,
+                    "issued_at": _iso(cert_badge.issued_at),
+                    "expires_at": _iso(d["expires"]),
+                    "valid": (not cert_badge.revoked) and d["valid"],
+                    "status": ("revoked" if cert_badge.revoked else d["status"]),
+                    "validity_years": CERT_VALIDITY_YEARS}
         return jsonify(handle=c.handle, cohort=c.cohort, status=c.status,
                        current_board=c.current_board, alg="ed25519",
                        public_key=signing.public_key_b64(),
-                       badges=badges, clearances=clearances)
+                       badges=badges, clearances=clearances, certificate=cert)
 
     def _verify_record(c):
         """Re-derive each signed claim and check its Ed25519 signature, so the
@@ -1623,8 +1720,52 @@ def create_app():
                                "objective_score": (round(br.objective_score, 1)
                                                    if br.objective_score is not None else None),
                                "cleared_at": _iso(br.cleared_at), "verified": ok})
+        cert_badge = next((b for b in c.badges if b.level == "certified"), None)
         certified = any(b["level"] == "certified" and b["verified"] for b in badges)
-        return {"badges": badges, "clearances": clearances, "certified": certified}
+        cert = None
+        if cert_badge:
+            d = _cert_dates(cert_badge.issued_at)
+            cert = {"cert_id": cert_badge.cert_id,
+                    "issued_at": _iso(cert_badge.issued_at),
+                    "expires_at": _iso(d["expires"]),
+                    "valid": certified and d["valid"],
+                    "status": ("revoked" if (cert_badge.revoked or not certified)
+                               else d["status"]),
+                    "days_left": d["days_left"],
+                    "validity_years": CERT_VALIDITY_YEARS}
+        return {"badges": badges, "clearances": clearances,
+                "certified": certified, "cert": cert}
+
+    def _resolve_credential(q):
+        """Resolve a free-text lookup to a candidate: a certificate id
+        (QR-XXXX-XXXX) first, then a @handle. Returns the Candidate or None."""
+        q = (q or "").strip()
+        if not q:
+            return None
+        cid = _norm_cert_id(q)
+        if cid:
+            b = Badge.query.filter_by(level="certified", cert_id=cid).first()
+            if b:
+                return db.session.get(Candidate, b.candidate_id)
+        return Candidate.query.filter_by(handle=q.lstrip("@")).first()
+
+    @app.get("/verify")
+    def verify_lookup():
+        """Public certificate / credential lookup. Type a certificate id or a
+        ranger handle; resolves to the signed, verifiable credential page."""
+        q = request.args.get("q", "").strip()
+        if not q:
+            return render_template("verify_lookup.html",
+                                   vm={"q": "", "error": None})
+        c = _resolve_credential(q)
+        if c:
+            return redirect(url_for("verify_page", handle=c.handle))
+        looked_like_cert = bool(_norm_cert_id(q))
+        err = ("No certificate found for ID %s. Check the characters and try again."
+               % _norm_cert_id(q)) if looked_like_cert else \
+              ("No Qwalora Ranger credential found for “%s”." % q)
+        return render_template("verify_lookup.html",
+                               vm={"q": q, "error": err}), 404
 
     @app.get("/verify/<handle>")
     def verify_page(handle):
@@ -1632,7 +1773,10 @@ def create_app():
         Reveals only their own badges/clearances, no grades of others, no keys."""
         c = Candidate.query.filter_by(handle=handle.lstrip("@")).first()
         if not c:
-            return render_template("verify.html", vm={"found": False, "handle": handle}), 404
+            return render_template("verify_lookup.html", vm={
+                "q": handle,
+                "error": "No Qwalora Ranger credential found for @%s." % handle.lstrip("@"),
+            }), 404
         rec = _verify_record(c)
         all_ok = all(b["verified"] for b in rec["badges"]) and \
             all(cl["verified"] for cl in rec["clearances"]) and \
@@ -1640,7 +1784,8 @@ def create_app():
         vm = {"found": True, "handle": c.handle, "name": c.name, "cohort": c.cohort,
               "status": c.status, "certified": rec["certified"],
               "badges": rec["badges"], "clearances": rec["clearances"],
-              "all_ok": all_ok, "pubkey": signing.public_key_b64()}
+              "cert": rec["cert"], "all_ok": all_ok,
+              "pubkey": signing.public_key_b64()}
         return render_template("verify.html", vm=vm)
 
     @app.get("/verify/<handle>/certificate")
@@ -1651,9 +1796,14 @@ def create_app():
         rec = _verify_record(c)
         if not rec["certified"]:
             return redirect(url_for("verify_page", handle=c.handle))
-        cert = next((b for b in c.badges if b.level == "certified"), None)
+        cert = rec["cert"] or {}
         vm = {"name": c.name, "handle": c.handle, "cohort": c.cohort,
-              "issued_at": _iso(cert.issued_at) if cert else "",
+              "issued_at": cert.get("issued_at") or "",
+              "expires_at": cert.get("expires_at") or "",
+              "cert_id": cert.get("cert_id") or "",
+              "cert_valid": cert.get("valid", True),
+              "cert_status": cert.get("status", "valid"),
+              "validity_years": cert.get("validity_years", CERT_VALIDITY_YEARS),
               "clearances": rec["clearances"], "pubkey": signing.public_key_b64()}
         return render_template("certificate.html", vm=vm)
 

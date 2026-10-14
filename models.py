@@ -57,6 +57,10 @@ def ensure_schema(db):
             ("board", "INTEGER"),
             ("host", "VARCHAR(60) DEFAULT 'primary'"),
         ],
+        "badges": [
+            # Human-typeable public lookup key, minted on the certified badge.
+            ("cert_id", "VARCHAR(40)"),
+        ],
     }
     insp = _inspect(db.engine)
     existing_tables = set(insp.get_table_names())
@@ -273,5 +277,10 @@ class Badge(db.Model):
     issued_at = db.Column(db.DateTime(timezone=True), default=_now)
     signature = db.Column(db.Text, nullable=True)      # Ed25519 over the badge claim
     revoked = db.Column(db.Boolean, nullable=False, default=False)
+    # Public, human-typeable credential id (e.g. QR-7F3K-9MXB). Set only on the
+    # "certified" badge; it is the key the public certificate-lookup resolves.
+    # A non-security lookup handle: validity/expiry derive from the signed
+    # issued_at, so cert_id itself is never part of the signed claim.
+    cert_id = db.Column(db.String(40), nullable=True, index=True)
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "level", name="uq_badge_per_level"),)

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo, qwmark %}
+{% block title %}Verify a credential · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <span class="muted" style="font-size:12.5px">Public credential check</span>
+  </div></header>
+
+  <div class="page-main">
+    <div class="card" style="max-width:560px">
+      <div class="card-body" style="text-align:center;padding:40px 36px">
+        <div style="display:flex;justify-content:center;margin-bottom:10px">{{ qwmark(52) }}</div>
+        <h1 class="t" style="margin:0">Verify a Qwalora credential</h1>
+        <p class="muted" style="margin:8px auto 0;max-width:420px">
+          Enter a certificate ID (for example <span class="mono">QR-7F3K-9MXB</span>)
+          or a ranger handle to load the signed, independently verifiable record.
+        </p>
+
+        <form method="get" action="/verify" class="lookup-form" style="margin-top:22px">
+          <div class="lookup-row">
+            <span class="lookup-ic">{{ ic('search','ic ic-sm') }}</span>
+            <input class="input" name="q" value="{{ vm.q }}" autocomplete="off" autofocus
+                   placeholder="Certificate ID or @handle" aria-label="Certificate ID or handle">
+          </div>
+          <button class="btn btn-primary btn-pill" type="submit" style="margin-top:12px;width:100%">
+            {{ ic('shield','ic ic-sm') }} Look up credential
+          </button>
+        </form>
+
+        {% if vm.error %}
+        <div class="verify-banner vb-warn" style="margin-top:18px;text-align:left">
+          {{ ic('shield','ic') }}
+          <div><b>Not found</b><span>{{ vm.error }}</span></div>
+        </div>
+        {% endif %}
+
+        <p class="dim" style="font-size:11.5px;margin-top:22px">
+          Every Qwalora Ranger credential is Ed25519-signed and checked live against the
+          public key at <a href="/pubkey">/pubkey</a>. Certificates are valid for two
+          years from issue.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

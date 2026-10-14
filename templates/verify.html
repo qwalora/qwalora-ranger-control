@@ -36,9 +36,25 @@
         <div class="field">
           <div class="cert-badge">
             <span class="pip cert on" style="width:34px;height:34px">{{ ic('medal') }}</span>
-            <div><b>Qwalora Ranger, Certified</b><span class="muted">Cleared all six boards, SOC analyst to capstone.</span></div>
+            <div>
+              <b>Qwalora Ranger, Certified</b>
+              <span class="muted">Cleared all six boards, SOC analyst to capstone.</span>
+            </div>
             <a class="btn btn-primary btn-sm" href="/verify/{{ vm.handle }}/certificate" style="margin-left:auto">View certificate</a>
           </div>
+          {% if vm.cert %}
+          <div class="cert-meta">
+            <div><span class="cert-lbl">Certificate ID</span><b class="mono">{{ vm.cert.cert_id }}</b></div>
+            <div><span class="cert-lbl">Issued</span><b>{{ vm.cert.issued_at[:10] }}</b></div>
+            <div><span class="cert-lbl">Valid through</span><b>{{ vm.cert.expires_at[:10] }}</b></div>
+            <div>
+              <span class="cert-lbl">Status</span>
+              {% if vm.cert.status == 'valid' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Valid · {{ vm.cert.days_left }} days left</span>
+              {% elif vm.cert.status == 'revoked' %}<span class="pill pill-amber"><span class="dot dot-amber"></span>Revoked</span>
+              {% else %}<span class="pill pill-amber"><span class="dot dot-amber"></span>Expired</span>{% endif %}
+            </div>
+          </div>
+          {% endif %}
         </div>
         {% else %}
         <div class="field"><span class="pill pill-violet"><span class="dot dot-violet"></span>In progress · {{ vm.status }}</span></div>
@@ -70,8 +86,9 @@
           </div>
         </div>
 
-        <div class="field" style="border-top:1px solid var(--line);padding-top:14px">
-          <p class="dim" style="font-size:11.5px">Verify independently: the signed record is at <a href="/badges/{{ vm.handle }}.json">/badges/{{ vm.handle }}.json</a>, checked against the public key at <a href="/pubkey">/pubkey</a>.</p>
+        <div class="field" style="border-top:1px solid var(--line);padding-top:14px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+          <p class="dim" style="font-size:11.5px;margin:0">Verify independently: the signed record is at <a href="/badges/{{ vm.handle }}.json">/badges/{{ vm.handle }}.json</a>, checked against the public key at <a href="/pubkey">/pubkey</a>.</p>
+          <a class="btn btn-ghost btn-sm" href="/verify">Look up another</a>
         </div>
       </div>
       {% endif %}

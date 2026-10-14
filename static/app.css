@@ -356,6 +356,14 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
 .cert-badge div{display:flex;flex-direction:column;gap:1px}
 .cert-badge b{font:600 14px/1.2 var(--f)}
 .cert-badge span{font-size:12px;color:var(--mut)}
+.cert-meta{display:flex;flex-wrap:wrap;gap:14px 28px;margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--light,#f7f6fb)}
+.cert-meta .cert-lbl{display:block;font:600 10px/1 var(--f);letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.cert-meta b{font:600 13px/1.2 var(--f)}
+.lookup-form{display:flex;flex-direction:column}
+.lookup-row{position:relative;display:flex;align-items:center}
+.lookup-row .lookup-ic{position:absolute;left:12px;display:grid;place-items:center;color:var(--dim);pointer-events:none}
+.lookup-row .input{width:100%;padding-left:36px;text-align:left;font:500 14px/1.4 var(--f)}
+.qwmark{display:block;object-fit:contain}
 .unread-dot{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--orange,#f26b2a);color:#fff;font:600 10px/1.6 var(--f)}
 .notes{display:flex;flex-direction:column;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
 .note-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
