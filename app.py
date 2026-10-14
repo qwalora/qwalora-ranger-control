@@ -22,6 +22,7 @@ import datetime as _dt
 import functools
 import hashlib
 import os
+import urllib.parse
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
@@ -211,33 +212,59 @@ def create_app():
     @admin_required
     def admin():
         demo = bool(os.environ.get("QW_DEMO"))
-        pending = Report.query.filter_by(status="pending").order_by(Report.created_at.desc()).all()
+        status = request.args.get("status", "pending")
+        board = (request.args.get("board") or "").strip()
+        qtext = (request.args.get("q") or "").strip()
+        order = request.args.get("order", "desc")
+        sel_id = request.args.get("r", type=int)
+
         all_n = Report.query.count()
+        pending_n = Report.query.filter_by(status="pending").count()
         approved_n = Report.query.filter_by(status="approved").count()
         needs_n = Report.query.filter_by(status="needs_changes").count()
 
+        qry = Report.query
+        if status in ("pending", "approved", "needs_changes", "rejected"):
+            qry = qry.filter_by(status=status)
+        if board:
+            qry = qry.filter_by(board=board)
+        if qtext:
+            like = f"%{qtext}%"
+            qry = qry.join(Candidate).filter(
+                db.or_(Candidate.name.ilike(like), Candidate.handle.ilike(like)))
+        qry = qry.order_by(Report.created_at.asc() if order == "asc"
+                           else Report.created_at.desc())
+        rows = qry.all()
+
         board_counts = {}
-        for r in pending:
+        for r in Report.query.filter_by(status="pending").all():
             board_counts[r.board] = board_counts.get(r.board, 0) + 1
-        boards_vm = [{"name": b, "count": board_counts.get(b, 0)} for b in BOARDS[:4]]
+        boards_vm = [{"name": b, "count": board_counts.get(b, 0), "on": (board == b)}
+                     for b in BOARDS[:4]]
 
         def tags_for(r):
             return [{"t": "capstone", "cls": "pill-violet", "dot": None}] if r.board == BOARDS[-1] else []
 
-        sel_id = request.args.get("r", type=int)
-        active_id = sel_id if sel_id else (pending[0].id if pending else None)
+        active_id = sel_id if sel_id else (rows[0].id if rows else None)
+        parts = [f"status={status}"]
+        if board:
+            parts.append(f"board={board}")
+        if qtext:
+            parts.append("q=" + urllib.parse.quote(qtext))
+        qs = "&".join(parts)  # filters only, no order/selection
 
         items = []
-        for r in pending:
+        for r in rows:
             c = r.candidate
             items.append({
                 "id": r.id, "ini": _initials(c.name), "name": c.name, "time": _ago(r.created_at),
                 "subject": f"{r.board} · {ROLE_TITLES.get(r.role, r.role)}",
                 "preview": " ".join((r.body or "").split())[:90],
-                "role": r.role, "tags": tags_for(r), "unread": True, "on": (r.id == active_id)})
+                "role": r.role, "tags": tags_for(r), "unread": (r.status == "pending"),
+                "on": (r.id == active_id)})
 
         sel = None
-        target = next((r for r in pending if r.id == active_id), None)
+        target = next((r for r in rows if r.id == active_id), None)
         if target is None and active_id:
             target = Report.query.get(active_id)
         if target:
@@ -270,10 +297,15 @@ def create_app():
                 "engine": "ed25519", "evidence": evidence, "sig": sig, "analysis": paras,
                 "status_label": sl, "status_cls": scls, "status_dot": sdot}
 
+        title_map = {"pending": "Pending", "approved": "Approved",
+                     "needs_changes": "Needs changes", "rejected": "Rejected", "all": "All reports"}
         vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
-              "nav": {"all": all_n, "pending": len(pending), "approved": approved_n,
-                      "needs": needs_n, "boards": boards_vm, "flagged": 0},
-              "queue": items, "selected": sel}
+              "nav": {"all": all_n, "pending": pending_n, "approved": approved_n,
+                      "needs": needs_n, "boards": boards_vm, "flagged": needs_n},
+              "queue": items, "selected": sel,
+              "active_status": status, "active_board": board, "q": qtext, "order": order,
+              "qs": qs, "title": (title_map.get(status, "Reports") if not board else board),
+              "count": len(rows)}
         return render_template("admin.html", vm=vm)
 
     @app.post("/admin/reports/<int:rid>")
@@ -287,7 +319,7 @@ def create_app():
             r.reviewer_notes = (request.form.get("notes") or "").strip() or None
             r.reviewed_at = _dt.datetime.now(_dt.timezone.utc)
             db.session.commit()
-        return redirect(url_for("admin"))
+        return redirect(url_for("admin", status=request.form.get("return_status", "pending")))
 
     @app.get("/roster.json")
     @admin_required

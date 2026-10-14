@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
 {% from "_brand.html" import qlogo %}
-{% block title %}Grading Queue · Qwalora Ranger{% endblock %}
+{% block title %}{{ vm.title }} · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="shell">
   <div class="app">
@@ -11,28 +11,31 @@
       <div class="nav-top">
         <div class="nav-brand">
           <span class="l">{{ qlogo('light',26) }}<b>QWALORA <span>Ranger</span></b></span>
-          <span class="compose">{{ ic('plus','ic ic-sm') }}</span>
+          <a class="compose" href="/enroll" title="Enroll a ranger">{{ ic('plus','ic ic-sm') }}</a>
         </div>
-        <div class="nav-search">{{ ic('search','ic ic-sm') }}<span>Search rangers, boards</span></div>
+        <form class="nav-search" method="get" action="/admin">
+          {{ ic('search','ic ic-sm') }}
+          <input name="q" value="{{ vm.q }}" placeholder="Search rangers, boards" autocomplete="off">
+          <input type="hidden" name="status" value="{{ vm.active_status }}">
+        </form>
 
         <div class="nav-group">
           <div class="gl">Queue</div>
-          <div class="nav-item"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span><span class="count">{{ vm.nav.all }}</span></div>
-          <div class="nav-item on"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span><span class="count count-on">{{ vm.nav.pending }}</span></div>
-          <div class="nav-item"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span><span class="count">{{ vm.nav.approved }}</span></div>
-          <div class="nav-item"><span class="l">{{ ic('edit') }}</span><span class="lbl">Needs changes</span>{% if vm.nav.needs %}<span class="count">{{ vm.nav.needs }}</span>{% endif %}</div>
+          <a class="nav-item {% if vm.active_status=='all' and not vm.active_board %}on{% endif %}" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span>{% if vm.nav.all %}<span class="count {% if vm.active_status=='all' %}count-on{% endif %}">{{ vm.nav.all }}</span>{% endif %}</a>
+          <a class="nav-item {% if vm.active_status=='pending' and not vm.active_board %}on{% endif %}" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span>{% if vm.nav.pending %}<span class="count {% if vm.active_status=='pending' %}count-on{% endif %}">{{ vm.nav.pending }}</span>{% endif %}</a>
+          <a class="nav-item {% if vm.active_status=='approved' and not vm.active_board %}on{% endif %}" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span>{% if vm.nav.approved %}<span class="count {% if vm.active_status=='approved' %}count-on{% endif %}">{{ vm.nav.approved }}</span>{% endif %}</a>
+          <a class="nav-item {% if vm.active_status=='needs_changes' and not vm.active_board %}on{% endif %}" href="/admin?status=needs_changes"><span class="l">{{ ic('edit') }}</span><span class="lbl">Needs changes</span>{% if vm.nav.needs %}<span class="count">{{ vm.nav.needs }}</span>{% endif %}</a>
         </div>
 
         <div class="nav-group">
           <div class="gl">Pinned</div>
-          <div class="nav-item"><span class="l">{{ ic('star') }}</span><span class="lbl">Flagged rangers</span>{% if vm.nav.flagged %}<span class="count">{{ vm.nav.flagged }}</span>{% endif %}</div>
-          <div class="nav-item"><span class="l">{{ ic('tag') }}</span><span class="lbl">Capstone board</span></div>
+          <a class="nav-item {% if vm.active_board=='board6' %}on{% endif %}" href="/admin?status=all&board=board6"><span class="l">{{ ic('tag') }}</span><span class="lbl">Capstone board</span></a>
         </div>
 
         <div class="nav-group">
           <div class="gl">Cohort {{ vm.cohort }}</div>
           {% for b in vm.nav.boards %}
-          <div class="nav-item"><span class="l">{{ ic('hash') }}</span><span class="lbl">{{ b.name }}</span>{% if b.count %}<span class="count">{{ b.count }}</span>{% endif %}</div>
+          <a class="nav-item {% if b.on %}on{% endif %}" href="/admin?status={{ vm.active_status }}&board={{ b.name }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">{{ b.name }}</span>{% if b.count %}<span class="count">{{ b.count }}</span>{% endif %}</a>
           {% endfor %}
         </div>
       </div>
@@ -46,16 +49,14 @@
     <!-- LIST -->
     <section class="list">
       <div class="list-head">
-        <div class="ttl">Pending <span class="count">{{ vm.nav.pending }}</span></div>
+        <div class="ttl">{{ vm.title }} <span class="count">{{ vm.count }}</span></div>
         <div class="list-tools">
-          <span class="iconbtn">{{ ic('columns','ic ic-sm') }}</span>
-          <span class="iconbtn">{{ ic('sort','ic ic-sm') }}</span>
-          <span class="iconbtn">{{ ic('filter','ic ic-sm') }}</span>
+          <a class="iconbtn" href="/admin?{{ vm.qs }}&order={{ 'desc' if vm.order=='asc' else 'asc' }}" title="{% if vm.order=='asc' %}Newest first{% else %}Oldest first{% endif %}">{{ ic('sort','ic ic-sm') }}</a>
         </div>
       </div>
       <div class="list-body">
         {% for it in vm.queue %}
-        <a class="li {% if it.on %}on{% endif %}" href="/admin?r={{ it.id }}">
+        <a class="li {% if it.on %}on{% endif %}" href="/admin?{{ vm.qs }}&order={{ vm.order }}&r={{ it.id }}">
           <div class="li-r1">
             <div class="li-nm">
               {% if it.unread %}<span class="unread"></span>{% endif %}
@@ -71,7 +72,9 @@
           </div>
         </a>
         {% else %}
-        <div class="empty"><div class="ring">{{ ic('inbox') }}</div><div>No reports pending review.</div></div>
+        <div class="empty"><div class="ring">{{ ic('inbox') }}</div>
+          <div>No reports in this view.</div>
+          <a class="btn btn-ghost btn-sm" href="/enroll">Enroll a ranger</a></div>
         {% endfor %}
       </div>
     </section>
@@ -83,8 +86,6 @@
       <div class="det-top">
         <div class="ttl">{{ s.board }} · {{ s.role_title }}</div>
         <div class="r">
-          <span class="iconbtn">{{ ic('kebab','ic ic-sm') }}</span>
-          <span class="iconbtn">{{ ic('clock','ic ic-sm') }}</span>
           <span class="av av-26">FK</span>
           <span class="pill {{ s.status_cls }}"><span class="dot {{ s.status_dot }}"></span>{{ s.status_label }}</span>
         </div>
@@ -94,10 +95,8 @@
         <span class="crumb">{{ ic('inbox','ic ic-sm') }}Cohort {{ vm.cohort }}</span>
         <span class="mono dim" style="font-size:12px">{{ s.rid }}</span>
         <span class="stack">{% for a in s.participants %}<span class="av av-24 av-ring">{{ a }}</span>{% endfor %}</span>
-        {% if s.participants_more %}<span class="muted" style="font-size:11.5px">+{{ s.participants_more }}</span>{% endif %}
         <span class="metric">{{ ic('users','ic ic-sm') }}{{ s.m_roles }}</span>
         <span class="metric">{{ ic('layers','ic ic-sm') }}{{ s.m_boards }}</span>
-        <span class="metric">{{ ic('tag','ic ic-sm') }}{{ s.m_flags }}</span>
         <span class="metric">{{ ic('shield','ic ic-sm') }}{{ s.m_signals }}</span>
       </div>
 
@@ -108,7 +107,7 @@
           <div class="msg-h">
             <div class="l"><span class="av av-32">{{ s.ini }}</span>
               <div class="who"><b>{{ s.name }}</b><span class="sub"><span class="mono">@{{ s.handle }}</span></span></div></div>
-            <div class="r"><span class="li-time">{{ s.time }}</span><span class="iconbtn">{{ ic('reply','ic ic-sm') }}</span><span class="iconbtn">{{ ic('kebab','ic ic-sm') }}</span></div>
+            <div class="r"><span class="li-time">{{ s.time }}</span></div>
           </div>
           <p>Submitting {{ s.board }} {{ s.role_title }} for review. Write-up and the re-measured evidence are below.</p>
         </div>
@@ -116,7 +115,7 @@
         <div class="sep"><span class="hl"></span><span class="g">{{ ic('link','ic ic-sm') }}{{ s.remeasure_label }}</span><span class="hl"></span></div>
 
         <div class="progcard">
-          <div class="h">{{ ic('shield','ic ic-sm') }}<b>Program re-measurement</b><span class="pill pill-violet">answer-free</span><span class="sp" style="flex:1"></span><span class="mono dim" style="font-size:11px">{{ s.engine }}</span></div>
+          <div class="h">{{ ic('shield','ic ic-sm') }}<b>Program re-measurement</b><span class="pill pill-violet">answer-free</span><span style="flex:1"></span><span class="mono dim" style="font-size:11px">{{ s.engine }}</span></div>
           {% if s.evidence %}
           <div class="evrow">
             {% for e in s.evidence %}<span class="chip {{ e.cls }}"><span class="dot {{ e.dot }}"></span>{{ e.label }}</span>{% endfor %}
@@ -134,16 +133,18 @@
           <div class="msg-h">
             <div class="l"><span class="av av-32">{{ s.ini }}</span>
               <div class="who"><b>{{ s.name }}</b><span class="sub"><span class="mono">@{{ s.handle }}</span><span class="dim">→ Reviewers</span></span></div></div>
-            <div class="r"><span class="li-time">{{ s.time }}</span><span class="iconbtn">{{ ic('reply','ic ic-sm') }}</span></div>
+            <div class="r"><span class="li-time">{{ s.time }}</span></div>
           </div>
           {% for p in s.analysis %}<p>{{ p }}</p>{% endfor %}
-          <a class="replink" href="#">View evidence in repo {{ ic('ext','ic ic-sm') }}</a>
         </div>
 
-        <div class="sep"><span class="hl"></span><span class="g">Awaiting your decision</span><span class="hl"></span></div>
+        <div class="sep"><span class="hl"></span><span class="g">
+          {% if s.status_label == 'Pending' %}Awaiting your decision{% else %}Decision: {{ s.status_label }}{% endif %}
+        </span><span class="hl"></span></div>
       </div>
 
       <form class="det-foot" method="post" action="/admin/reports/{{ s.id }}">
+        <input type="hidden" name="return_status" value="{{ vm.active_status }}">
         <div class="notebar">{{ ic('lock','ic ic-sm') }}<input name="notes" placeholder="Add a reviewer note" style="border:none;background:transparent;outline:none;flex:1;font:inherit;color:var(--ink)"></div>
         <div class="foot-actions">
           <span class="cap">Visible to reviewers in Cohort {{ vm.cohort }}</span>
@@ -155,21 +156,21 @@
         </div>
       </form>
       {% else %}
-      <div class="empty"><div class="ring">{{ ic('medal') }}</div><div>Select a report to review.</div></div>
+      <div class="empty"><div class="ring">{{ ic('medal') }}</div>
+        <div>{% if vm.count %}Select a report to review.{% else %}No reports yet. They appear here once rangers submit.{% endif %}</div></div>
       {% endif %}
     </section>
 
     <!-- RAIL -->
     <nav class="rail">
-      <span class="rb">{{ ic('grid') }}</span>
-      <span class="rb on">{{ ic('inbox') }}</span>
-      <span class="rb">{{ ic('users') }}</span>
-      <span class="rb">{{ ic('server') }}</span>
-      <span class="rb">{{ ic('activity') }}</span>
-      <span class="rb">{{ ic('shield') }}</span>
+      <a class="rb {% if vm.active_status=='all' %}on{% endif %}" href="/admin?status=all" title="All reports">{{ ic('grid') }}</a>
+      <a class="rb {% if vm.active_status=='pending' %}on{% endif %}" href="/admin?status=pending" title="Pending">{{ ic('inbox') }}</a>
+      <a class="rb {% if vm.active_status=='approved' %}on{% endif %}" href="/admin?status=approved" title="Approved">{{ ic('medal') }}</a>
+      <a class="rb {% if vm.active_status=='needs_changes' %}on{% endif %}" href="/admin?status=needs_changes" title="Needs changes">{{ ic('edit') }}</a>
       <span class="sp"></span>
-      <span class="rb">{{ ic('help') }}</span>
-      <span class="rb">{{ ic('sliders') }}</span>
+      <a class="rb" href="/roster.json?cohort={{ vm.cohort }}" title="Roster JSON">{{ ic('layers') }}</a>
+      <a class="rb" href="https://ranger.qwalora.com" title="Ranger site">{{ ic('help') }}</a>
+      <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
     </nav>
 
   </div>
