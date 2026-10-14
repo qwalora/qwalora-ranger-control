@@ -42,7 +42,7 @@ def ensure_schema(db):
             ("ludus_key_enc", "TEXT"),
             ("status", "VARCHAR(20) DEFAULT 'active'"),
             ("current_board", "INTEGER DEFAULT 1"),
-            ("current_role", "VARCHAR(40)"),
+            ("board_role", "VARCHAR(40)"),  # maps to Candidate.current_role
             ("exited_at", "TIMESTAMP"),
             ("exit_reason", "VARCHAR(200)"),
         ],
@@ -65,8 +65,10 @@ def ensure_schema(db):
                 continue
             # Two gunicorn workers can race this ALTER on first boot; the loser
             # sees "already exists". Swallow per-column so boot never crash-loops.
+            # Quote the identifier so reserved words (e.g. current_role in
+            # Postgres) are added correctly rather than silently failing.
             try:
-                db.session.execute(db.text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+                db.session.execute(db.text(f'ALTER TABLE {table} ADD COLUMN "{name}" {ddl}'))
                 db.session.commit()
             except Exception:
                 db.session.rollback()
@@ -87,7 +89,8 @@ class Candidate(db.Model):
     # Lifecycle: active -> graduated | withdrawn | washed_out (the three exit points).
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
     current_board = db.Column(db.Integer, nullable=False, default=1)   # 1..6, the board they're on
-    current_role = db.Column(db.String(40), nullable=True)            # role of the current board
+    # DB column is "board_role": current_role is a reserved keyword in Postgres.
+    current_role = db.Column("board_role", db.String(40), nullable=True)  # role of the current board
     exited_at = db.Column(db.DateTime(timezone=True), nullable=True)
     exit_reason = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
