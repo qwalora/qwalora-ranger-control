@@ -20,7 +20,8 @@
           <a class="nav-item" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span></a>
         </div>
         <div class="nav-group">
-          <div class="gl">Infrastructure</div>
+          <div class="gl">Program</div>
+          <a class="nav-item" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
           <a class="nav-item on" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span>{% if vm.total %}<span class="count count-on">{{ vm.total }}</span>{% endif %}</a>
           <a class="nav-item" href="/roster.json?cohort={{ vm.cohort }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">Roster JSON</span></a>
         </div>
@@ -37,11 +38,16 @@
       <div class="rg-head">
         <div>
           <div class="ttl">Ranges <span class="count">{{ vm.total }}</span></div>
-          <div class="rg-sub">Cohort {{ vm.cohort }} · template <span class="mono">{{ vm.template }}</span></div>
+          <div class="rg-sub">Cohort {{ vm.cohort }} · isolated slots <b>{{ vm.slots_used }}/{{ vm.cap }}</b> in use · active rangers only</div>
         </div>
-        <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">
-          <span class="dot {% if vm.mode == 'live' %}dot-ok{% else %}dot-violet{% endif %}"></span>Ludus {{ vm.broker }}
-        </span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <form method="post" action="/admin/reconcile">
+            <button class="btn btn-outline btn-sm" title="Deploy queued ranges into free slots">{{ ic('activity','ic ic-sm') }} Reconcile</button>
+          </form>
+          <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">
+            <span class="dot {% if vm.mode == 'live' %}dot-ok{% else %}dot-violet{% endif %}"></span>Ludus {{ vm.broker }}
+          </span>
+        </div>
       </div>
 
       {% if vm.mode != 'live' %}
@@ -53,6 +59,7 @@
       <div class="rg-stats">
         <div class="rg-stat"><b>{{ vm.counts.deployed }}</b><span>Deployed</span></div>
         <div class="rg-stat"><b>{{ vm.counts.deploying }}</b><span>Deploying</span></div>
+        <div class="rg-stat"><b>{{ vm.counts.queued_slot }}</b><span>Queued</span></div>
         <div class="rg-stat"><b>{{ vm.counts.configured }}</b><span>Configured</span></div>
         <div class="rg-stat"><b>{{ vm.counts.failed }}</b><span>Failed</span></div>
       </div>
@@ -64,7 +71,7 @@
             <span class="av av-32">{{ r.ini }}</span>
             <div class="rg-id">
               <b>{{ r.name }}</b>
-              <span class="mono dim">@{{ r.handle }} · ludus {{ r.ludus_user }}{% if r.range_id %} · {{ r.range_id }}{% endif %}</span>
+              <span class="mono dim">@{{ r.handle }} · board {{ r.board }} {{ r.role_title }} · {{ r.tier }}{% if r.range_id %} · {{ r.range_id }}{% endif %}</span>
             </div>
           </div>
           <div class="rg-state">
@@ -73,8 +80,12 @@
             {% if r.checked %}<span class="mono dim" style="font-size:11px">checked {{ r.checked }}</span>{% endif %}
           </div>
           <form class="rg-actions" method="post" action="/admin/ranges/{{ r.cid }}">
-            {% if r.status in ('configured','queued','failed','destroyed','none') %}
+            {% if r.tier != 'isolated' %}
+            <span class="mono dim" style="font-size:11px">shared, no slot</span>
+            {% elif r.status in ('configured','queued','failed','destroyed','none') %}
             <button class="btn btn-primary btn-sm" name="action" value="deploy">Deploy</button>
+            {% elif r.status == 'queued_slot' %}
+            <button class="btn btn-ghost btn-sm" name="action" value="destroy">Cancel</button>
             {% else %}
             <button class="btn btn-outline btn-sm" name="action" value="refresh">Refresh</button>
             <button class="btn btn-ghost btn-sm" name="action" value="destroy">Destroy</button>

@@ -77,6 +77,23 @@ def _iso(dt):
     return dt.astimezone(_dt.timezone.utc).isoformat()
 
 
+def _badge_chain(c):
+    """The six-rung ladder for a candidate, with earned flags, plus certified."""
+    earned = {b.level for b in c.badges}
+    chain = [{"level": str(b["n"]), "name": b["badge"], "role": b["role"],
+              "board": b["n"], "earned": str(b["n"]) in earned}
+             for b in P.BOARD_PLAN]
+    return {"chain": chain, "certified": ("certified" in earned)}
+
+
+STATUS_UI = {
+    "active": ("Active", "pill-violet", "dot-violet"),
+    "graduated": ("Graduated", "pill-ok", "dot-ok"),
+    "washed_out": ("Washed out", "pill-amber", "dot-amber"),
+    "withdrawn": ("Withdrawn", "pill", "dot"),
+}
+
+
 def _normalize_db_url(url):
     if not url:
         return "sqlite:///local.db"
@@ -616,7 +633,12 @@ def create_app():
                 "remeasure_label": (f"Program re-measured the repo · {len(evidence)} signals"
                                     if evidence else "Re-measurement runs at cohort sync"),
                 "engine": "ed25519", "evidence": evidence, "sig": sig, "analysis": paras,
-                "status_label": sl, "status_cls": scls, "status_dot": sdot}
+                "status_label": sl, "status_cls": scls, "status_dot": sdot,
+                "cand_status": c.status,
+                "cand_board": c.current_board,
+                "cand_role": P.ROLE_TITLES.get(c.current_role or P.role_of(c.current_board), "-"),
+                "is_current": (P.bint(target.board) == c.current_board and c.is_active),
+                "badges": _badge_chain(c)["chain"], "certified": _badge_chain(c)["certified"]}
 
         title_map = {"pending": "Pending", "approved": "Approved",
                      "needs_changes": "Needs changes", "rejected": "Rejected", "all": "All reports"}
@@ -655,22 +677,68 @@ def create_app():
     _RANGE_UI = {
         "deployed": ("Deployed", "pill-ok", "dot-ok"),
         "deploying": ("Deploying", "pill-amber", "dot-amber"),
+        "queued_slot": ("Queued for a slot", "pill-amber", "dot-amber"),
         "configured": ("Configured", "pill-violet", "dot-violet"),
         "failed": ("Failed", "pill-amber", "dot-amber"),
         "destroyed": ("Destroyed", "pill", "dot"),
         "queued": ("Configured", "pill-violet", "dot-violet"),  # legacy
+        "none": ("Not provisioned", "pill", "dot"),
     }
+
+    @app.get("/admin/cohort")
+    @admin_required
+    def admin_cohort():
+        cohort = request.args.get("cohort", DEFAULT_COHORT)
+        status = request.args.get("status", "active")
+        qtext = (request.args.get("q") or "").strip()
+        base = Candidate.query.filter_by(cohort=cohort)
+        counts = {k: base.filter_by(status=k).count()
+                  for k in ("active", "graduated", "washed_out", "withdrawn")}
+        counts["all"] = base.count()
+        qry = base
+        if status in ("active", "graduated", "washed_out", "withdrawn"):
+            qry = qry.filter_by(status=status)
+        if qtext:
+            like = f"%{qtext}%"
+            qry = qry.filter(db.or_(Candidate.name.ilike(like),
+                                    Candidate.handle.ilike(like)))
+        cands = qry.order_by(Candidate.current_board.desc(),
+                             Candidate.handle.asc()).limit(300).all()
+        rows = []
+        for c in cands:
+            bc = _badge_chain(c)
+            rr = _board_range(c, c.current_board)
+            rst = rr.status if rr else "none"
+            rlabel, rpcls, rdot = _RANGE_UI.get(rst, ("None", "pill", "dot"))
+            slabel, spcls, sdot = STATUS_UI.get(c.status, ("-", "pill", "dot"))
+            rows.append({
+                "cid": c.id, "ini": _initials(c.name), "name": c.name, "handle": c.handle,
+                "status": c.status, "status_label": slabel, "status_pcls": spcls, "status_dot": sdot,
+                "board": c.current_board,
+                "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(c.current_board), "-"),
+                "tier": P.tier_of(c.current_board),
+                "badges": bc["chain"], "certified": bc["certified"],
+                "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
+                "terminal": (c.status in Candidate.TERMINAL),
+            })
+        vm = {"cohort": cohort, "active_status": status, "q": qtext,
+              "counts": counts, "rows": rows, "total": len(rows),
+              "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT,
+              "mode": broker.mode()}
+        return render_template("admin_cohort.html", vm=vm)
 
     @app.get("/admin/ranges")
     @admin_required
     def admin_ranges():
         cohort = request.args.get("cohort", DEFAULT_COHORT)
-        cands = (Candidate.query.filter_by(cohort=cohort)
-                 .order_by(Candidate.handle).all())
+        # Ranges matter for active candidates; show them ordered by board.
+        cands = (Candidate.query.filter_by(cohort=cohort, status="active")
+                 .order_by(Candidate.current_board.desc(), Candidate.handle).limit(300).all())
         rows = []
-        counts = {"deployed": 0, "deploying": 0, "configured": 0, "failed": 0}
+        counts = {"deployed": 0, "deploying": 0, "queued_slot": 0, "configured": 0, "failed": 0}
         for c in cands:
-            rr = _latest_range(c)
+            n = c.current_board
+            rr = _board_range(c, n)
             st = rr.status if rr else "none"
             label, pcls, dot = _RANGE_UI.get(st, ("None", "pill", "dot"))
             key = "configured" if st in ("configured", "queued") else st
@@ -679,6 +747,8 @@ def create_app():
             rows.append({
                 "cid": c.id, "ini": _initials(c.name), "name": c.name,
                 "handle": c.handle, "ludus_user": c.ludus_user_id or "-",
+                "board": n, "tier": P.tier_of(n),
+                "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
                 "status": st, "label": label, "pcls": pcls, "dot": dot,
                 "range_id": (rr.ludus_range_id if rr else None),
                 "template": (rr.template if rr else None),
@@ -688,7 +758,8 @@ def create_app():
             })
         vm = {"cohort": DEFAULT_COHORT, "broker": broker_status(),
               "mode": broker.mode(), "template": broker.GOAD_TEMPLATE,
-              "rows": rows, "counts": counts, "total": len(rows)}
+              "rows": rows, "counts": counts, "total": len(rows),
+              "slots_used": _slots_used("primary"), "cap": MAX_CONCURRENT}
         return render_template("admin_ranges.html", vm=vm)
 
     @app.post("/admin/ranges/<int:cid>")
@@ -716,13 +787,19 @@ def create_app():
         db.session.commit()
         return redirect(url_for("admin_ranges"))
 
+    def _wants_json():
+        return (bool(request.headers.get("Authorization"))
+                or "application/json" in request.headers.get("Accept", ""))
+
     @app.post("/admin/reconcile")
     @admin_required
     def admin_reconcile():
         host = request.form.get("host") or request.args.get("host") or "primary"
         promoted = _reconcile(host)
-        return jsonify(ok=True, host=host, deployed_from_queue=promoted,
-                       slots_used=_slots_used(host), cap=MAX_CONCURRENT)
+        if _wants_json():
+            return jsonify(ok=True, host=host, deployed_from_queue=promoted,
+                           slots_used=_slots_used(host), cap=MAX_CONCURRENT)
+        return redirect(url_for("admin_ranges"))
 
     @app.post("/admin/candidates/<int:cid>/exit")
     @admin_required
@@ -733,8 +810,11 @@ def create_app():
         status = kind if kind in Candidate.TERMINAL else "withdrawn"
         _exit_candidate(c, status, reason or status)
         db.session.commit()
-        return jsonify(ok=True, handle=c.handle, status=c.status,
-                       exit_reason=c.exit_reason)
+        if _wants_json():
+            return jsonify(ok=True, handle=c.handle, status=c.status,
+                           exit_reason=c.exit_reason)
+        return redirect(request.form.get("return") or
+                        url_for("admin_cohort", status=request.form.get("return_status", "active")))
 
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")

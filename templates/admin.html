@@ -28,7 +28,8 @@
         </div>
 
         <div class="nav-group">
-          <div class="gl">Infrastructure</div>
+          <div class="gl">Program</div>
+          <a class="nav-item" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
           <a class="nav-item" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
         </div>
 
@@ -103,6 +104,15 @@
         <span class="metric">{{ ic('users','ic ic-sm') }}{{ s.m_roles }}</span>
         <span class="metric">{{ ic('layers','ic ic-sm') }}{{ s.m_boards }}</span>
         <span class="metric">{{ ic('shield','ic ic-sm') }}{{ s.m_signals }}</span>
+      </div>
+
+      <div class="prog">
+        <span class="prog-l">{% if s.cand_status == 'graduated' %}Graduated · certified{% else %}On board {{ s.cand_board }} · {{ s.cand_role }}{% endif %}</span>
+        {% if s.is_current %}<span class="pill pill-violet"><span class="dot dot-violet"></span>current board</span>{% endif %}
+        <span class="chain">
+          {% for b in s.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
+          <span class="pip cert {% if s.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
+        </span>
       </div>
 
       <div class="subject"><span class="bar2"></span><p>{{ s.subject_line }}</p></div>

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Cohort · Qwalora Ranger{% endblock %}
+{% macro navaside(active) %}
+<aside class="nav">
+  <div class="nav-top">
+    <div class="nav-brand">
+      <span class="l">{{ qlogo('light',26) }}<b>QWALORA <span>Ranger</span></b></span>
+      <a class="compose" href="/enroll" title="Enroll a ranger">{{ ic('plus','ic ic-sm') }}</a>
+    </div>
+    <div class="nav-group">
+      <div class="gl">Queue</div>
+      <a class="nav-item" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span></a>
+      <a class="nav-item" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span></a>
+      <a class="nav-item" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span></a>
+    </div>
+    <div class="nav-group">
+      <div class="gl">Program</div>
+      <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohort"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span>{% if vm.counts.active %}<span class="count {% if active=='cohort' %}count-on{% endif %}">{{ vm.counts.active }}</span>{% endif %}</a>
+      <a class="nav-item {% if active=='ranges' %}on{% endif %}" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
+      <a class="nav-item" href="/roster.json?cohort={{ vm.cohort }}"><span class="l">{{ ic('hash') }}</span><span class="lbl">Roster JSON</span></a>
+    </div>
+  </div>
+  <div class="nav-user">
+    <span class="av av-32">FK</span>
+    <span class="nm"><b>Franck Kengne</b><span>Reviewer · Admin</span></span>
+    <a href="/admin/logout" class="iconbtn" title="Sign out">{{ ic('sliders','ic ic-sm') }}</a>
+  </div>
+</aside>
+{% endmacro %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ navaside('cohort') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Cohort {{ vm.cohort }} <span class="count">{{ vm.counts.all }}</span></div>
+          <div class="rg-sub">SOC to capstone · 6 boards · isolated slots {{ vm.slots_used }}/{{ vm.cap }} in use</div>
+        </div>
+        <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">
+          <span class="dot {% if vm.mode == 'live' %}dot-ok{% else %}dot-violet{% endif %}"></span>Ludus {{ vm.mode }}
+        </span>
+      </div>
+
+      <div class="rg-stats">
+        <div class="rg-stat"><b>{{ vm.counts.active }}</b><span>Active</span></div>
+        <div class="rg-stat"><b>{{ vm.counts.graduated }}</b><span>Graduated</span></div>
+        <div class="rg-stat"><b>{{ vm.counts.washed_out }}</b><span>Washed out</span></div>
+        <div class="rg-stat"><b>{{ vm.counts.withdrawn }}</b><span>Withdrawn</span></div>
+      </div>
+
+      <div class="co-tools">
+        <div class="seg">
+          {% for s,lbl in [('active','Active'),('graduated','Graduated'),('washed_out','Washed out'),('withdrawn','Withdrawn'),('all','All')] %}
+          <a class="seg-i {% if vm.active_status==s %}on{% endif %}" href="/admin/cohort?status={{ s }}{% if vm.q %}&q={{ vm.q }}{% endif %}">{{ lbl }}</a>
+          {% endfor %}
+        </div>
+        <form class="co-search" method="get" action="/admin/cohort">
+          {{ ic('search','ic ic-sm') }}
+          <input name="q" value="{{ vm.q }}" placeholder="Search rangers" autocomplete="off">
+          <input type="hidden" name="status" value="{{ vm.active_status }}">
+        </form>
+      </div>
+
+      <div class="co-list">
+        {% for r in vm.rows %}
+        <div class="co-row">
+          <div class="co-who">
+            <span class="av av-32">{{ r.ini }}</span>
+            <div class="co-id">
+              <b>{{ r.name }}</b>
+              <span class="mono dim">@{{ r.handle }}</span>
+            </div>
+          </div>
+
+          <div class="co-board">
+            {% if r.status == 'graduated' %}
+            <span class="pill pill-ok"><span class="dot dot-ok"></span>Certified</span>
+            {% else %}
+            <span class="co-bn">Board {{ r.board }}</span>
+            <span class="co-role">{{ r.role_title }}</span>
+            <span class="pill {% if r.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}">
+              <span class="dot {% if r.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ r.tier }}</span>
+            {% endif %}
+          </div>
+
+          <div class="chain" title="rank badges earned">
+            {% for b in r.badges %}
+            <span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}{% if not b.earned %} (locked){% endif %}">{{ b.board }}</span>
+            {% endfor %}
+            <span class="pip cert {% if r.certified %}on{% endif %}" title="Qwalora Ranger, Certified">{{ ic('medal','ic ic-sm') }}</span>
+          </div>
+
+          <div class="co-state">
+            <span class="pill {{ r.status_pcls }}"><span class="dot {{ r.status_dot }}"></span>{{ r.status_label }}</span>
+            {% if r.status == 'active' %}<span class="pill {{ r.range_pcls }}"><span class="dot {{ r.range_dot }}"></span>{{ r.range_label }}</span>{% endif %}
+          </div>
+
+          <div class="co-actions">
+            <a class="iconbtn" href="/admin?q={{ r.handle }}&status=all" title="Reports">{{ ic('inbox','ic ic-sm') }}</a>
+            {% if not r.terminal %}
+            <form method="post" action="/admin/candidates/{{ r.cid }}/exit" onsubmit="return confirm('Exit {{ r.name }} from the cohort? Their ranges are torn down; earned badges are kept.');">
+              <input type="hidden" name="return_status" value="{{ vm.active_status }}">
+              <button class="btn btn-outline btn-sm" name="kind" value="washed_out" title="Mark washed out">Washout</button>
+              <button class="btn btn-ghost btn-sm" name="kind" value="withdrawn" title="Withdraw">Withdraw</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="empty"><div class="ring">{{ ic('users') }}</div>
+          <div>No rangers in this view.</div>
+          <a class="btn btn-ghost btn-sm" href="/enroll">Enroll a ranger</a></div>
+        {% endfor %}
+      </div>
+      {% if vm.total >= 300 %}<div class="co-more mono dim">Showing first 300. Narrow with search.</div>{% endif %}
+    </section>
+
+    <nav class="rail">
+      <a class="rb" href="/admin?status=pending" title="Reports">{{ ic('inbox') }}</a>
+      <a class="rb on" href="/admin/cohort" title="Cohort">{{ ic('users') }}</a>
+      <a class="rb" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
+      <a class="rb" href="/admin/logout" title="Sign out">{{ ic('sliders') }}</a>
+    </nav>
+  </div>
+</div>
+{% endblock %}
