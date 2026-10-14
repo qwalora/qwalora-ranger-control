@@ -21,6 +21,7 @@
       <p class="foothint">Requires two-factor authentication and a verified email on your GitHub account. Objective scoring is answer-free; nothing here contains answers.</p>
       {% else %}
       <form method="post" action="/enroll" style="display:flex;flex-direction:column;gap:16px">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
         <div class="field">
           <label class="label">GitHub handle</label>
           <input class="input mono" name="handle" required placeholder="cloudcwfranck" autocomplete="off">

@@ -44,7 +44,7 @@
           </div>
           <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
             {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
-            <form method="post" action="/me/start"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>
+            <form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>
             {% endif %}
             {% if vm.has_wg %}
             <a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>

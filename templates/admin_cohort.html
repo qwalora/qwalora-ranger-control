@@ -79,6 +79,7 @@
             <a class="iconbtn" href="/admin?q={{ r.handle }}&status=all" title="Reports">{{ ic('inbox','ic ic-sm') }}</a>
             {% if not r.terminal %}
             <form method="post" action="/admin/candidates/{{ r.cid }}/exit" onsubmit="return confirm('Exit {{ r.name }} from the cohort? Their ranges are torn down; earned badges are kept.');">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
               <input type="hidden" name="return_status" value="{{ vm.active_status }}">
               <button class="btn btn-outline btn-sm" name="kind" value="washed_out" title="Mark washed out">Washout</button>
               <button class="btn btn-ghost btn-sm" name="kind" value="withdrawn" title="Withdraw">Withdraw</button>

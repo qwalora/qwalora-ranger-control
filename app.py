@@ -137,6 +137,9 @@ def create_app():
         ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
 
     admin_token = os.environ.get("ADMIN_TOKEN")
+    # Once GitHub reviewer sign-in is confirmed, set DISABLE_ADMIN_TOKEN=1 to
+    # retire the shared token entirely (reviewers then get in only via OAuth).
+    token_disabled = os.environ.get("DISABLE_ADMIN_TOKEN") == "1"
 
     # Cache-bust static assets: version the stylesheet URL by its content hash so a
     # new deploy is never masked by a stale cached app.css on any origin.
@@ -146,9 +149,73 @@ def create_app():
     except Exception:
         asset_ver = "1"
 
+    def _csrf_token():
+        t = session.get("csrf")
+        if not t:
+            import secrets as _s
+            t = _s.token_urlsafe(24)
+            session["csrf"] = t
+        return t
+
     @app.context_processor
     def _inject_asset_ver():
-        return {"asset_ver": asset_ver, "oauth_enabled": githuboauth.enabled()}
+        return {"asset_ver": asset_ver, "oauth_enabled": githuboauth.enabled(),
+                "csrf_token": _csrf_token(), "token_disabled": token_disabled}
+
+    # --- CSRF: browser (cookie-authed) POSTs must carry the session token ----
+    # API endpoints authenticate with header tokens (not cookies), so CSRF does
+    # not apply to them; they are exempt.
+    _CSRF_EXEMPT = {"submit_report", "grade", "lab_start", "lab_status"}
+
+    @app.before_request
+    def _csrf_protect():
+        if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+            return
+        ep = request.endpoint or ""
+        if ep in _CSRF_EXEMPT:
+            return
+        # Header-token authed (not cookie) -> CSRF is not the threat.
+        if (request.headers.get("Authorization") or request.headers.get("X-CI-Token")
+                or request.headers.get("X-Candidate-Token")):
+            return
+        import hmac as _hmac
+        sent = request.form.get("csrf") or request.headers.get("X-CSRF-Token") or ""
+        have = session.get("csrf") or ""
+        if not have or not _hmac.compare_digest(sent, have):
+            abort(400, "CSRF token missing or invalid. Reload and try again.")
+
+    # --- rate limiting: in-memory per-IP sliding window ----------------------
+    # Per-worker (gunicorn has a few), so effective limits are a small multiple;
+    # enough to blunt brute force and abuse. (count, window_seconds) per endpoint.
+    import collections as _collections
+    import time as _time
+    _RL = _collections.defaultdict(list)
+    _RL_LIMITS = {
+        "admin_login_post": (10, 300), "gh_login": (30, 300), "gh_callback": (30, 300),
+        "grade": (120, 60), "enroll": (20, 3600), "submit_report": (120, 60),
+        "lab_start": (30, 60), "candidate_start": (30, 60),
+    }
+
+    def _client_ip():
+        xff = request.headers.get("X-Forwarded-For", "")
+        return (xff.split(",")[0].strip() if xff else request.remote_addr) or "?"
+
+    @app.before_request
+    def _ratelimit():
+        lim = _RL_LIMITS.get(request.endpoint or "")
+        if not lim:
+            return
+        n, window = lim
+        now = _time.time()
+        if len(_RL) > 20000:  # coarse memory guard
+            _RL.clear()
+        bucket = _RL[(request.endpoint, _client_ip())]
+        cutoff = now - window
+        while bucket and bucket[0] < cutoff:
+            bucket.pop(0)
+        if len(bucket) >= n:
+            abort(429, "Too many requests. Slow down and try again shortly.")
+        bucket.append(now)
 
     @app.after_request
     def _security_headers(resp):
@@ -173,15 +240,21 @@ def create_app():
         if session.get("admin"):
             return True
         auth = request.headers.get("Authorization", "")
-        if admin_token and auth.startswith("Bearer "):
-            return auth[len("Bearer "):] == admin_token
+        if admin_token and not token_disabled and auth.startswith("Bearer "):
+            import hmac as _hmac
+            return _hmac.compare_digest(auth[len("Bearer "):], admin_token)
         return False
+
+    def _auth_available():
+        # There is a way to become admin if OAuth reviewer sign-in is on, or the
+        # shared token is still enabled.
+        return githuboauth.enabled() or (admin_token and not token_disabled)
 
     def admin_required(fn):
         @functools.wraps(fn)
         def wrapper(*a, **k):
-            if not admin_token:
-                abort(503, "ADMIN_TOKEN is not configured on this service.")
+            if not _auth_available():
+                abort(503, "No admin sign-in is configured on this service.")
             if not _is_admin():
                 # API callers get 401; browsers get the login page.
                 if request.headers.get("Authorization") or request.path.endswith(".json"):
@@ -620,19 +693,23 @@ def create_app():
     # --- admin ---------------------------------------------------------------
     @app.get("/admin/login")
     def admin_login():
-        if not admin_token:
-            abort(503, "ADMIN_TOKEN is not configured on this service.")
-        return render_template("admin_login.html", nxt=request.args.get("next", "/admin"))
+        if not _auth_available():
+            abort(503, "No admin sign-in is configured on this service.")
+        return render_template("admin_login.html", nxt=request.args.get("next", "/admin"),
+                               token_login=bool(admin_token and not token_disabled))
 
     @app.post("/admin/login")
     def admin_login_post():
-        if not admin_token:
-            abort(503)
-        if (request.form.get("token") or "") == admin_token:
+        if not admin_token or token_disabled:
+            return render_template("admin_login.html", nxt=request.form.get("next", "/admin"),
+                                   token_login=False,
+                                   error="Token sign-in is disabled. Use GitHub."), 403
+        import hmac as _hmac
+        if _hmac.compare_digest(request.form.get("token") or "", admin_token):
             session["admin"] = True
             return redirect(request.form.get("next") or url_for("admin"))
         return render_template("admin_login.html", nxt=request.form.get("next", "/admin"),
-                               error="Wrong token."), 401
+                               token_login=True, error="Wrong token."), 401
 
     @app.get("/admin/logout")
     def admin_logout():

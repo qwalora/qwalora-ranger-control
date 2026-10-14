@@ -16,6 +16,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <form method="post" action="/admin/reconcile">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
             <button class="btn btn-outline btn-sm" title="Deploy queued ranges into free slots">{{ ic('activity','ic ic-sm') }} Reconcile</button>
           </form>
           <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">
@@ -54,6 +55,7 @@
             {% if r.checked %}<span class="mono dim" style="font-size:11px">checked {{ r.checked }}</span>{% endif %}
           </div>
           <form class="rg-actions" method="post" action="/admin/ranges/{{ r.cid }}">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
             {% if r.tier != 'isolated' %}
             <span class="mono dim" style="font-size:11px">shared, no slot</span>
             {% elif r.status in ('configured','queued','failed','destroyed','none') %}

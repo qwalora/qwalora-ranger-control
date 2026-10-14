@@ -116,6 +116,7 @@
       </div>
 
       <form class="det-foot" method="post" action="/admin/reports/{{ s.id }}">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
         <input type="hidden" name="return_status" value="{{ vm.active_status }}">
         <div class="notebar">{{ ic('lock','ic ic-sm') }}<input name="notes" placeholder="Add a reviewer note" style="border:none;background:transparent;outline:none;flex:1;font:inherit;color:var(--ink)"></div>
         <div class="foot-actions">
