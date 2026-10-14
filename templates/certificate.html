@@ -91,6 +91,22 @@
   font:800 72px/1 var(--f);letter-spacing:.08em;text-transform:uppercase;
   color:rgba(214,40,40,.14);border:6px solid rgba(214,40,40,.14);border-radius:14px;
   padding:10px 34px;pointer-events:none;z-index:2}
-@media print{.no-print{display:none}.cert{border:none;box-shadow:none}.cert-page{padding:0}body{background:#fff}}
+/* Print as a landscape certificate on US Letter, one page. */
+@page{size:letter landscape;margin:12mm}
+@media print{
+  .no-print{display:none}
+  html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .cert-page{padding:0;max-width:none;margin:0}
+  .cert{border:none;box-shadow:none;border-radius:0;padding:14px 60px 10px}
+  .cert-rule{margin:0 0 16px}
+  .cert-rule:last-child{margin:16px 0 0}
+  .cert-kicker{margin-top:14px}
+  .cert-name{margin-top:8px;font-size:38px}
+  .cert-body{margin-top:10px}
+  .cert-title{margin-top:12px}
+  .cert-boards{margin-top:16px}
+  .cert-foot{margin-top:18px}
+  .cert-about{margin-top:14px}
+}
 </style>
 {% endblock %}
