@@ -1,0 +1,223 @@
+---
+# Plant each ranger's flags where only completing the objective can read them.
+# Runs on every Windows host in the range with the same qwalora_flags dict;
+# each task is gated to the host where its flag belongs. A flag proves an
+# action, so placement is the whole point: a flag readable without doing the
+# work would be a free point. The portal's grader re-derives the same tokens
+# from the seed, so we only have to plant what we are handed.
+#
+# This role runs AFTER badsectorlabs.ludus_goad, so the domain, accounts, SPNs
+# and shares already exist.
+
+- name: Ensure the loot directory exists
+  ansible.windows.win_file:
+    path: "{{ qwalora_flags_dir }}"
+    state: directory
+  when: qwalora_flags | length > 0
+
+# --- recon: a world-readable share (any authenticated user) -----------------
+- name: "recon flag on a world-readable share (DC)"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.recon }}"
+    dest: 'C:\shares\public\welcome.txt'
+  when:
+    - qwalora_flags.recon is defined
+    - ansible_hostname == 'kingslanding'
+
+# --- foothold: in the sprayable user's profile ------------------------------
+- name: "foothold flag in the initial user's profile"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.foothold }}"
+    dest: 'C:\Users\Public\Documents\notes.txt'
+  when:
+    - qwalora_flags.foothold is defined
+    - ansible_hostname == 'castelblack'
+
+# --- asreproast: readable only by the no-preauth user -----------------------
+- name: "asreproast flag, restricted to {{ qwalora_asrep_account }}"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.asreproast }}"
+    dest: "{{ qwalora_flags_dir }}\\asrep.flag"
+  when:
+    - qwalora_flags.asreproast is defined
+    - ansible_hostname == 'winterfell'
+- name: "lock the asreproast flag to {{ qwalora_asrep_account }}"
+  ansible.windows.win_acl:
+    path: "{{ qwalora_flags_dir }}\\asrep.flag"
+    user: "{{ qwalora_asrep_account }}"
+    rights: Read
+    type: allow
+    inherit: None
+    state: present
+  when:
+    - qwalora_flags.asreproast is defined
+    - ansible_hostname == 'winterfell'
+
+# --- kerberoast: on a share only the service account can read ---------------
+- name: "kerberoast flag, restricted to {{ qwalora_svc_account }}"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.kerberoast }}"
+    dest: "{{ qwalora_flags_dir }}\\svc.flag"
+  when:
+    - qwalora_flags.kerberoast is defined
+    - ansible_hostname == 'winterfell'
+- name: "lock the kerberoast flag to {{ qwalora_svc_account }}"
+  ansible.windows.win_acl:
+    path: "{{ qwalora_flags_dir }}\\svc.flag"
+    user: "{{ qwalora_svc_account }}"
+    rights: Read
+    type: allow
+    inherit: None
+    state: present
+  when:
+    - qwalora_flags.kerberoast is defined
+    - ansible_hostname == 'winterfell'
+
+# --- lateral: on the pivot target -------------------------------------------
+- name: "lateral flag on the pivot server"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.lateral }}"
+    dest: "{{ qwalora_flags_dir }}\\lateral.flag"
+  when:
+    - qwalora_flags.lateral is defined
+    - ansible_hostname in ['castelblack', 'meereen']
+
+# --- credaccess: readable only by SYSTEM / local administrators -------------
+- name: "credaccess flag, SYSTEM/admin only"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.credaccess }}"
+    dest: "{{ qwalora_flags_dir }}\\creds.flag"
+  when:
+    - qwalora_flags.credaccess is defined
+    - ansible_hostname == 'castelblack'
+- name: "lock the credaccess flag to local Administrators"
+  ansible.windows.win_acl:
+    path: "{{ qwalora_flags_dir }}\\creds.flag"
+    user: "BUILTIN\\Administrators"
+    rights: FullControl
+    type: allow
+    state: present
+  when:
+    - qwalora_flags.credaccess is defined
+    - ansible_hostname == 'castelblack'
+- name: "remove inherited read for the credaccess flag"
+  ansible.windows.win_acl_inheritance:
+    path: "{{ qwalora_flags_dir }}\\creds.flag"
+    state: absent
+    reorganize: true
+  when:
+    - qwalora_flags.credaccess is defined
+    - ansible_hostname == 'castelblack'
+
+# --- aclabuse: proof of the ACL takeover ------------------------------------
+- name: "aclabuse flag (readable once the abused object is owned)"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.aclabuse }}"
+    dest: "{{ qwalora_flags_dir }}\\acl.flag"
+  when:
+    - qwalora_flags.aclabuse is defined
+    - ansible_hostname == 'winterfell'
+
+# --- domainadmin: on the Administrator desktop of a DC ----------------------
+- name: "domainadmin flag on the DC Administrator desktop"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.domainadmin }}"
+    dest: 'C:\Users\Administrator\Desktop\flag.txt'
+  when:
+    - qwalora_flags.domainadmin is defined
+    - ansible_hostname == 'winterfell'
+
+# --- dcsync: the crown jewels, derived from the directory -------------------
+- name: "dcsync flag, DC-only protected store"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.dcsync }}"
+    dest: 'C:\Windows\NTDS\ranger.flag'
+  when:
+    - qwalora_flags.dcsync is defined
+    - ansible_hostname == 'kingslanding'
+
+# --- board 6 adds cross-domain / cross-forest objectives --------------------
+# These keys are present only when the portal passed board-6 flags.
+- name: "board 6 - child_da flag on the child DC Administrator desktop"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.child_da }}"
+    dest: 'C:\Users\Administrator\Desktop\flag.txt'
+  when:
+    - qwalora_flags.child_da is defined
+    - ansible_hostname == 'winterfell'
+
+- name: "board 6 - trust_abuse flag (crossing the child->parent trust)"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.trust_abuse }}"
+    dest: "{{ qwalora_flags_dir }}\\trust.flag"
+  when:
+    - qwalora_flags.trust_abuse is defined
+    - ansible_hostname == 'kingslanding'
+
+- name: "board 6 - parent_ea flag on the forest root DC"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.parent_ea }}"
+    dest: 'C:\Users\Administrator\Desktop\enterprise.txt'
+  when:
+    - qwalora_flags.parent_ea is defined
+    - ansible_hostname == 'kingslanding'
+
+- name: "board 6 - forest_persist flag from krbtgt material"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.forest_persist }}"
+    dest: 'C:\Windows\NTDS\ranger.flag'
+  when:
+    - qwalora_flags.forest_persist is defined
+    - ansible_hostname == 'kingslanding'
+
+- name: "board 6 - cross_forest flag on an essos host"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.cross_forest }}"
+    dest: "{{ qwalora_flags_dir }}\\crossforest.flag"
+  when:
+    - qwalora_flags.cross_forest is defined
+    - ansible_hostname == 'meereen'
+
+- name: "board 6 - forest2_da flag on the essos DC Administrator desktop"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.forest2_da }}"
+    dest: 'C:\Users\Administrator\Desktop\flag.txt'
+  when:
+    - qwalora_flags.forest2_da is defined
+    - ansible_hostname == 'braavos'
+
+- name: "board 6 - crown jewels on the root DC"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.crown }}"
+    dest: 'C:\Windows\NTDS\crown.flag'
+  when:
+    - qwalora_flags.crown is defined
+    - ansible_hostname == 'kingslanding'
+
+# recon_forest / foothold / roast_forest for board 6 reuse the same early
+# placements as board 5 (public share, user profile, restricted account), keyed
+# by their own ids:
+- name: "board 6 - recon_forest flag on a world-readable share"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.recon_forest }}"
+    dest: 'C:\shares\public\welcome.txt'
+  when:
+    - qwalora_flags.recon_forest is defined
+    - ansible_hostname == 'kingslanding'
+
+- name: "board 6 - foothold flag in the initial user's profile"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.foothold }}"
+    dest: 'C:\Users\Public\Documents\notes.txt'
+  when:
+    - qwalora_flags.foothold is defined
+    - qwalora_flags_board == 6
+    - ansible_hostname == 'castelblack'
+
+- name: "board 6 - roast_forest flag, restricted account"
+  ansible.windows.win_copy:
+    content: "{{ qwalora_flags.roast_forest }}"
+    dest: "{{ qwalora_flags_dir }}\\roast.flag"
+  when:
+    - qwalora_flags.roast_forest is defined
+    - ansible_hostname == 'winterfell'

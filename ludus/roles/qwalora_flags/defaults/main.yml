@@ -1,0 +1,16 @@
+---
+# The per-ranger flags, injected from the portal's templateVars.ranger_flags.
+# A dict of objective id -> flag token, e.g. {"kerberoast": "QR5{...}", ...}.
+# Empty by default so the role is a no-op if nothing was passed.
+qwalora_flags: {}
+
+# Which board's objective -> location map to apply (5 = Raider, 6 = Vanguard).
+qwalora_flags_board: 5
+
+# Where "loot" flags that only need protected-filesystem placement go.
+qwalora_flags_dir: 'C:\ProgramData\ranger'
+
+# Principals used when a flag must be readable only by a specific account. These
+# match the GOAD-seeded accounts; align with your ludus_goad version if renamed.
+qwalora_svc_account: 'sql_svc'
+qwalora_asrep_account: 'brandon.stark'

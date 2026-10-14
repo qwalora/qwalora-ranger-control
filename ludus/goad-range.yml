@@ -1,0 +1,98 @@
+# Qwalora Ranger - Board 5 (Raider) range blueprint
+#
+# Game of Active Directory: the sevenkingdoms.local forest with its
+# north.sevenkingdoms.local child. One isolated copy per ranger. The portal
+# selects this blueprint when a ranger starts board 5 (template "goad") and
+# injects that ranger's per-seed flags as the variable `ranger_flags`, which the
+# qwalora.flags role plants. Everything stays on internal VLANs reachable only
+# through the ranger's own WireGuard; GOAD targets have no route to the internet.
+#
+# {{ range_id }} is substituted per Ludus user, so VM names never collide.
+# Apply with:  ludus range config set -f goad-range.yml   (as that ranger's user)
+
+ludus:
+  # --- sevenkingdoms.local (parent forest root) ---------------------------
+  - vm_name: "{{ range_id }}-kingslanding"
+    hostname: "kingslanding"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 6
+    cpus: 2
+    windows:
+      sysprep: false
+    domain:
+      fqdn: sevenkingdoms.local
+      role: primary-dc
+    roles:
+      - badsectorlabs.ludus_goad
+      - qwalora.flags
+    role_vars:
+      ludus_goad_lab: GOAD
+      ludus_goad_domain: sevenkingdoms.local
+      # ranger_flags is injected from the portal's templateVars at deploy time.
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 5
+
+  # --- north.sevenkingdoms.local (child domain) ---------------------------
+  - vm_name: "{{ range_id }}-winterfell"
+    hostname: "winterfell"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 6
+    cpus: 2
+    windows:
+      sysprep: false
+    domain:
+      fqdn: north.sevenkingdoms.local
+      role: primary-dc
+    roles:
+      - badsectorlabs.ludus_goad
+      - qwalora.flags
+    role_vars:
+      ludus_goad_lab: GOAD
+      ludus_goad_domain: north.sevenkingdoms.local
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 5
+
+  # --- castelblack (member server in the north) ---------------------------
+  - vm_name: "{{ range_id }}-castelblack"
+    hostname: "castelblack"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 22
+    ram_gb: 4
+    cpus: 2
+    windows:
+      sysprep: false
+    domain:
+      fqdn: north.sevenkingdoms.local
+      role: member
+    roles:
+      - badsectorlabs.ludus_goad
+      - qwalora.flags
+    role_vars:
+      ludus_goad_lab: GOAD
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 5
+
+  # --- the ranger's attack box (Kali), their entry into the range ---------
+  - vm_name: "{{ range_id }}-raider-kali"
+    hostname: "raider-kali"
+    template: kali-x64-template
+    vlan: 10
+    ip_last_octet: 99
+    ram_gb: 4
+    cpus: 2
+    linux: true
+
+# Network: VLAN 10 is internal. The ranger reaches it only via WireGuard; the
+# range has no egress. Ludus enforces this at the range firewall by default.
+network:
+  inter_vlan_default: REJECT
+  rules:
+    - name: "ranger wireguard to range"
+      vlan_src: wireguard
+      vlan_dst: 10
+      action: ACCEPT

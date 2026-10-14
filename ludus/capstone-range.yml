@@ -1,0 +1,111 @@
+# Qwalora Ranger - Board 6 (Vanguard) capstone range blueprint
+#
+# The full multi-forest estate: the sevenkingdoms.local forest (parent + north
+# child) plus a separate essos.local forest with a trust between them. One
+# isolated copy per ranger. Selected when a ranger starts board 6 (template
+# "goad-capstone"); the portal injects the ranger's board-6 flags as
+# `ranger_flags` for the qwalora.flags role to plant.
+#
+# Heavier than board 5 (two forests, five Windows hosts), so it draws more from
+# the host's range slots; size capacity accordingly.
+# Apply with:  ludus range config set -f capstone-range.yml   (as that ranger's user)
+
+ludus:
+  # --- sevenkingdoms.local (parent forest root) ---------------------------
+  - vm_name: "{{ range_id }}-kingslanding"
+    hostname: "kingslanding"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 6
+    cpus: 2
+    windows: { sysprep: false }
+    domain: { fqdn: sevenkingdoms.local, role: primary-dc }
+    roles: [badsectorlabs.ludus_goad, qwalora.flags]
+    role_vars:
+      ludus_goad_lab: GOAD
+      ludus_goad_domain: sevenkingdoms.local
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 6
+
+  # --- north.sevenkingdoms.local (child domain) ---------------------------
+  - vm_name: "{{ range_id }}-winterfell"
+    hostname: "winterfell"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 6
+    cpus: 2
+    windows: { sysprep: false }
+    domain: { fqdn: north.sevenkingdoms.local, role: primary-dc }
+    roles: [badsectorlabs.ludus_goad, qwalora.flags]
+    role_vars:
+      ludus_goad_lab: GOAD
+      ludus_goad_domain: north.sevenkingdoms.local
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 6
+
+  # --- castelblack (member server, north) ---------------------------------
+  - vm_name: "{{ range_id }}-castelblack"
+    hostname: "castelblack"
+    template: win2019-server-x64-template
+    vlan: 10
+    ip_last_octet: 22
+    ram_gb: 4
+    cpus: 2
+    windows: { sysprep: false }
+    domain: { fqdn: north.sevenkingdoms.local, role: member }
+    roles: [badsectorlabs.ludus_goad, qwalora.flags]
+    role_vars: { ludus_goad_lab: GOAD, qwalora_flags: "{{ ranger_flags | default({}) }}", qwalora_flags_board: 6 }
+
+  # --- essos.local (second forest, reached across the trust) --------------
+  - vm_name: "{{ range_id }}-braavos"
+    hostname: "braavos"
+    template: win2019-server-x64-template
+    vlan: 20
+    ip_last_octet: 10
+    ram_gb: 6
+    cpus: 2
+    windows: { sysprep: false }
+    domain: { fqdn: essos.local, role: primary-dc }
+    roles: [badsectorlabs.ludus_goad, qwalora.flags]
+    role_vars:
+      ludus_goad_lab: GOAD
+      ludus_goad_domain: essos.local
+      # The forest trust sevenkingdoms.local <-> essos.local is configured by the
+      # GOAD role; it is the path the ranger abuses in the cross_forest objective.
+      qwalora_flags: "{{ ranger_flags | default({}) }}"
+      qwalora_flags_board: 6
+
+  # --- meereen (member server, essos) -------------------------------------
+  - vm_name: "{{ range_id }}-meereen"
+    hostname: "meereen"
+    template: win2019-server-x64-template
+    vlan: 20
+    ip_last_octet: 22
+    ram_gb: 4
+    cpus: 2
+    windows: { sysprep: false }
+    domain: { fqdn: essos.local, role: member }
+    roles: [badsectorlabs.ludus_goad, qwalora.flags]
+    role_vars: { ludus_goad_lab: GOAD, qwalora_flags: "{{ ranger_flags | default({}) }}", qwalora_flags_board: 6 }
+
+  # --- the ranger's attack box --------------------------------------------
+  - vm_name: "{{ range_id }}-vanguard-kali"
+    hostname: "vanguard-kali"
+    template: kali-x64-template
+    vlan: 10
+    ip_last_octet: 99
+    ram_gb: 4
+    cpus: 2
+    linux: true
+
+# Both forests sit on internal VLANs (10 and 20) with the trust between them.
+# Only the ranger's WireGuard reaches in; neither forest has internet egress.
+network:
+  inter_vlan_default: REJECT
+  rules:
+    - { name: "wireguard to sevenkingdoms", vlan_src: wireguard, vlan_dst: 10, action: ACCEPT }
+    - { name: "wireguard to essos",         vlan_src: wireguard, vlan_dst: 20, action: ACCEPT }
+    # The forest trust path the ranger must abuse:
+    - { name: "sevenkingdoms to essos (trust)", vlan_src: 10, vlan_dst: 20, action: ACCEPT }
