@@ -138,8 +138,10 @@ a{color:inherit;text-decoration:none}
 
 /* ---------- auth pages (white form on a violet field) ---------- */
 .page{min-height:100%;display:flex;flex-direction:column;background:
-  radial-gradient(820px 460px at 50% -8%, #7b72f2, transparent 60%),
-  linear-gradient(165deg, #5b50e6 0%, #4234bf 100%);background-attachment:fixed}
+  radial-gradient(50% 120% at 18% 8%, rgba(249,103,2,.12), transparent 60%),
+  radial-gradient(60% 130% at 92% 92%, rgba(91,80,230,.30), transparent 55%),
+  radial-gradient(50% 100% at 60% 120%, rgba(91,80,230,.20), transparent 60%),
+  #140c3c;background-attachment:fixed}
 .anav{background:#fff;box-shadow:0 1px 0 rgba(22,13,66,.06)}
 .anav-in{max-width:1000px;margin:0 auto;padding:0 24px;height:68px;display:flex;align-items:center;justify-content:space-between}
 .anav-link{font-size:13.5px;font-weight:500;color:var(--violet)}
