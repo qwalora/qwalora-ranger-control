@@ -38,6 +38,28 @@ The ACLs are enforced with `win_acl` + `win_acl_inheritance` so a flag that is
 "restricted to X" really is readable only by X. A ranger who lands the account
 or privilege reads it; anyone else gets access denied.
 
+## Matching your GOAD version (the one thing that breaks)
+
+The role ACL-locks some flags to named GOAD accounts (`sql_svc`,
+`brandon.stark`). If your installed `badsectorlabs.ludus_goad` version seeds
+different names, those flags would be planted unreadable. Three guards make that
+fail loud instead of silent:
+
+- **Preflight** (`qwalora_flags_preflight`, default on): on a DC, every
+  referenced account is resolved with `Get-ADUser` before anything is planted.
+  A missing name stops the run with the exact fix (set `qwalora_svc_account` /
+  `qwalora_asrep_account` and redeploy). The loot directory is also checked
+  writable.
+- **Readback** (`qwalora_flags_verify`, default on): after planting, the
+  ACL-restricted flags are `win_stat`-ed and the run fails if any did not land.
+- **Dry-check**: run `ludus/validate-flags.yml` against a freshly built template
+  before enrolling rangers. It runs only the preflight (no planting), so a
+  version mismatch surfaces up front. Override names with
+  `-e qwalora_svc_account=... -e qwalora_asrep_account=...`.
+
+Set the names (and `qwalora_goad_variant`) as role vars to match your GOAD
+build; the defaults target the stock `GOAD` variant.
+
 ## Why planting, not checking
 
 The role never verifies or reports anything back. The portal is the sole grader:

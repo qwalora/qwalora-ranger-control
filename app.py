@@ -40,6 +40,15 @@ from models import (Badge, BoardResult, Candidate, Cohort, RangeRequest, Report,
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_RANGES", "2"))
+# Background maintenance: poll deploying ranges, reconcile the queue, reclaim
+# ranges. Enable on the server (ENABLE_SCHEDULER=1); off by default so imports
+# and tests don't spin a thread.
+ENABLE_SCHEDULER = os.environ.get("ENABLE_SCHEDULER", "0") == "1"
+RECONCILE_INTERVAL = int(os.environ.get("RECONCILE_INTERVAL_SECONDS", "60"))
+# Reclaim isolated ranges past a hard age cap, or idle (no candidate touch) too
+# long, so a stalled ranger never permanently holds a slot. 0 disables either.
+RANGE_MAX_AGE_HOURS = float(os.environ.get("RANGE_MAX_AGE_HOURS", "48"))
+RANGE_IDLE_HOURS = float(os.environ.get("RANGE_IDLE_HOURS", "8"))
 
 
 def _bootstrap_cohorts():
@@ -394,9 +403,13 @@ def create_app():
             rr.ludus_range_id = range_id
         rr.wireguard_config = broker.wireguard_config(c, user_key=key)
         st, sdetail = broker.range_status(c, user_key=key)
+        now = _dt.datetime.now(_dt.timezone.utc)
         rr.status = st
         rr.detail = f"{detail}; {sdetail}"
-        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        rr.last_checked_at = now
+        rr.last_active_at = now  # starting the lab is activity
+        if st == "deployed":
+            rr.deployed_at = rr.deployed_at or now
         return rr.status
 
     def _provision_for_board(c, n, auto_deploy=True):
@@ -437,6 +450,98 @@ def create_app():
             c = Candidate.query.get(rr.candidate_id)
             _try_deploy(c, rr)
             promoted += 1
+        db.session.commit()
+        return promoted
+
+    def _touch(c, n=None):
+        """Mark the candidate's range for board n (default: current) as just
+        used, so idle reclamation leaves an in-use range alone."""
+        rr = _board_range(c, n if n is not None else c.current_board)
+        if rr is not None:
+            rr.last_active_at = _dt.datetime.now(_dt.timezone.utc)
+
+    def _known_hosts():
+        hosts = {h for (h,) in db.session.query(RangeRequest.host).distinct().all()
+                 if h and h != "shared"}
+        hosts.add("primary")
+        return hosts
+
+    def _poll_deploying():
+        """Refresh the status of ranges mid-flight (deploying), so the dashboard
+        advances without a human clicking Refresh. Returns how many changed."""
+        changed = 0
+        rows = RangeRequest.query.filter(RangeRequest.status == "deploying").all()
+        for rr in rows:
+            c = Candidate.query.get(rr.candidate_id)
+            if not c:
+                continue
+            now = _dt.datetime.now(_dt.timezone.utc)
+            try:
+                st, sdetail = broker.range_status(c, user_key=_candidate_key(c))
+            except Exception:  # noqa: BLE001
+                continue
+            rr.last_checked_at = now
+            if st != rr.status:
+                rr.status = st
+                rr.detail = sdetail
+                changed += 1
+            if st == "deployed" and not rr.deployed_at:
+                rr.deployed_at = now
+                if not rr.wireguard_config:
+                    try:
+                        rr.wireguard_config = broker.wireguard_config(c, user_key=_candidate_key(c))
+                    except Exception:  # noqa: BLE001
+                        pass
+        return changed
+
+    def _expire_ranges():
+        """Reclaim isolated ranges that are past the hard age cap or have been
+        idle too long, so a stalled ranger never permanently clogs a slot. Board
+        progress is untouched; the ranger just redeploys when they return."""
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+        def _aware(d):  # SQLite drops tzinfo; treat stored times as UTC
+            if d is not None and d.tzinfo is None:
+                return d.replace(tzinfo=_dt.timezone.utc)
+            return d
+
+        reclaimed = []
+        rows = RangeRequest.query.filter(RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT)).all()
+        for rr in rows:
+            if rr.host == "shared":
+                continue
+            base_age = _aware(rr.deployed_at or rr.created_at)
+            base_idle = _aware(rr.last_active_at or rr.deployed_at or rr.created_at)
+            age_h = (now - base_age).total_seconds() / 3600.0 if base_age else 0
+            idle_h = (now - base_idle).total_seconds() / 3600.0 if base_idle else 0
+            reason = None
+            if RANGE_MAX_AGE_HOURS and age_h >= RANGE_MAX_AGE_HOURS:
+                reason = f"reclaimed: reached max age {RANGE_MAX_AGE_HOURS:g}h"
+            elif RANGE_IDLE_HOURS and idle_h >= RANGE_IDLE_HOURS:
+                reason = f"reclaimed: idle {RANGE_IDLE_HOURS:g}h"
+            if not reason:
+                continue
+            c = Candidate.query.get(rr.candidate_id)
+            try:
+                if c:
+                    broker.destroy_range(c, user_key=_candidate_key(c))
+            except Exception:  # noqa: BLE001
+                pass
+            rr.status = "destroyed"
+            rr.detail = reason
+            reclaimed.append(rr.host or "primary")
+        return reclaimed
+
+    def _maintenance():
+        """One pass: advance in-flight deploys, reclaim stale ranges, then fill
+        freed slots from the queue. Used by the scheduler and the admin button."""
+        _poll_deploying()
+        freed = _expire_ranges()
+        db.session.flush()
+        hosts = set(_known_hosts()) | set(freed)
+        promoted = 0
+        for h in hosts:
+            promoted += _reconcile(h)
         db.session.commit()
         return promoted
 
@@ -684,6 +789,7 @@ def create_app():
             return jsonify(error=f"candidate is {c.status}"), 409
         n = c.current_board
         rr = _provision_for_board(c, n, auto_deploy=True)
+        _touch(c, n)
         db.session.commit()
         return jsonify(ok=True, handle=c.handle, board=n, role=c.current_role,
                        tier=P.tier_of(n), range_status=rr.status,
@@ -704,9 +810,13 @@ def create_app():
         if P.is_isolated(n) and rr.status in ("deploying", "deployed"):
             key = _candidate_key(c)
             st, sdetail = broker.range_status(c, user_key=key)
+            now = _dt.datetime.now(_dt.timezone.utc)
             rr.status, rr.detail = st, sdetail
-            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
-            db.session.commit()
+            rr.last_checked_at = now
+            if st == "deployed" and not rr.deployed_at:
+                rr.deployed_at = now
+        _touch(c, n)
+        db.session.commit()
         return jsonify(ok=True, handle=c.handle, board=n, tier=P.tier_of(n),
                        range_status=rr.status, range_id=rr.ludus_range_id,
                        scenario_seed=_current_seed(c), detail=rr.detail,
@@ -789,8 +899,9 @@ def create_app():
         seed = _current_seed(c)
         if not seed:
             _ensure_seed(c, n)
-            db.session.commit()
             seed = _current_seed(c)
+        _touch(c, n)
+        db.session.commit()
         return jsonify(ok=True, board=n, seed=seed, kind=scenarios.kind(n),
                        dataset=scenarios.dataset(n, seed)), 200
 
@@ -820,6 +931,7 @@ def create_app():
         seed = _current_seed(c)
         score, per_alert = scenarios.grade(n, seed, submission)
         _record_objective(c, n, score)
+        _touch(c, n)
         promoted = _evaluate_gate(c)
         db.session.commit()
         return jsonify(ok=True, board=n, kind=scenarios.kind(n),
@@ -1232,11 +1344,12 @@ def create_app():
     @app.post("/admin/reconcile")
     @admin_required
     def admin_reconcile():
-        host = request.form.get("host") or request.args.get("host") or "primary"
-        promoted = _reconcile(host)
+        # Full maintenance pass (same as the background worker): advance
+        # in-flight deploys, reclaim stale ranges, fill freed slots.
+        promoted = _maintenance()
         if _wants_json():
-            return jsonify(ok=True, host=host, deployed_from_queue=promoted,
-                           slots_used=_slots_used(host), cap=MAX_CONCURRENT)
+            return jsonify(ok=True, deployed_from_queue=promoted,
+                           slots_used=_slots_used("primary"), cap=MAX_CONCURRENT)
         return redirect(url_for("admin_ranges"))
 
     @app.post("/admin/candidates/<int:cid>/exit")
@@ -1439,6 +1552,9 @@ def create_app():
             if githuboauth.enabled():
                 return redirect(url_for("gh_login"))
             abort(401)
+        if c.is_active:
+            _touch(c)
+            db.session.commit()
         return render_template("candidate_me.html", vm=_me_vm(c))
 
     @app.post("/me/start")
@@ -1448,6 +1564,7 @@ def create_app():
             abort(401)
         if c.is_active:
             _provision_for_board(c, c.current_board, auto_deploy=True)
+            _touch(c)
             db.session.commit()
         return redirect(url_for("candidate_me"))
 
@@ -1459,6 +1576,8 @@ def create_app():
         rr = _board_range(c, c.current_board)
         if not rr or not rr.wireguard_config:
             abort(404)
+        rr.last_active_at = _dt.datetime.now(_dt.timezone.utc)
+        db.session.commit()
         from flask import Response
         return Response(rr.wireguard_config, mimetype="text/plain",
                         headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
@@ -1479,6 +1598,53 @@ def create_app():
              "status": o.status, "current": o.id == c.id} for o in roster]
         vm["preview_cohort"] = c.cohort
         return render_template("candidate_me.html", vm=vm)
+
+    # --- background maintenance scheduler -----------------------------------
+    _LOCK_KEY = 913572  # arbitrary, stable advisory-lock id
+
+    def _single_run_lock():
+        """On Postgres, only one worker runs a tick: grab a session advisory
+        lock, skip the tick if another worker holds it. SQLite/local has no
+        cross-process workers, so always run."""
+        try:
+            if db.engine.dialect.name == "postgresql":
+                return bool(db.session.execute(
+                    db.text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar())
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+            return False
+        return True
+
+    def _single_run_unlock():
+        try:
+            if db.engine.dialect.name == "postgresql":
+                db.session.execute(db.text("SELECT pg_advisory_unlock(:k)"), {"k": _LOCK_KEY})
+                db.session.commit()
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+
+    def _scheduler_tick():
+        with app.app_context():
+            if not _single_run_lock():
+                return
+            try:
+                _maintenance()
+            except Exception:  # noqa: BLE001
+                db.session.rollback()
+            finally:
+                _single_run_unlock()
+
+    if ENABLE_SCHEDULER:
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            _sched = BackgroundScheduler(daemon=True, timezone="UTC")
+            _sched.add_job(_scheduler_tick, "interval", seconds=RECONCILE_INTERVAL,
+                           id="qwalora_maintenance", max_instances=1, coalesce=True,
+                           next_run_time=_dt.datetime.now(_dt.timezone.utc))
+            _sched.start()
+            app.logger.info("maintenance scheduler started, every %ss", RECONCILE_INTERVAL)
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("maintenance scheduler not started: %s", e)
 
     return app
 

@@ -1,0 +1,23 @@
+---
+# Dry-check a GOAD range for flag planting WITHOUT planting anything: confirms
+# the loot directory is writable and the referenced accounts resolve in AD for
+# the installed ludus_goad version. Run this once against a freshly built
+# template before you enroll rangers, so a GOAD-version account-name mismatch
+# surfaces here, not as silently unreadable flags in a live range.
+#
+#   ludus ansible playbook run -f validate-flags.yml       # as the range's user
+#
+# Override the account names if your GOAD variant differs:
+#   -e qwalora_svc_account=mssql_svc -e qwalora_asrep_account=jon.snow
+
+- name: Validate Qwalora flag planting (no changes)
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Run flag role in validate-only mode
+      ansible.builtin.include_role:
+        name: qwalora.flags
+      vars:
+        qwalora_flags: { probe: "VALIDATE" }   # satisfies the non-empty check
+        qwalora_flags_validate_only: true
+      when: ansible_os_family == "Windows"

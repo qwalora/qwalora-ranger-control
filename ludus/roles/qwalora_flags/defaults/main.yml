@@ -10,7 +10,26 @@ qwalora_flags_board: 5
 # Where "loot" flags that only need protected-filesystem placement go.
 qwalora_flags_dir: 'C:\ProgramData\ranger'
 
+# The GOAD lab variant these account names belong to. Bump/adjust the accounts
+# below if your installed badsectorlabs.ludus_goad version seeds different names.
+qwalora_goad_variant: 'GOAD'
+
 # Principals used when a flag must be readable only by a specific account. These
 # match the GOAD-seeded accounts; align with your ludus_goad version if renamed.
 qwalora_svc_account: 'sql_svc'
 qwalora_asrep_account: 'brandon.stark'
+
+# Preflight: before planting, assert the referenced accounts actually resolve in
+# AD, so a GOAD-version name mismatch fails LOUD on a DC instead of silently
+# planting an unreadable flag. Set false to skip (e.g. an air-gapped re-run).
+qwalora_flags_preflight: true
+
+# Readback: after planting an ACL-restricted flag, stat it to confirm it landed.
+qwalora_flags_verify: true
+
+# Validate-only: run preflight (account/dir checks) and stop WITHOUT planting.
+# The validate-flags.yml playbook sets this to dry-check a template.
+qwalora_flags_validate_only: false
+
+# Short hostnames that are domain controllers (where AD queries can run).
+qwalora_dc_hostnames: [kingslanding, winterfell, braavos]

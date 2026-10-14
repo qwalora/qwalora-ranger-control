@@ -52,6 +52,29 @@ With `LUDUS_API_URL` unset the broker stays in mock mode: the full
 enroll → promote → deploy → WireGuard pipeline runs and is gradeable, no
 hardware required. That is how boards 1-6 were built and tested.
 
+Turn on the background maintenance worker so ranges advance and reclaim
+themselves without anyone clicking Refresh:
+
+```
+ENABLE_SCHEDULER=1               # run the periodic maintenance tick
+RECONCILE_INTERVAL_SECONDS=60    # how often (default 60)
+RANGE_MAX_AGE_HOURS=48           # hard cap: reclaim a range this old
+RANGE_IDLE_HOURS=8               # reclaim a range idle (no ranger touch) this long
+```
+
+The worker polls deploying ranges to completion, reclaims stale ranges to free
+slots, and promotes queued ranges into them. Reclaiming destroys only the VMs;
+the ranger's board progress and seed are untouched, so they just Start lab again
+when they return. On multiple gunicorn workers a Postgres advisory lock keeps
+exactly one tick running at a time.
+
+Before enrolling rangers against a freshly built template, dry-check it so a
+GOAD account-name mismatch fails up front instead of planting unreadable flags:
+
+```
+ludus ansible playbook run -f validate-flags.yml   # as a range user; see that file
+```
+
 ## Per-ranger provisioning and capacity
 
 A range is per-ranger, so a cohort of N rangers on the red boards needs N ranges.

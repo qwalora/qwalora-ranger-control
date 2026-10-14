@@ -1,0 +1,49 @@
+---
+# Fail loud, before any flag is planted, if the inputs are wrong. The common
+# failure is a GOAD-version account-name mismatch, which would otherwise plant a
+# flag ACL-locked to a non-existent account and leave it unreadable (a free lost
+# point for every ranger). Catch it here instead.
+
+- name: "preflight - ranger_flags must be a non-empty map"
+  ansible.builtin.assert:
+    that:
+      - qwalora_flags is mapping
+      - qwalora_flags | length > 0
+    fail_msg: >-
+      qwalora_flags is empty. The portal passes it as templateVars.ranger_flags
+      at deploy time; nothing to plant without it.
+    success_msg: "{{ qwalora_flags | length }} flags handed to the range."
+
+- name: "preflight - the loot directory is writable"
+  ansible.windows.win_file:
+    path: "{{ qwalora_flags_dir }}"
+    state: directory
+
+# Resolve the named accounts on a DC, where the AD module is available. If a
+# name does not resolve, stop with the exact remediation.
+- name: "preflight - referenced accounts resolve in AD (on a DC)"
+  when: ansible_hostname in qwalora_dc_hostnames
+  block:
+    - name: "preflight - query each referenced account"
+      ansible.windows.win_shell: >-
+        Get-ADUser -Identity '{{ item }}' -ErrorAction Stop | Out-Null
+      loop:
+        - "{{ qwalora_svc_account }}"
+        - "{{ qwalora_asrep_account }}"
+      register: _qf_accts
+      changed_when: false
+      failed_when: false
+
+    - name: "preflight - fail if any referenced account is missing"
+      ansible.builtin.assert:
+        that: "item.rc == 0"
+        fail_msg: >-
+          Account '{{ item.item }}' does not resolve in AD for GOAD variant
+          '{{ qwalora_goad_variant }}'. Your badsectorlabs.ludus_goad version
+          likely seeds different names. Set qwalora_svc_account /
+          qwalora_asrep_account (role vars) to the real account names and
+          redeploy. Flags were NOT planted.
+        success_msg: "Account '{{ item.item }}' resolves."
+      loop: "{{ _qf_accts.results }}"
+      loop_control:
+        label: "{{ item.item }}"

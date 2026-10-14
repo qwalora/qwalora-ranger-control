@@ -9,6 +9,16 @@
 # This role runs AFTER badsectorlabs.ludus_goad, so the domain, accounts, SPNs
 # and shares already exist.
 
+- name: Preflight checks (accounts resolve, loot dir writable)
+  ansible.builtin.import_tasks: preflight.yml
+  when:
+    - qwalora_flags | length > 0
+    - qwalora_flags_preflight | bool
+
+- name: Stop here when only validating (no planting)
+  ansible.builtin.meta: end_host
+  when: qwalora_flags_validate_only | bool
+
 - name: Ensure the loot directory exists
   ansible.windows.win_file:
     path: "{{ qwalora_flags_dir }}"
@@ -135,6 +145,38 @@
   when:
     - qwalora_flags.dcsync is defined
     - ansible_hostname == 'kingslanding'
+
+# --- readback: confirm the ACL-restricted flags actually landed -------------
+# These are the placements most likely to misconfigure (wrong account, broken
+# inheritance). Stat them after planting and fail if a file is missing, so a
+# bad range never ships silently.
+- name: "verify - the restricted flags exist on disk"
+  ansible.windows.win_stat:
+    path: "{{ qwalora_flags_dir }}\\{{ item.file }}"
+  register: _qf_stat
+  when:
+    - qwalora_flags_verify | bool
+    - item.flag in qwalora_flags
+    - ansible_hostname == item.host
+  loop:
+    - { flag: asreproast, file: 'asrep.flag',   host: winterfell }
+    - { flag: kerberoast, file: 'svc.flag',     host: winterfell }
+    - { flag: roast_forest, file: 'roast.flag', host: winterfell }
+    - { flag: credaccess, file: 'creds.flag',   host: castelblack }
+  loop_control:
+    label: "{{ item.file }} on {{ item.host }}"
+
+- name: "verify - fail if a restricted flag did not land"
+  ansible.builtin.assert:
+    that: "item.stat.exists | default(false)"
+    fail_msg: "Flag file {{ item.item.file }} is missing on {{ item.item.host }} after planting."
+    success_msg: "{{ item.item.file }} present."
+  when:
+    - qwalora_flags_verify | bool
+    - not (item.skipped | default(false))
+  loop: "{{ _qf_stat.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.file | default('-') }}"
 
 # --- board 6 adds cross-domain / cross-forest objectives --------------------
 # These keys are present only when the portal passed board-6 flags.

@@ -52,6 +52,8 @@ def ensure_schema(db):
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
             ("last_checked_at", "TIMESTAMP"),
+            ("deployed_at", "TIMESTAMP"),
+            ("last_active_at", "TIMESTAMP"),
             ("board", "INTEGER"),
             ("host", "VARCHAR(60) DEFAULT 'primary'"),
         ],
@@ -157,6 +159,8 @@ class RangeRequest(db.Model):
     detail = db.Column(db.Text, nullable=True)         # broker message / error
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     last_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)  # last status poll
+    deployed_at = db.Column(db.DateTime(timezone=True), nullable=True)      # when it went deployed (TTL base)
+    last_active_at = db.Column(db.DateTime(timezone=True), nullable=True)   # last candidate touch (idle base)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
     ACTIVE = ("configured", "queued_slot", "deploying", "deployed")
