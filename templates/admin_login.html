@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import sitenav, sitefooter %}
+{% from "_brand.html" import authnav, authfoot %}
 {% block title %}Reviewer sign-in · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="page">
-{{ sitenav() }}
+{{ authnav('Enroll a ranger', '/enroll') }}
 <div class="page-main">
   <div class="card" style="max-width:400px">
     <div class="card-head">
@@ -25,6 +25,6 @@
     </div>
   </div>
 </div>
-{{ sitefooter() }}
+{{ authfoot() }}
 </div>
 {% endblock %}

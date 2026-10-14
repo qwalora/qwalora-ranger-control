@@ -101,9 +101,12 @@ def create_app():
         return wrapper
 
     # --- public --------------------------------------------------------------
+    ranger_site = os.environ.get("RANGER_SITE_URL", "https://ranger.qwalora.com")
+
     @app.get("/")
     def index():
-        return render_template("index.html", cohort=DEFAULT_COHORT)
+        # The portal has no landing of its own; it hosts auth + the signed-in app.
+        return redirect(ranger_site, code=302)
 
     @app.get("/healthz")
     def healthz():

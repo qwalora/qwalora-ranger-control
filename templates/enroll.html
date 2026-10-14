@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% from "_brand.html" import sitenav, sitefooter %}
+{% from "_brand.html" import authnav, authfoot %}
 {% block title %}Enroll · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="page">
-{{ sitenav() }}
+{{ authnav('Reviewer sign-in', '/admin/login') }}
 <div class="page-main">
   <div class="card">
     <div class="card-head">
@@ -35,6 +35,6 @@
     </div>
   </div>
 </div>
-{{ sitefooter() }}
+{{ authfoot() }}
 </div>
 {% endblock %}

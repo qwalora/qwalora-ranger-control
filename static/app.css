@@ -137,6 +137,12 @@ a{color:inherit;text-decoration:none}
 .av-ring{box-shadow:0 0 0 2px #fff}
 
 /* ---------- auth pages (light) ---------- */
+.anav{background:var(--light);border-bottom:1px solid var(--line)}
+.anav-in{max-width:1000px;margin:0 auto;padding:0 24px;height:68px;display:flex;align-items:center;justify-content:space-between}
+.anav-link{font-size:13.5px;font-weight:500;color:var(--violet)}
+.anav-link:hover{color:var(--violet-700)}
+.afoot{padding:22px 24px;text-align:center;border-top:1px solid var(--line);background:var(--light)}
+.afoot .mono{font-size:12px;color:var(--dim)}
 .page{min-height:100%;display:flex;flex-direction:column}
 .page-main{flex:1;display:flex;align-items:center;justify-content:center;padding:48px 20px;background:
   radial-gradient(700px 360px at 50% -10%, #ece9ff88, transparent 60%), var(--light)}

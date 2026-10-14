@@ -9,36 +9,13 @@
 </svg>
 {%- endmacro -%}
 
-{%- macro sitenav(active='') -%}
-<header class="snav">
-  <div class="snav-in">
-    <a class="snav-brand" href="/">{{ qlogo('dark',30) }}<b>QWALORA <span>Ranger</span></b></a>
-    <nav class="snav-links">
-      <a href="/#proof">Proof</a><a href="/#roles">Roles</a><a href="/#how">How it works</a>
-      <a href="/admin">Reviewer sign-in</a>
-    </nav>
-    <a class="btn btn-primary btn-pill" href="/enroll">Enroll a ranger</a>
-  </div>
-</header>
+{%- macro authnav(other_label='', other_href='') -%}
+<header class="anav"><div class="anav-in">
+  <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+  {% if other_label %}<a class="anav-link" href="{{ other_href }}">{{ other_label }}</a>{% endif %}
+</div></header>
 {%- endmacro -%}
 
-{%- macro sitefooter() -%}
-<footer class="sfoot">
-  <div class="sfoot-in">
-    <div class="sfoot-top">
-      <div class="sfoot-brand">
-        <a class="snav-brand" href="/">{{ qlogo('light',30) }}<b style="color:#fff">QWALORA</b></a>
-        <p>A verifiable cyber range for defenders and operators. Program-measured,
-          cryptographically signed, mapped to the standards your auditors already use.</p>
-      </div>
-      <div class="sfoot-col"><h4>Program</h4><a href="/">Why Qwalora</a><a href="/#how">How it works</a><a href="/#proof">Live proof</a><a href="/enroll">Submission model</a></div>
-      <div class="sfoot-col"><h4>Rangers</h4><a href="/enroll">Enroll a ranger</a><a href="/admin">Reviewer sign-in</a><a href="/#roles">Roles</a></div>
-      <div class="sfoot-col"><h4>Control plane</h4><a href="/healthz">Status</a><a href="/#proof">Signed records</a></div>
-    </div>
-    <div class="sfoot-bottom">
-      <span class="mono">Qwalora Ranger · Cohort 2026-A</span>
-      <span class="mono">Loopback-only labs · no AI for candidates · Ed25519-signed</span>
-    </div>
-  </div>
-</footer>
+{%- macro authfoot() -%}
+<footer class="afoot"><span class="mono">Qwalora Ranger · Cohort 2026-A · Loopback-only labs · no AI for candidates · Ed25519-signed</span></footer>
 {%- endmacro -%}

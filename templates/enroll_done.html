@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% from "_brand.html" import sitenav, sitefooter %}
+{% from "_brand.html" import authnav, authfoot %}
 {% block title %}Enrolled · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="page">
-{{ sitenav() }}
+{{ authnav('Reviewer sign-in', '/admin/login') }}
 <div class="page-main">
   <div class="card">
     <div class="card-head">
@@ -27,10 +27,10 @@
       </div>
       <p class="lead" style="font-size:13px">Next: fork the lab template, work the four roles per board, and open
         one pull request per day. The program grades your repo at cohort sync and publishes a signed result you can verify yourself.</p>
-      <a class="btn btn-ghost" href="/" style="align-self:flex-start">Back to overview</a>
+      <a class="btn btn-ghost" href="https://ranger.qwalora.com" style="align-self:flex-start">Back to the range</a>
     </div>
   </div>
 </div>
-{{ sitefooter() }}
+{{ authfoot() }}
 </div>
 {% endblock %}
