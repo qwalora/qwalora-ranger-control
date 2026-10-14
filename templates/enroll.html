@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% from "_icons.html" import ic %}
+{% from "_brand.html" import sitenav, sitefooter %}
 {% block title %}Enroll · Qwalora Ranger{% endblock %}
-{% block bodyclass %}{% endblock %}
 {% block body %}
-<div class="stage">
-  <div class="auth">
-    <div class="auth-head">
-      <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
+<div class="page">
+{{ sitenav() }}
+<div class="page-main">
+  <div class="card">
+    <div class="card-head">
+      <span class="eyebrow"><span class="d"></span>Cohort {{ cohort }}</span>
       <h1 class="t">Enroll a ranger</h1>
-      <p class="lead">Cohort <span class="mono" style="color:var(--violet-700)">{{ cohort }}</span>.
-        You receive a submission token and a queued range on completion.</p>
+      <p class="lead">You receive a submission token and a queued range on completion.</p>
     </div>
-    <div class="auth-body">
+    <div class="card-body">
       {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
       <form method="post" action="/enroll" style="display:flex;flex-direction:column;gap:16px">
         <div class="field">
@@ -23,14 +23,10 @@
           <input class="input" name="name" required placeholder="Franck Kengne">
         </div>
         <div class="rowline">
-          <div class="field">
-            <label class="label">Email</label>
-            <input class="input" type="email" name="email" required placeholder="you@qwalora.com">
-          </div>
-          <div class="field">
-            <label class="label">Fork repo <span class="dim">· optional</span></label>
-            <input class="input mono" name="repo" placeholder="qwalora/handle">
-          </div>
+          <div class="field"><label class="label">Email</label>
+            <input class="input" type="email" name="email" required placeholder="you@qwalora.com"></div>
+          <div class="field"><label class="label">Fork repo <span class="dim">· optional</span></label>
+            <input class="input mono" name="repo" placeholder="qwalora/handle"></div>
         </div>
         <input type="hidden" name="cohort" value="{{ cohort }}">
         <button class="btn btn-primary btn-block">Enroll ranger</button>
@@ -38,5 +34,7 @@
       <p class="foothint">Objective scoring is answer-free and program-side. Nothing here contains the answers.</p>
     </div>
   </div>
+</div>
+{{ sitefooter() }}
 </div>
 {% endblock %}

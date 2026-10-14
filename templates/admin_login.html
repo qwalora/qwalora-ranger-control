@@ -1,15 +1,18 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
+{% from "_brand.html" import sitenav, sitefooter %}
 {% block title %}Reviewer sign-in · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="stage">
-  <div class="auth" style="max-width:400px">
-    <div class="auth-head">
-      <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
+<div class="page">
+{{ sitenav() }}
+<div class="page-main">
+  <div class="card" style="max-width:400px">
+    <div class="card-head">
+      <span class="eyebrow"><span class="d"></span>Control plane</span>
       <h1 class="t">Reviewer sign-in</h1>
-      <p class="lead">Enter the control-plane admin token to open the grading queue.</p>
+      <p class="lead">Enter the admin token to open the grading queue.</p>
     </div>
-    <div class="auth-body">
+    <div class="card-body">
       {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
       <form method="post" action="/admin/login" style="display:flex;flex-direction:column;gap:16px">
         <div class="field">
@@ -21,5 +24,7 @@
       </form>
     </div>
   </div>
+</div>
+{{ sitefooter() }}
 </div>
 {% endblock %}

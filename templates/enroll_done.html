@@ -1,15 +1,16 @@
 {% extends "base.html" %}
-{% from "_icons.html" import ic %}
+{% from "_brand.html" import sitenav, sitefooter %}
 {% block title %}Enrolled · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="stage">
-  <div class="auth">
-    <div class="auth-head">
-      <a class="brand" href="/"><span class="mark">{{ ic('shield') }}</span><b>Qwalora Ranger</b></a>
-      <p class="eyebrow" style="margin-top:14px">Enrolled · cohort {{ candidate.cohort }}</p>
-      <h1 class="t">{{ candidate.name }} <span class="mono dim" style="font-size:16px">@{{ candidate.handle }}</span></h1>
+<div class="page">
+{{ sitenav() }}
+<div class="page-main">
+  <div class="card">
+    <div class="card-head">
+      <span class="eyebrow"><span class="d"></span>Enrolled · cohort {{ candidate.cohort }}</span>
+      <h1 class="t">{{ candidate.name }} <span class="mono dim" style="font-size:16px;font-weight:400">@{{ candidate.handle }}</span></h1>
     </div>
-    <div class="auth-body" style="display:flex;flex-direction:column;gap:14px">
+    <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
       <div class="field">
         <label class="label">Submission token</label>
         <div class="tokenbox"><code>{{ candidate.token }}</code></div>
@@ -24,11 +25,12 @@
           <span class="muted" style="font-size:12.5px">{{ range_detail }}</span>
         </div>
       </div>
-      <p class="lead" style="font-size:13px">Next: fork the lab template, work the four roles per board, and open one
-        pull request per day. The program grades your repo at cohort sync and publishes a signed result
-        you can verify yourself.</p>
+      <p class="lead" style="font-size:13px">Next: fork the lab template, work the four roles per board, and open
+        one pull request per day. The program grades your repo at cohort sync and publishes a signed result you can verify yourself.</p>
       <a class="btn btn-ghost" href="/" style="align-self:flex-start">Back to overview</a>
     </div>
   </div>
+</div>
+{{ sitefooter() }}
 </div>
 {% endblock %}

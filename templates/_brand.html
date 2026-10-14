@@ -1,0 +1,44 @@
+{%- set QRING = "M62 2C54.1207 2 46.3185 3.55195 39.039 6.56723C31.7595 9.58251 25.1451 14.0021 19.5736 19.5736C14.0021 25.1451 9.58251 31.7595 6.56723 39.039C3.55195 46.3185 2 54.1207 2 62C2 69.8793 3.55195 77.6815 6.56723 84.961C9.58251 92.2405 14.0021 98.8549 19.5736 104.426C25.1451 109.998 31.7595 114.417 39.039 117.433C46.3185 120.448 54.1207 122 62 122C77.913 122 93.1742 115.679 104.426 104.426C115.679 93.1742 122 77.913 122 62C122 46.087 115.679 30.8258 104.426 19.5736C93.1742 8.32141 77.913 2 62 2ZM62 35C69.1608 35 76.0284 37.8446 81.0919 42.9081C86.1554 47.9716 89 54.8392 89 62C89 69.1608 86.1554 76.0284 81.0919 81.0919C76.0284 86.1554 69.1608 89 62 89C54.8392 89 47.9716 86.1554 42.9081 81.0919C37.8446 76.0284 35 69.1608 35 62C35 54.8392 37.8446 47.9716 42.9081 42.9081C47.9716 37.8446 54.8392 35 62 35Z" -%}
+
+{%- macro qlogo(variant='dark', size=30) -%}
+{%- set ring = '#ffffff' if variant=='light' else '#16131b' -%}
+<svg class="qmark" width="{{size}}" height="{{size}}" viewBox="0 0 160 160" fill="none" aria-hidden="true">
+<path fill-rule="evenodd" clip-rule="evenodd" d="{{ QRING }}" fill="{{ ring }}"/>
+<path d="M60 66H101L152 152H111L60 66Z" fill="url(#qg_{{variant}})"/>
+<defs><linearGradient id="qg_{{variant}}" x1="64.3" y1="65" x2="83.4" y2="146.5" gradientUnits="userSpaceOnUse"><stop stop-color="#A550FF"/><stop offset="1" stop-color="#7018E0"/></linearGradient></defs>
+</svg>
+{%- endmacro -%}
+
+{%- macro sitenav(active='') -%}
+<header class="snav">
+  <div class="snav-in">
+    <a class="snav-brand" href="/">{{ qlogo('dark',30) }}<b>QWALORA <span>Ranger</span></b></a>
+    <nav class="snav-links">
+      <a href="/#proof">Proof</a><a href="/#roles">Roles</a><a href="/#how">How it works</a>
+      <a href="/admin">Reviewer sign-in</a>
+    </nav>
+    <a class="btn btn-primary btn-pill" href="/enroll">Enroll a ranger</a>
+  </div>
+</header>
+{%- endmacro -%}
+
+{%- macro sitefooter() -%}
+<footer class="sfoot">
+  <div class="sfoot-in">
+    <div class="sfoot-top">
+      <div class="sfoot-brand">
+        <a class="snav-brand" href="/">{{ qlogo('light',30) }}<b style="color:#fff">QWALORA</b></a>
+        <p>A verifiable cyber range for defenders and operators. Program-measured,
+          cryptographically signed, mapped to the standards your auditors already use.</p>
+      </div>
+      <div class="sfoot-col"><h4>Program</h4><a href="/">Why Qwalora</a><a href="/#how">How it works</a><a href="/#proof">Live proof</a><a href="/enroll">Submission model</a></div>
+      <div class="sfoot-col"><h4>Rangers</h4><a href="/enroll">Enroll a ranger</a><a href="/admin">Reviewer sign-in</a><a href="/#roles">Roles</a></div>
+      <div class="sfoot-col"><h4>Control plane</h4><a href="/healthz">Status</a><a href="/#proof">Signed records</a></div>
+    </div>
+    <div class="sfoot-bottom">
+      <span class="mono">Qwalora Ranger · Cohort 2026-A</span>
+      <span class="mono">Loopback-only labs · no AI for candidates · Ed25519-signed</span>
+    </div>
+  </div>
+</footer>
+{%- endmacro -%}
