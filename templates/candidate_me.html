@@ -67,6 +67,21 @@
           </div>
         </div>
 
+        {% if vm.notifications %}
+        <div class="field">
+          <label class="label">Updates{% if vm.unread %} <span class="unread-dot">{{ vm.unread }} new</span>{% endif %}</label>
+          <div class="notes">
+            {% for nt in vm.notifications %}
+            <div class="note-row {% if not nt.read %}note-new{% endif %}">
+              <span class="note-ic note-{{ nt.kind }}">{% if nt.kind=='promotion' or nt.kind=='graduation' %}{{ ic('medal','ic ic-sm') }}{% elif nt.kind=='report' %}{{ ic('inbox','ic ic-sm') }}{% elif nt.kind=='range' %}{{ ic('server','ic ic-sm') }}{% else %}{{ ic('activity','ic ic-sm') }}{% endif %}</span>
+              <div class="note-body"><b>{{ nt.title }}</b>{% if nt.body %}<span>{{ nt.body }}</span>{% endif %}</div>
+              <span class="mono dim note-when">{{ nt.when }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
         {% if vm.status == 'active' %}
         <div class="field">
           <label class="label">Your lab</label>

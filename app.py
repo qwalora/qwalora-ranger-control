@@ -31,11 +31,12 @@ import broker
 import githuboauth
 import program as P
 import scenarios
+import notify
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import (Badge, BoardResult, Candidate, Cohort, RangeRequest, Report,
-                    ScenarioAssignment, db, ensure_schema)
+from models import (Badge, BoardResult, Candidate, Cohort, Notification,
+                    RangeRequest, Report, ScenarioAssignment, db, ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
@@ -423,6 +424,9 @@ def create_app():
         rr.last_checked_at = now
         rr.last_active_at = now  # starting the lab is activity
         if st == "deployed":
+            if not rr.deployed_at:
+                _notify(c, "range", "Your board %d lab is ready" % rr.board,
+                        "Your range is deployed. Download WireGuard from your dashboard and begin.")
             rr.deployed_at = rr.deployed_at or now
         return rr.status
 
@@ -474,6 +478,19 @@ def create_app():
         if rr is not None:
             rr.last_active_at = _dt.datetime.now(_dt.timezone.utc)
 
+    def _notify(c, kind, title, body=None, email=True):
+        """Record a dashboard notification and, when SMTP is set, email it.
+        Best-effort: never raises into the engine."""
+        try:
+            db.session.add(Notification(candidate_id=c.id, kind=kind,
+                                        title=title[:160], body=(body or "")[:400]))
+            if email and c.email:
+                notify.send_email(c.email, "Qwalora Ranger - " + title,
+                                  (body + "\n\n" if body else "") +
+                                  "View your dashboard: %s/me" % githuboauth.base_url())
+        except Exception:  # noqa: BLE001
+            pass
+
     def _known_hosts():
         hosts = {h for (h,) in db.session.query(RangeRequest.host).distinct().all()
                  if h and h != "shared"}
@@ -506,6 +523,8 @@ def create_app():
                         rr.wireguard_config = broker.wireguard_config(c, user_key=_candidate_key(c))
                     except Exception:  # noqa: BLE001
                         pass
+                _notify(c, "range", "Your board %d lab is ready" % rr.board,
+                        "Your range is deployed. Download WireGuard from your dashboard and begin.")
         return changed
 
     def _expire_ranges():
@@ -716,10 +735,17 @@ def create_app():
 
         if n >= P.LAST_BOARD:
             _mint_badge(c, P.CERTIFIED["level"], P.CERTIFIED["name"], P.CERTIFIED["role"])
+            _notify(c, "graduation", "You are a Qwalora Ranger, Certified",
+                    "You cleared all six boards. Your public certificate is at "
+                    "%s/verify/%s" % (githuboauth.base_url(), c.handle))
             _exit_candidate(c, "graduated", "cleared the capstone")
         else:
             c.current_board = n + 1
             c.current_role = P.role_of(n + 1)
+            nb = P.badge_for(n)[1]
+            _notify(c, "promotion", "Board %d cleared - promoted to board %d" % (n, n + 1),
+                    "You earned the %s badge. You are now a %s on board %d."
+                    % (nb, P.ROLE_TITLES.get(P.role_of(n + 1), "ranger"), n + 1))
             _provision_for_board(c, n + 1, auto_deploy=True)
         return True
 
@@ -1148,8 +1174,18 @@ def create_app():
                 br = _board_result(c, n)
                 br.report_id = r.id
                 br.report_status = r.status
+                promoted_before = c.current_board
                 if action == "approve" and n == c.current_board:
                     _evaluate_gate(c)
+                # Notify on the decision (skip approve-that-promoted: the
+                # promotion notice already covers it).
+                if not (action == "approve" and c.current_board != promoted_before):
+                    msg = {"approved": "Your %s report was approved." % r.board,
+                           "rejected": "Your %s report was rejected." % r.board,
+                           "needs_changes": "Your %s report needs changes." % r.board}[r.status]
+                    if r.reviewer_notes:
+                        msg += " Reviewer: " + r.reviewer_notes
+                    _notify(c, "report", "Report %s - %s" % (r.status.replace("_", " "), r.board), msg)
             db.session.commit()
         return redirect(url_for("admin", status=request.form.get("return_status", "pending")))
 
@@ -1671,6 +1707,11 @@ def create_app():
             "cur_report_notes": (last_report.reviewer_notes if last_report else None),
             "report_open": (c.is_active and rep_status in (None, "needs_changes", "rejected")),
             "pass_bar": P.PASS_BAR,
+            "notifications": [{"kind": nt.kind, "title": nt.title, "body": nt.body,
+                               "when": _ago(nt.created_at), "read": nt.read}
+                              for nt in (Notification.query.filter_by(candidate_id=c.id)
+                                         .order_by(Notification.id.desc()).limit(8).all())],
+            "unread": Notification.query.filter_by(candidate_id=c.id, read=False).count(),
         }
 
     def _demo_vm(n, graduated):
@@ -1709,6 +1750,7 @@ def create_app():
             "cur_report_status": None, "cur_report_label": None,
             "cur_report_pcls": None, "cur_report_dot": None, "cur_report_notes": None,
             "report_open": not graduated, "pass_bar": P.PASS_BAR,
+            "notifications": [], "unread": 0,
         }
 
     @app.get("/admin/preview")
@@ -1737,7 +1779,12 @@ def create_app():
         vm = _me_vm(c)
         vm["report_ok"] = request.args.get("report_ok") == "1"
         vm["report_error"] = request.args.get("report_error")
-        return render_template("candidate_me.html", vm=vm)
+        resp = render_template("candidate_me.html", vm=vm)
+        # Mark seen AFTER capturing the unread state for this render.
+        if vm["unread"]:
+            Notification.query.filter_by(candidate_id=c.id, read=False).update({"read": True})
+            db.session.commit()
+        return resp
 
     @app.post("/me/start")
     def candidate_start():

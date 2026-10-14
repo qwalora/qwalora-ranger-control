@@ -236,6 +236,19 @@ class Cohort(db.Model):
     STATUSES = ("scheduled", "active", "completed")
 
 
+class Notification(db.Model):
+    """A candidate-facing event: promotion, a report decision, a lab becoming
+    ready. Shown on the ranger's dashboard and, when SMTP is configured, emailed."""
+    __tablename__ = "notifications"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    kind = db.Column(db.String(30), nullable=False)   # promotion/graduation/report/range/cohort
+    title = db.Column(db.String(160), nullable=False)
+    body = db.Column(db.String(400), nullable=True)
+    read = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
+
+
 class Badge(db.Model):
     """A signed, verifiable rank credential, minted on each board clearance."""
     __tablename__ = "badges"

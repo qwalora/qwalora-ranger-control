@@ -356,6 +356,19 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
 .cert-badge div{display:flex;flex-direction:column;gap:1px}
 .cert-badge b{font:600 14px/1.2 var(--f)}
 .cert-badge span{font-size:12px;color:var(--mut)}
+.unread-dot{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--orange,#f26b2a);color:#fff;font:600 10px/1.6 var(--f)}
+.notes{display:flex;flex-direction:column;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.note-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.note-row:last-child{border-bottom:none}
+.note-new{background:rgba(242,107,42,.05)}
+.note-ic{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:var(--light);color:var(--mut)}
+.note-promotion,.note-graduation{background:rgba(42,165,103,.12);color:var(--ok,#2aa567)}
+.note-range{background:rgba(107,92,240,.12);color:var(--violet,#6b5cf0)}
+.note-body{display:flex;flex-direction:column;gap:1px}
+.note-body b{font:600 13px/1.25 var(--f)}
+.note-body span{font-size:12px;color:var(--mut)}
+.note-when{font-size:11px;white-space:nowrap}
+@media(max-width:560px){.note-when{display:none}}
 
 .prog{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0 2px}
 .prog-l{font:600 12.5px/1 var(--f);color:var(--med)}
