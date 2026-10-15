@@ -397,12 +397,37 @@ def main():
     _rec("F12_revocation", status="PASS" if revoked_ok else "WARN",
          deleted_user_access_denied=revoked_ok)
 
+    # F13 least-privilege identities (P1.4): ingest writes ranger-*, search cannot.
+    try:
+        c.put_role("ranger_ingest_role", ["ranger-*"], allow_write=True)
+        c.put_role("ranger_search_role", ["ranger-*"], allow_write=False)
+        ing = ("ranger_ingest", os.environ.get("RANGER_INGEST_PW", ""))
+        sea = ("ranger_search", os.environ.get("RANGER_SEARCH_PW", ""))
+        ing_write_ok = False
+        r = c._req("POST", f"/{idx_a}/_doc/_lp_probe?refresh=true", auth=ing,
+                   body={"ranger": {"candidate_id": "cand-a"}, "data": {"synthetic": True},
+                         "message": "lp-probe"})
+        ing_write_ok = r[0] in (200, 201)
+        rs = c._req("POST", f"/{idx_a}/_doc/_lp_probe2?refresh=true", auth=sea,
+                    body={"message": "lp"})
+        search_write_denied = rs[0] == 403
+        search_read_ok = False
+        try:
+            c.count(idx_a, auth=sea)
+            search_read_ok = True
+        except Exception:  # noqa: BLE001
+            pass
+        _rec("F13_least_privilege_identities",
+             status="PASS" if (ing_write_ok and search_write_denied and search_read_ok) else "FAIL",
+             ingest_can_write=ing_write_ok, search_write_denied=search_write_denied,
+             search_can_read=search_read_ok)
+    except Exception as e:  # noqa: BLE001
+        _rec("F13_least_privilege_identities", status="FAIL", error=str(e)[:200])
+
     REPORT["limitations"] = [
-        "HTTP-layer TLS uses the Security demo certificates; replace with managed certs before production.",
-        "Dashboards authenticates with the demo kibanaserver account; rotate before production.",
-        "JWT direct-Dashboards access (signature/issuer/exp/revocation/tenant/spoofing) is a separate milestone and requires securityconfig changes; candidate access stays disabled until it passes.",
+        "TLS now uses a Ranger-issued CA (managed certs); clients verify against it. Rotate the CA before GA and move keys to a sealed store.",
+        "JWT direct-Dashboards access (signature/issuer/exp/revocation/tenant/spoofing) is the next milestone; candidate access stays disabled until it passes.",
         "Security Analytics native detectors need field mappings for the custom ECS subset; the Alerting plugin provides genuine detection-driven alerts in the interim (F7).",
-        "Restart persistence/recovery is validated out-of-band via a Railway service restart, not in this in-process run.",
     ]
     print("\n===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
     print(json.dumps(REPORT, default=str), flush=True)
