@@ -648,6 +648,15 @@ def dataview_check(c):
     priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
     out = {"mode": "dataview", "tests": {}, "status": "PASS"}
 
+    # Diagnostic: what multitenancy config is actually live?
+    sc_code, sc = c._req("GET", "/_plugins/_security/api/securityconfig")
+    kib = {}
+    try:
+        kib = sc.get("config", {}).get("dynamic", {}).get("kibana", {})
+    except Exception:  # noqa: BLE001
+        pass
+    print(f"[diag] securityconfig code={sc_code} kibana={json.dumps(kib)[:400]}", flush=True)
+
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
         if not ok:
