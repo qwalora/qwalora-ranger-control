@@ -127,14 +127,15 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     The data view is only a saved query definition: it grants no data access beyond
     the subject's OpenSearch role, so a candidate's view can never expose another
     candidate's indices."""
-    code, _ = _dash_as_user(subject, cohort, "POST",
-                            "/api/saved_objects/index-pattern/" + dv_id,
-                            {"attributes": {"title": title, "timeFieldName": TS_FIELD}})
+    code, body = _dash_as_user(subject, cohort, "POST",
+                               "/api/saved_objects/index-pattern/" + dv_id,
+                               {"attributes": {"title": title, "timeFieldName": TS_FIELD}})
     created = code in (200, 201, 409)  # 409 = already exists -> idempotent
     # Best-effort: set it as the tenant default so Discover lands on it.
     _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
                   {"index_pattern_id": dv_id, "force": True})
-    _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code)
+    _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code,
+         err=("" if created else body[:200]))
     return created
 
 
