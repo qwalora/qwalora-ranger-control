@@ -1114,8 +1114,11 @@ def m4stream_check(c):
       trig_ids = ([pp_ids[0]] if pp_ids else []) + ([sa_obj["rule_id"]] if sa_obj["rule_id"] else [])
       sa_obj["rules_used"] = {"pre_packaged": pre, "custom": cust}
       if pre or cust:
-          detector = {"type": "detector", "detector": {
-              "name": "ranger-op-board2test", "detector_type": "windows", "enabled": True,
+          # SA detectors API takes the detector fields at the TOP LEVEL (a nested
+          # "detector" wrapper makes the server read name as null -> 500 NPE).
+          detector = {
+              "type": "detector", "name": "ranger-op-board2test",
+              "detector_type": "windows", "enabled": True,
               "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
               "inputs": [{"detector_input": {"description": "ranger operational",
                           "indices": [op_index],
@@ -1123,7 +1126,7 @@ def m4stream_check(c):
                           "pre_packaged_rules": pre}}],
               "triggers": [{"name": "priv-group-add", "types": ["windows"],
                             "sev_levels": ["high"], "ids": trig_ids,
-                            "severity": "1", "actions": []}]}}
+                            "severity": "1", "actions": []}]}
           code, body = sa("POST", "/_plugins/_security_analytics/detectors", body=detector)
           if code in (200, 201):
               sa_obj["detector_id"] = body.get("_id")
