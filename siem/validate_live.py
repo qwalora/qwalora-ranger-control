@@ -288,7 +288,8 @@ def dashauth_check(c):
         # as the JWT-authenticated user. This is Discover-equivalent, not just HTML.
         url = dash + "/api/console/proxy?path=" + path + "&method=" + method
         data = json.dumps(body).encode() if body is not None else b""
-        req = _u.Request(url, data=data, headers=headers or {}, method="POST")
+        hdrs = {**(headers or {}), "Content-Type": "application/json"}
+        req = _u.Request(url, data=data, headers=hdrs, method="POST")
         try:
             with _u.urlopen(req, timeout=30) as r:
                 return r.status, r.read(800).decode(errors="replace")
