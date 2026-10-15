@@ -866,6 +866,17 @@ def discoverdiag_check(c):
     show("data_view", {"code": dc, "has_ranger_star": '"ranger-*"' in db,
                        "has_timefield": '"@timestamp"' in db})
 
+    # Apply + verify the supported default-time-range correction in the admin tenant.
+    sc1, _ = gw._dash_as_user(
+        "ranger_soc_admin", COHORT, "POST", "/api/opensearch-dashboards/settings",
+        {"changes": {"timepicker:timeDefaults":
+                     json.dumps({"from": gw.SCENARIO_TIME_FROM, "to": gw.SCENARIO_TIME_TO})}},
+        tenant="ranger_soc_admin")
+    sc2, sb = gw._dash_as_user("ranger_soc_admin", COHORT, "GET",
+                               "/api/opensearch-dashboards/settings", tenant="ranger_soc_admin")
+    show("time_defaults_apply", {"post": sc1, "get": sc2,
+                                 "stored": ("2026-02-28" in sb or "2026-03" in sb)})
+
     out["diagnosis"] = (
         "dataset timestamps outside the selected time range" if (l90 == 0 and isinstance(schem[1], int) and schem[1] > 0)
         else "see counts")

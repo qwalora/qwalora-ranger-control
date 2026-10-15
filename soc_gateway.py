@@ -34,6 +34,12 @@ PROXY_TIMEOUT = int(os.environ.get("SOC_PROXY_TIMEOUT", "30"))
 MAX_RESP = int(os.environ.get("SOC_MAX_RESP_BYTES", str(40 * 1024 * 1024)))
 SIEM_BOARD = 2
 TS_FIELD = "@timestamp"  # the normalized event timestamp (schema.INDEX_MAPPING)
+# The scenario dataset is anchored to a fixed historical window (enterprise.generate
+# starts at 2026-03-01 and spans a couple of weeks). Discover's default "Last 15
+# minutes" / "Last 90 days" never overlaps it, so set the tenant's default time range
+# to cover the scenario window. Widen if the generator's start/span changes.
+SCENARIO_TIME_FROM = os.environ.get("RANGER_SIEM_TIME_FROM", "2026-02-28T00:00:00.000Z")
+SCENARIO_TIME_TO = os.environ.get("RANGER_SIEM_TIME_TO", "2026-04-01T00:00:00.000Z")
 
 # --- Admin "act-as" (candidate simulation) hard constraints -------------------
 # act-as exists ONLY to let an authenticated Super Admin drive the real candidate
@@ -138,8 +144,16 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     # Best-effort: set it as the tenant default so Discover lands on it.
     _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
                   {"index_pattern_id": dv_id, "force": True}, tenant=subject)
+    # Best-effort: default the tenant's Discover time range to the scenario window,
+    # via the supported advanced-settings API, so Discover opens on real events
+    # instead of an empty recent window. Idempotent; no data or permission change.
+    tr_code, _ = _dash_as_user(
+        subject, cohort, "POST", "/api/opensearch-dashboards/settings",
+        {"changes": {"timepicker:timeDefaults":
+                     json.dumps({"from": SCENARIO_TIME_FROM, "to": SCENARIO_TIME_TO})}},
+        tenant=subject)
     _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code,
-         err=("" if created else body[:200]))
+         timedefaults=tr_code, err=("" if created else body[:200]))
     return created
 
 
