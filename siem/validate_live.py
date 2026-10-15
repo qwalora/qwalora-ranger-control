@@ -885,6 +885,24 @@ def discoverdiag_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def resettime_check(c):
+    """Clear the timepicker:timeDefaults override from the SOC admin and candidate
+    tenants (setting it back to default removes the override), to undo the tenant
+    config write that correlated with the Dashboards capabilities failure. Reversible,
+    no data or permission change."""
+    import soc_gateway as gw
+    subjects = ["ranger_soc_admin", authz.user_name("cand-a"), authz.user_name("cand-b")]
+    out = {"mode": "resettime", "results": {}}
+    for s in subjects:
+        code, body = gw._dash_as_user(s, COHORT, "POST", "/api/opensearch-dashboards/settings",
+                                      {"changes": {"timepicker:timeDefaults": None}}, tenant=s)
+        out["results"][s] = {"code": code}
+        print(f"[resettime] {s}: code={code} body={body[:160]}", flush=True)
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -932,6 +950,9 @@ def main():
     if mode == "discoverdiag":
         print(f"== Ranger Discover empty-result diagnosis ==", flush=True)
         return discoverdiag_check(c)
+    if mode == "resettime":
+        print(f"== Ranger reset tenant timepicker:timeDefaults ==", flush=True)
+        return resettime_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health

@@ -144,16 +144,12 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     # Best-effort: set it as the tenant default so Discover lands on it.
     _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
                   {"index_pattern_id": dv_id, "force": True}, tenant=subject)
-    # Best-effort: default the tenant's Discover time range to the scenario window,
-    # via the supported advanced-settings API, so Discover opens on real events
-    # instead of an empty recent window. Idempotent; no data or permission change.
-    tr_code, _ = _dash_as_user(
-        subject, cohort, "POST", "/api/opensearch-dashboards/settings",
-        {"changes": {"timepicker:timeDefaults":
-                     json.dumps({"from": SCENARIO_TIME_FROM, "to": SCENARIO_TIME_TO})}},
-        tenant=subject)
+    # NOTE: the Discover default time range is NOT written to tenant config here.
+    # Writing timepicker:timeDefaults into the tenant config correlated with a
+    # Dashboards capabilities/readonly failure, so the scenario window is applied in
+    # the browser (time picker) instead of persisted as a tenant setting.
     _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code,
-         timedefaults=tr_code, err=("" if created else body[:200]))
+         err=("" if created else body[:200]))
     return created
 
 
