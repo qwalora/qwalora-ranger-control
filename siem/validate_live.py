@@ -531,6 +531,12 @@ def gwsec_check(c):
             out["status"] = "FAIL"
         print(f"[{'PASS' if ok else 'FAIL'}] gwsec/{n}: {json.dumps(kv)[:300]}", flush=True)
 
+    class _NoRedir(_u.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    noredir = _u.build_opener(_NoRedir)
+
     def raw(url, method="GET", headers=None, body=None):
         req = _u.Request(url, data=(json.dumps(body).encode() if body is not None else None),
                          method=method, headers=headers or {})
@@ -542,14 +548,29 @@ def gwsec_check(c):
         except Exception as ex:  # noqa: BLE001
             return -1, {}, str(ex)[:160]
 
-    # 1. Session-cookie flags on a normal rendered portal page (the CSRF context
-    #    processor sets session["csrf"], so Flask emits Set-Cookie).
+    def set_cookies(url):
+        # Do NOT follow redirects (that would swallow the Set-Cookie), and read EVERY
+        # Set-Cookie header, not a dict-collapsed one.
+        req = _u.Request(url, headers={}, method="GET")
+        try:
+            with noredir.open(req, timeout=30) as r:
+                return r.headers.get_all("Set-Cookie") or []
+        except _e.HTTPError as ex:
+            return ex.headers.get_all("Set-Cookie") or []
+        except Exception:  # noqa: BLE001
+            return []
+
+    # 1. Session-cookie flags on a normal portal response (the CSRF context processor
+    #    sets session["csrf"], so Flask emits a Set-Cookie for the session cookie).
     setc = ""
     for p in ("/", "/admin", "/enroll", "/login"):
-        _s, h, _b = raw(portal + p)
-        if h.get("Set-Cookie"):
-            setc = h.get("Set-Cookie")
+        cookies = set_cookies(portal + p)
+        sess = [ck for ck in cookies if ck.lower().startswith("session=")]
+        if sess:
+            setc = sess[0]
             break
+        if cookies and not setc:
+            setc = cookies[0]
     low = setc.lower()
     rec("cookie_httponly", "httponly" in low, set_cookie=setc[:140])
     rec("cookie_secure", "secure" in low)
@@ -576,12 +597,12 @@ def gwsec_check(c):
     c.put_rolesmapping(role, users=[sub])
     ctok = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
     base = {"Authorization": "Bearer " + ctok, "Content-Type": "application/json"}
-    dash_url = dash + "/api/console/proxy?path=" + idx + "%2F_search&method=GET"
-    s3a, _, _ = raw(dash_url, "POST", base, {"size": 1, "query": {"match_all": {}}})
-    s3b, _, b3b = raw(dash_url, "POST", {**base, "osd-xsrf": "osd-fetch"},
-                      {"size": 1, "query": {"match_all": {}}})
+    # Index-independent, xsrf-guarded Dashboards API: _bulk_get requires osd-xsrf.
+    sobj = dash + "/api/saved_objects/_bulk_get"
+    s3a, _, _ = raw(sobj, "POST", base, [])                                  # no osd-xsrf
+    s3b, _, b3b = raw(sobj, "POST", {**base, "osd-xsrf": "osd-fetch"}, [])   # with osd-xsrf
     rec("dashboards_csrf_blocks_without_xsrf", s3a == 400, code=s3a)
-    rec("dashboards_op_ok_with_xsrf", s3b == 200 and '"hits"' in b3b, code=s3b)
+    rec("dashboards_op_ok_with_xsrf", s3b == 200, code=s3b)
 
     # 4. Security Analytics: SOC admin authorized, candidate denied (authorization
     #    is checked before data, so 200/404 = authorized, 403 = denied).
