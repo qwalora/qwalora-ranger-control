@@ -266,6 +266,7 @@ def _bootstrap_resources():
                 source_attribution=e.get("source_attribution"),
                 pub_id=e.get("pub_id"), maturity=e.get("maturity"),
                 pub_type=e.get("pub_type"), collection=e.get("collection"),
+                track=e.get("track", "research"),
                 version=e.get("version"), related=e.get("related"),
                 artifacts=_json.dumps(e["artifacts"]) if e.get("artifacts") else None,
                 refs=_json.dumps(e["refs"]) if e.get("refs") else None,
@@ -297,6 +298,7 @@ def _refresh_publications():
             r.body = e.get("body")
             r.topic = e.get("topic")
             r.collection = e.get("collection")
+            r.track = e.get("track", "research")
             r.pub_type = e.get("pub_type")
             r.version = e.get("version")
             r.related = e.get("related")
@@ -2293,6 +2295,7 @@ def create_app():
         # Publication metadata (present only on QR-RES-* research publications).
         d["maturity_label"] = catalog.MATURITY_LABELS.get(r.maturity) if r.maturity else None
         d["pub_type_label"] = catalog.PUB_TYPE_LABELS.get(r.pub_type) if r.pub_type else None
+        d["track_label"] = catalog.TRACK_LABELS.get(r.track) if r.track else None
         d["is_publication"] = bool(r.pub_id)
         d["tags"] = _topics_of(r)
         d["updated"] = _iso(d.pop("updated_at"))
@@ -2305,7 +2308,10 @@ def create_app():
         cat, rt = args.get("category"), args.get("type")
         level, publisher = args.get("level"), args.get("publisher")
         topic = args.get("topic")
+        track = args.get("track")
         board, role, search = args.get("board"), args.get("role"), (args.get("q") or "").strip()
+        if track in Resource.TRACKS:
+            q = q.filter_by(track=track)
         if cat in Resource.CATEGORIES:
             q = q.filter_by(category=cat)
         if rt in Resource.RTYPES:
@@ -2337,7 +2343,9 @@ def create_app():
         topics = set()
         for r in allpub:
             topics.update(_topics_of(r))
+        tracks = {r.track for r in allpub if r.track}
         return {
+            "tracks": [(t, catalog.TRACK_LABELS.get(t, t)) for t in Resource.TRACKS if t in tracks],
             "categories": [(c, catalog.CATEGORY_LABELS.get(c, c)) for c in Resource.CATEGORIES if c in cats],
             "types": [(t, catalog.TYPE_LABELS.get(t, t)) for t in Resource.RTYPES if t in types],
             "levels": [(l, catalog.LEVEL_LABELS.get(l, l)) for l in Resource.LEVELS if l in levels],
@@ -2412,6 +2420,7 @@ def create_app():
         d["level_label"] = catalog.LEVEL_LABELS.get(r.level, r.level)
         d["maturity_label"] = catalog.MATURITY_LABELS.get(r.maturity) if r.maturity else None
         d["pub_type_label"] = catalog.PUB_TYPE_LABELS.get(r.pub_type) if r.pub_type else None
+        d["track_label"] = catalog.TRACK_LABELS.get(r.track) if r.track else None
         d["tags"] = _topics_of(r)
         d["updated"] = _iso(d.pop("updated_at"))
         return d

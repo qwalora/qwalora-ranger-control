@@ -81,6 +81,7 @@ def ensure_schema(db):
             ("artifacts", "TEXT"),
             ("refs", "TEXT"),
             ("related", "VARCHAR(200)"),
+            ("track", "VARCHAR(30)"),
         ],
     }
     insp = _inspect(db.engine)
@@ -378,6 +379,7 @@ class Resource(db.Model):
     artifacts = db.Column(db.Text, nullable=True)        # JSON: [{label,url}] source/tests/manifest/results
     refs = db.Column(db.Text, nullable=True)             # JSON: [{label,url}] authoritative external references
     related = db.Column(db.String(200), nullable=True)   # comma-separated related pub_ids
+    track = db.Column(db.String(30), nullable=True, index=True)  # top-level collection (one of TRACKS)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -402,6 +404,8 @@ class Resource(db.Model):
     # Evidence maturity of the claim a publication makes.
     PUB_TYPES = ("verified-research", "evaluated-artifact", "technical-methodology",
                  "research-in-progress")
+    # Top-level catalog collections (navigation). A publication belongs to one.
+    TRACKS = ("research", "cohort-docs", "knowledge-base")
 
     def article_view(self):
         """Full projection for an internal publication page. Only ever returned
@@ -441,7 +445,7 @@ class Resource(db.Model):
                 "has_article": bool(self.body),
                 "pub_id": self.pub_id, "maturity": self.maturity,
                 "pub_type": self.pub_type, "collection": self.collection,
-                "version": self.version,
+                "track": self.track, "version": self.version,
                 "last_reviewed": (self.last_reviewed.isoformat() if self.last_reviewed else None),
                 "updated_at": (self.updated_at or self.created_at)}
 

@@ -66,6 +66,17 @@ PUB_TYPE_LABELS = {
     "technical-methodology": "Technical Methodology",
     "research-in-progress": "Research in Progress",
 }
+# Top-level catalog collections (navigation).
+TRACK_LABELS = {
+    "research": "Security Research & Engineering",
+    "cohort-docs": "Ranger Cohort & Board Documentation",
+    "knowledge-base": "Cybersecurity Knowledge Base",
+}
+TRACK_SHORT = {
+    "research": "Research & Engineering",
+    "cohort-docs": "Cohort & Board Docs",
+    "knowledge-base": "Knowledge Base",
+}
 
 REVIEWED = "2026-10-14"  # technical review date for the verified external catalog
 
@@ -1459,3 +1470,8 @@ artifacts above.
     },
 ]
 
+
+
+# Collection 2: Ranger Cohort Readiness & Technical Knowledge publications.
+import catalog_kb as _catalog_kb  # noqa: E402
+PUBLICATIONS = PUBLICATIONS + _catalog_kb.PUBLICATIONS

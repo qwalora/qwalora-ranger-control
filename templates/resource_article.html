@@ -17,6 +17,7 @@
       </div>
       <h1 class="art-h1">{{ a.title }}</h1>
       <div class="art-meta">
+        {% if a.track_label %}<span class="art-chip">{{ a.track_label }}</span>{% endif %}
         {% if a.pub_type_label %}<span class="art-chip art-chip-type">{{ a.pub_type_label }}</span>{% endif %}
         {% if a.maturity_label %}<span class="art-chip art-chip-mat">{{ a.maturity_label }}</span>{% endif %}
         {% if a.version %}<span class="art-chip">v{{ a.version }}</span>{% endif %}
@@ -46,20 +47,21 @@
     <section class="art-sec">
       <h2 class="art-h2">Verification record</h2>
       <div class="art-verif mono">
-        <div><span>status</span>{{ a.verification.execution.status }} · {{ a.verification.execution.environment }}</div>
-        <div><span>source commit</span>{{ a.verification.execution.source_commit }}</div>
-        <div><span>tests</span>{{ a.verification.tests.passed }}/{{ a.verification.tests.total }} passed (exit {{ a.verification.tests.pytest_exit_code }})</div>
-        <div><span>scenarios</span>{{ a.verification.scenarios.verdict_matches_requirement }}/{{ a.verification.scenarios.count }} match requirement</div>
-        <div><span>independent</span>{{ a.verification.independent_verification.method }}</div>
-        <div><span>trust boundary</span>{{ a.verification.independent_verification.trust_boundary }}</div>
-        <div><span>review</span>{{ a.verification.review.technical_status }}{% if not a.verification.review.approved_by %} · not self-approved{% endif %}</div>
+        {% if a.verification.execution and a.verification.execution.status %}<div><span>status</span>{{ a.verification.execution.status }}{% if a.verification.execution.environment %} · {{ a.verification.execution.environment }}{% endif %}</div>{% endif %}
+        {% if a.verification.execution and a.verification.execution.source_commit %}<div><span>source commit</span>{{ a.verification.execution.source_commit }}</div>{% endif %}
+        {% if a.verification.tests and a.verification.tests.passed is not none %}<div><span>tests</span>{{ a.verification.tests.passed }}/{{ a.verification.tests.total }} passed (exit {{ a.verification.tests.pytest_exit_code }})</div>{% endif %}
+        {% if a.verification.scenarios %}<div><span>results</span>{% if a.verification.scenarios.verdict_matches_requirement is not none %}{{ a.verification.scenarios.verdict_matches_requirement }}/{{ a.verification.scenarios.count }} match requirement{% elif a.verification.scenarios.gaps_match_expected is not none %}{{ a.verification.scenarios.gaps_match_expected }}/{{ a.verification.scenarios.count }} match expected{% elif a.verification.scenarios.assessments_match_intent is not none %}{{ a.verification.scenarios.assessments_match_intent }}/{{ a.verification.scenarios.count }} match intent{% endif %}</div>{% endif %}
+        {% if a.verification.cases and a.verification.cases.verdict_matches_expected is not none %}<div><span>results</span>{{ a.verification.cases.verdict_matches_expected }}/{{ a.verification.cases.count }} cases match expected</div>{% endif %}
+        {% if a.verification.independent_verification and a.verification.independent_verification.method %}<div><span>{% if a.verification.independent_verification.performed == false %}nature{% else %}independent{% endif %}</span>{{ a.verification.independent_verification.method }}</div>{% endif %}
+        {% if a.verification.independent_verification and a.verification.independent_verification.trust_boundary and a.verification.independent_verification.trust_boundary != 'n/a' %}<div><span>trust boundary</span>{{ a.verification.independent_verification.trust_boundary }}</div>{% endif %}
+        {% if a.verification.review %}<div><span>review</span>{{ a.verification.review.technical_status }}{% if a.verification.review.approved_by %} · approved by {{ a.verification.review.approved_by }}{% else %} · not self-approved{% endif %}</div>{% endif %}
       </div>
     </section>
     {% endif %}
 
     {% if a.refs %}
     <section class="art-sec">
-      <h2 class="art-h2">References</h2>
+      <h2 class="art-h2">References &amp; Further Reading</h2>
       <ul class="art-links">
         {% for x in a.refs %}
         <li><a href="{{ x.url }}" target="_blank" rel="noopener">{{ ic('ext','ic ic-sm') }} {{ x.label }}</a></li>
