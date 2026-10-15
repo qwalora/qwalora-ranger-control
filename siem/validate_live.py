@@ -551,20 +551,22 @@ def gwsec_check(c):
     def set_cookies(url):
         # Do NOT follow redirects (that would swallow the Set-Cookie), and read EVERY
         # Set-Cookie header, not a dict-collapsed one.
-        req = _u.Request(url, headers={}, method="GET")
+        req = _u.Request(url, headers={"User-Agent": "ranger-validator"}, method="GET")
         try:
             with noredir.open(req, timeout=30) as r:
-                return r.headers.get_all("Set-Cookie") or []
+                return r.headers.get_all("Set-Cookie") or [], r.status, ""
         except _e.HTTPError as ex:
-            return ex.headers.get_all("Set-Cookie") or []
-        except Exception:  # noqa: BLE001
-            return []
+            return ex.headers.get_all("Set-Cookie") or [], ex.code, ""
+        except Exception as ex:  # noqa: BLE001
+            return [], -1, str(ex)[:160]
 
     # 1. Session-cookie flags on a normal portal response (the CSRF context processor
     #    sets session["csrf"], so Flask emits a Set-Cookie for the session cookie).
     setc = ""
+    dbg = []
     for p in ("/auth/github/login", "/admin/login", "/"):
-        cookies = set_cookies(portal + p)
+        cookies, st, err = set_cookies(portal + p)
+        dbg.append(f"{p}:{st}:{len(cookies)}{(':' + err) if err else ''}")
         sess = [ck for ck in cookies if ck.lower().startswith("session=")]
         if sess:
             setc = sess[0]
@@ -572,7 +574,7 @@ def gwsec_check(c):
         if cookies and not setc:
             setc = cookies[0]
     low = setc.lower()
-    rec("cookie_httponly", "httponly" in low, set_cookie=setc[:140])
+    rec("cookie_httponly", "httponly" in low, set_cookie=setc[:140], probes=";".join(dbg))
     rec("cookie_secure", "secure" in low)
     rec("cookie_samesite_lax", "samesite=lax" in low)
 
