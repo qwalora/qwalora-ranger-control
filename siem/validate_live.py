@@ -1084,15 +1084,21 @@ def m4stream_check(c):
       # privileged-group-addition tradecraft). Pre-packaged rules avoid the custom-
       # rules index bootstrap that returned 500 on this build, and the detector
       # lifecycle itself initializes SA's per-log-type indices.
-      pp_ids = []
+      pp_ids, pp_titles = [], []
+      # rule.* is a NESTED field; the earlier non-nested query matched nothing even
+      # though 2200+ windows rules exist. Fetch windows rules, then pick the ones
+      # whose content keys on EventID 4728 (privileged group addition).
       code, pp = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
-                    body={"size": 10, "query": {"bool": {"must": [
-                        {"match": {"rule.category": "windows"}},
-                        {"query_string": {"query": "4728"}}]}}})
+                    body={"size": 3000, "query": {"nested": {"path": "rule",
+                          "query": {"match": {"rule.category": "windows"}}}}})
       if code == 200:
           for h in (pp.get("hits", {}) or {}).get("hits", []):
-              pp_ids.append(h.get("_id"))
-      note("sa_prepackaged_rules", code=code, found=len(pp_ids), ids=pp_ids[:3])
+              blob = json.dumps(h.get("_source", {}))
+              if "4728" in blob:
+                  pp_ids.append(h.get("_id"))
+                  pp_titles.append((h.get("_source", {}).get("rule", {}) or {}).get("title"))
+      note("sa_prepackaged_rules", code=code, windows_total=(pp.get("hits", {}) or {}).get("total"),
+           matched_4728=len(pp_ids), ids=pp_ids[:3], titles=pp_titles[:3])
       # best-effort custom rule too (documents the 500 if the index is not ready)
       code, body = sa("POST", "/_plugins/_security_analytics/rules?category=windows",
                       body={"rule": rule_yaml})

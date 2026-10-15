@@ -192,7 +192,14 @@ class StreamPlan:
               {"user.name": victim, "source.ip": actor_ip, "event.outcome": "success"})
             m(12, "windows.security", "iam", "group_member_added", "dc01",
               f"Member added to Domain Admins: {victim}",
-              {"user.name": victim, "winlog.event_id": 4728})
+              {"user.name": victim, "winlog.event_id": 4728,
+               # standard Windows 4728 event_data fields so a real Sigma
+               # group-membership rule has the fields it keys on (authentic, not
+               # padding: a real 4728 carries these).
+               "winlog.event_data.TargetUserName": "Domain Admins",
+               "winlog.event_data.MemberName": f"CN={victim}",
+               "winlog.event_data.SubjectUserName": "svc-attacker",
+               "winlog.channel": "Security"})
             m(20, "edr.process", "process", "process_start", "app-core",
               "powershell.exe -enc <base64> (spawned by services.exe)",
               {"process.name": "powershell.exe", "process.command_line": "-enc"})
