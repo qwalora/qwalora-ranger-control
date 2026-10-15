@@ -8,94 +8,111 @@ disabled; the enterprise grader stayed shadow-only; `PASS_BAR = 95.0` untouched;
 25-candidate workload was not activated.
 
 Reproduce: set `RANGER_VALIDATE_MODE=m4stream` on `siem-validator` (optional
-`M4_RUN_WINDOW_S`, `M4_TICKS`, `M4_DEADLINE_S`) and read the deploy logs between
-`===RANGER_VALIDATION_JSON_BEGIN===` / `===END===`. Teardown + verify-stop:
-`RANGER_VALIDATE_MODE=m4stop`.
+`M4_RUN_WINDOW_S`, `M4_TICKS`, `M4_DEADLINE_S`, `M4_RULE_ID`) and read the deploy
+logs between `===RANGER_VALIDATION_JSON_BEGIN===` / `===END===`. Diagnosis:
+`RANGER_VALIDATE_MODE=m4diag`. Teardown + verify-stop: `RANGER_VALIDATE_MODE=m4stop`.
 
-## Acceptance chain status
+## Acceptance chain status — COMPLETE
 
 | Stage | Result |
 |---|---|
 | Continuous telemetry (multi-interval) | **PASS** |
 | OpenSearch ingestion (isolated op index) | **PASS** |
-| Native Security Analytics detector execution | **PASS** (detector created + running on schedule) |
-| Finding / alert | **NOT YET** (detector executes, but the pre-packaged rule did not match the synthetic event under current field mappings) |
+| Native Security Analytics detector execution | **PASS** |
+| Genuine finding + alert | **PASS** |
 | Authorized SOC investigation | **PASS** |
 
-`fully_demonstrated: false` — the single remaining hop is a genuine **finding/alert**.
-Everything else is validated live. Nothing below is faked; the finding gap is a
-documented limitation with a concrete remediation.
+`acceptance_chain.fully_demonstrated: true`. The full native chain was demonstrated
+with actual OpenSearch Security Analytics results — a genuine finding and a genuine
+trigger alert, not Ranger's offline `detection.py`.
 
-## What passed, with evidence
+## Genuine end-to-end chain (real IDs)
 
-- **Continuous ingestion across scheduled worker ticks** — 5 ticks + a drain tick,
-  `indexed_total 7/7`, `multi_tick_ingestion: true`, watermark persisted in a
+```
+indexed event  m4-live-sllauncher-211634   (ranger-op-pilot-board2-test-b2)
+   -> native SA detector  jxVsQaEBbaZn28UUivf2  (log type: windows, 1-min schedule)
+   -> pre-packaged rule    9aa01d62-7667-4d3b-acb8-8cb5103e2014
+                           "Emissary Panda Malware SLLauncher" (process_creation)
+                           query: (winlog.event_data.ParentImage: *\sllauncher.exe)
+                                  AND (winlog.event_data.Image: *\svchost.exe)
+   -> FINDING  206abfea-aa1e-423e-b380-0d92024946ff
+               detectorId jxVsQaEBbaZn28UUivf2, rule 9aa01d62,
+               associated_doc_ids [m4-live-sllauncher-211634]
+   -> ALERT    50ad9f32-1a5f-4aa7-9d48-225dd45475e9
+               trigger "dll-sideload", severity 1, state ACTIVE,
+               finding_ids [206abfea-aa1e-423e-b380-0d92024946ff]
+   -> authorized investigation (as board2-test, JWT):
+               {"wildcard":{"winlog.event_data.ParentImage":"*\\sllauncher.exe"}}  -> 200
+```
+
+SA execution left real plugin artifacts: `.opensearch-sap-windows-detectors-queries-000001`
+(2 docs), `.opensearch-sap-windows-alerts-history-2026.10.15-1` (1 doc),
+`.opensearch-sap-detectors-config`. Findings vs alerts are reported separately: the
+finding is the rule match; the alert is raised by the detector's `dll-sideload`
+trigger and carries the finding id. (A benign `NoOp trigger` ERROR alert row was
+also observed and recorded honestly, not counted as the detection alert.)
+
+## Diagnosis that unblocked the finding (m4diag)
+
+The first finding attempts produced 0 findings. The `m4diag` introspection
+retrieved the real rule and mappings via supported APIs and showed the exact cause:
+
+- The rule being used, `9aa01d62`, is **not** a 4728 rule — it is a Windows
+  **process_creation** rule (Emissary Panda SLLauncher) keyed on
+  `ParentImage endswith \sllauncher.exe` AND `Image endswith \svchost.exe`. EventID
+  alone was never sufficient; the synthetic 4728 event had none of those fields.
+- The op index did not carry the `winlog.event_data.*` fields the windows rules key
+  on, and those that were added dynamically would have been analyzed `text`, on
+  which the rule's wildcard/endswith selection would not match.
+
+Correction (telemetry + mapping, never the rule): the privileged-identity incident
+now emits a realistic DLL side-loading (T1574.002) Sysmon process-creation event
+(`sllauncher.exe -> svchost.exe`); the op index maps `winlog.event_data.*` as
+`keyword`; SA auto-maps the windows log type; and a fresh matching event is injected
+in the detector's forward scan window. The rule was not modified.
+
+## Other stages, with evidence
+
+- **Continuous ingestion across scheduled worker ticks** — ticks indexed 2/2/4/0/0 +
+  drain, `indexed_total 8/8`, `multi_tick_ingestion: true`, watermark persisted in a
   cluster state doc (`ranger-op-state`). Not a one-shot bulk import.
 - **Isolated operational index** — `ranger-op-pilot-board2-test-b2`, distinct from
-  the qualification index `ranger-pilot-board2-test-b2`; the qualification plane was
-  never touched.
-- **Field correctness** — sampled docs all carry `@timestamp` (current era),
-  `event.ingested`, identity fields (`user.name`/`source.ip`), mapped security
-  fields (`winlog.event_id`, `dns.question.name`), and `ranger.plane=operational`.
-- **Synthetic labeling** — every operational event has `data.synthetic=true`; org is
-  "Valyria Financial Group (fictional, synthetic lab data)".
-- **Genuine Security Analytics** — field mapping applied (`acknowledged:true`);
-  pre-packaged **windows** rule discovered keyed on EventID 4728
-  (`rule_id 9aa01d62-7667-4d3b-acb8-8cb5103e2014`, from 1,580 windows rules);
-  **native detectors created and executing** on a 1-minute schedule
-  (`detector_id 6xVEQaEBbaZn28UU4Paf`, and `IRVNQaEBbaZn28UU4_et` on a later run),
-  registered in `.opensearch-sap-detectors-config`; the findings API was polled live
-  (HTTP 200) every 20 s for the whole bounded window.
-- **Trace (to the detector)** — the 4728 trigger event was indexed
-  (`event_uid e7f7b0330d9326ac8923`; a fresh post-detector event
-  `m4-live-4728-204306` was also indexed in the detector's forward window); the
-  authorized investigation query `{"term":{"winlog.event_id":4728}}` run **as the
-  candidate** returned 200.
+  the qualification index `ranger-pilot-board2-test-b2`; qualification never touched.
+- **Field correctness + labeling** — sampled docs carry `@timestamp` (current era),
+  `event.ingested`, identity fields, mapped security fields, `ranger.plane=operational`,
+  and every event is `data.synthetic=true` (org "Valyria Financial Group", fictional).
 - **Candidate isolation** — own op index readable; cross-candidate read 403;
-  `.opendistro_security` and the security API denied. (No protected-truth index
-  exists candidate-side; truth lives only in the Ranger backend.)
+  `.opendistro_security` and the security API denied. No protected-truth index exists
+  candidate-side; truth lives only in the Ranger backend.
 - **SOC admin oversight without broad security admin** — reads the operational index
   and findings; denied the security index; cannot create users.
-- **Recovery (live)** — watermark persisted + read back by a fresh store; replay of
-  the full window produced 7 `create` conflicts and 0 new docs (idempotent); a
-  mapping-violating doc was dead-lettered while the valid doc indexed. (Live 429
-  backpressure was not force-induced on a healthy cluster; it is covered by the
-  offline suite `test_telemetry_stream.py`.)
-- **Measured performance (functional profile)** — ingest ~0.14 EPS; event→ingest
-  delay p50 0 s / max ≤6 s; query latency ~10–18 ms; op index ~42–47 KB for the run;
-  OpenSearch heap 17–70% of a 1 GB heap at this rate; ~9.7 GB disk free. Cross-check
-  Railway service metrics for the opensearch service over the window.
-- **Bounded + verified stop** — each run deletes its detector and disposable
-  identities; the `m4stop` teardown then verified `remaining_detectors: 0` and
-  `unattended_workload_cleared: true`. No SA workload runs unattended.
+- **Recovery (live)** — watermark persisted + read back; full-window replay produced
+  8 `create` conflicts and 0 new docs (idempotent); a mapping-violating doc was
+  dead-lettered while the valid doc indexed. Live 429 backpressure was not
+  force-induced on a healthy cluster; it is covered offline in
+  `test_telemetry_stream.py`.
+- **Measured performance** — ingest ~0.16 EPS (functional profile); event→ingest
+  delay p50 0 s; query latency ~10 ms; op index ~68 KB; OpenSearch heap 47% of a 1 GB
+  heap; ~9.7 GB disk free. Cross-check Railway service metrics over the window.
 
-## The one gap: a genuine finding did not fire
+## Bounded run + verified stop
 
-The detector is genuinely created and executing, but produced **0 findings** within
-the deadline, including for a fresh current-timestamp 4728 event placed in its
-forward scan window. Root cause: the chosen pre-packaged Sigma rule's selection is
-not satisfied by the synthetic event under the current Security Analytics field
-mappings (only `winlog.event_id → EventID` was mapped). A separate issue: the SA
-**custom** rule create returns `500 SearchPhaseExecutionException` on this build,
-so the guaranteed-match custom rule (EventID:4728 only) was not usable.
+Hard `M4_DEADLINE_S` cap; the run deletes its detector and disposable identities at
+the end (`detector_deleted: true`). The `m4stop` teardown then deletes every
+`ranger-op-board2test` detector across runs, drops the disposable op indices and the
+op-state index, removes the disposable candidate/admin identities (also proving
+revocation), and verifies `remaining_detectors: 0` / `unattended_workload_cleared:
+true`. No Security Analytics workload is left running.
 
-Both are tractable tuning items, not environment failures — SA is fully initialized
-(2,221 windows pre-packaged rules; `.opensearch-sap-pre-packaged-rules-config` holds
-22,992 docs; plugin present).
+## Remaining limitations (honest)
 
-## Recommended next step (for a focused follow-up, on your approval)
-
-1. Apply the **full** windows field mappings from the detector's
-   `get_mappings_view` (map every required alias, not just EventID) so a
-   pre-packaged rule's fields resolve against the synthetic event; or
-2. Resolve the custom-rule `500` (likely a rules-index/log-type bootstrap quirk) and
-   drive the detector with a minimal custom rule (`EventID: 4728`) that is guaranteed
-   to match the enriched event, producing a finding and, via the detector trigger, an
-   alert; then re-run the trace to a real `finding_id` and `alert_id`.
-
-Either path is a small, bounded iteration. Until then, M4.2 has demonstrated the
-operational chain through genuine native detector execution, with the finding/alert
-hop explicitly outstanding.
+- Live 429 backpressure is validated offline, not force-induced against the healthy
+  cluster.
+- The SA **custom** rule create returns `500 SearchPhaseExecutionException` on this
+  build; not needed for the demonstrated chain (a genuine pre-packaged rule is used),
+  recorded as a plugin quirk.
+- Detector field mappings are keyword-typed for the op index specifically; a
+  production operational plane would carry the full windows field set.
 
 ## Release posture during this milestone (unchanged)
 
