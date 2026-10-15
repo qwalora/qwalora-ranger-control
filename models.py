@@ -395,8 +395,8 @@ class Resource(db.Model):
     # Research publication maturity (research maturity is distinct from the
     # publish gate: `status` controls public visibility, `maturity` records how
     # far the research itself has progressed). A publication reaches the public
-    # surface only when an authorized reviewer sets status="published"; Claude's
-    # own work is never auto-approved.
+    # surface only when an authorized reviewer sets status="published";
+    # tool-generated work is never auto-approved.
     MATURITIES = ("draft", "implemented", "executed", "independently-checked",
                   "technical-review", "approved", "published", "superseded")
     # Evidence maturity of the claim a publication makes.

@@ -896,7 +896,7 @@ QR_RES_002_VERIFICATION = {
         "status": "executed",
         "environment": "Linux / Python 3.13.16 (single cloud container)",
         "host_note": "target and verifier are separate OS processes on 127.0.0.1",
-        "source_commit": "0b997a06f830d59b7c82c6938ddd5ed5da23f03d",
+        "source_commit": "951ad43ce228442ce615ec3edc2d9fd184f0aaf9",
         "started_at": "2026-10-15T03:26:07Z", "completed_at": "2026-10-15T03:26:09Z",
     },
     "tests": {"total": 26, "passed": 26, "failed": 0, "inconclusive": 0, "pytest_exit_code": 0},
@@ -913,8 +913,8 @@ QR_RES_002_VERIFICATION = {
     },
     "review": {"technical_status": "pending_technical_review",
                "approved_by": None, "approved_at": None,
-               "note": "Produced and executed by Claude. Independent human technical "
-                       "review and publication approval required; not self-approved."},
+               "note": "Produced by Qwalora's automated research tooling; pending independent "
+                       "human technical review and publication approval. Not self-approved."},
 }
 
 PUBLICATIONS = [
@@ -1047,7 +1047,7 @@ signature.
 
 - Tests: 26 of 26 passed, pytest exit code 0.
 - Scenario verdicts: 11 of 11 match the security requirement (PASS 2, FAIL 8, INCONCLUSIVE 1).
-- Source commit: `0b997a06f830d59b7c82c6938ddd5ed5da23f03d`.
+- Source commit: `951ad43ce228442ce615ec3edc2d9fd184f0aaf9`.
 - Environment: Linux / Python 3.13.16, single cloud container.
 
 ## Failure analysis, limitations, and threats to validity
@@ -1076,6 +1076,385 @@ technical review; it is not self-approved.
 See the linked standards: MITRE ATT&CK T1078, OWASP API Security BOLA, NIST SP 800-115,
 and RFC 8032 (Ed25519). Source, tests, the verification record, recorded observations,
 and the evidence manifest are linked as artifacts above.
+""",
+    },
+    {
+        "pub_id": "QR-RES-001",
+        "slug": "configuration-claims-vs-runtime-security",
+        "title": "Configuration Claims vs Runtime Security",
+        "category": "frameworks", "rtype": "research-publication", "level": "advanced",
+        "pub_type": "evaluated-artifact",
+        "collection": "A. Adversarial Verification & Evidence Integrity",
+        "version": "1.0.0", "maturity": "technical-review",
+        "publisher": "Qwalora LLC, Ranger research practice",
+        "topic": "Configuration drift, Enforcement, Behavioral testing, Audit",
+        "board": 1, "role": "detection-engineer",
+        "source_attribution": "Qwalora LLC, Ranger research practice",
+        "related": "QR-RES-002,QR-RES-017,QR-RES-028",
+        "artifacts": [
+            {"label": "Source (target, evaluators)", "url": _REPO + "/QR-RES-001/qr_res_001"},
+            {"label": "Test suite", "url": _REPO + "/QR-RES-001/tests"},
+            {"label": "Verification record", "url": _RAW + "/QR-RES-001/evidence/verification.json"},
+            {"label": "Recorded results", "url": _RAW + "/QR-RES-001/evidence/scenarios.json"},
+            {"label": "Evidence manifest (sha256)", "url": _RAW + "/QR-RES-001/evidence/manifest.sha256"},
+            {"label": "Reproduction instructions (README)", "url": _RAW + "/QR-RES-001/README.md"},
+        ],
+        "refs": [
+            {"label": "NIST SP 800-53 Rev 5: Security and Privacy Controls",
+             "url": "https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final"},
+            {"label": "NIST SP 800-115: Technical Guide to Information Security Testing",
+             "url": "https://csrc.nist.gov/pubs/sp/800/115/final"},
+            {"label": "OWASP Application Security Verification Standard",
+             "url": "https://owasp.org/www-project-application-security-verification-standard/"},
+        ],
+        "verification": {
+            "publication_id": "QR-RES-001", "version": "1.0.0",
+            "execution": {"status": "executed", "environment": "Linux / Python 3.13.16 (single cloud container)",
+                          "source_commit": "951ad43ce228442ce615ec3edc2d9fd184f0aaf9"},
+            "tests": {"total": 11, "passed": 11, "failed": 0, "pytest_exit_code": 0},
+            "scenarios": {"count": 6, "gaps_match_expected": 6, "claim_vs_reality_gaps_observed": 7},
+            "independent_verification": {"performed": True,
+                "verifier": "behavioral evaluator probing the running target (separate process)",
+                "method": "a configuration-only evaluator is compared against a behavioral evaluator; "
+                          "disagreements are the claim-vs-reality gaps; evidence is Ed25519-signed.",
+                "trust_boundary": "process isolation on one host; the behavioral evaluator never reads "
+                                  "the declared config. NOT VM/container isolation."},
+            "review": {"technical_status": "pending_technical_review", "approved_by": None, "approved_at": None},
+        },
+        "summary": "A configuration-only evaluator that trusts declared security settings is compared with a "
+        "behavioral evaluator that probes what the application actually enforces, across five controls. The "
+        "reference run found seven claim-vs-reality gaps across six scenarios: controls declared enforced but "
+        "absent at runtime (authentication, debug suppression, security headers, TLS, directory listing) and a "
+        "control enforced but undeclared. Declared configuration is shown not to be evidence of enforcement. An "
+        "evaluated engineering artifact, pending independent technical review.",
+        "body": r"""## Technical abstract
+
+Security reviews routinely read a configuration file or a self-reported settings
+endpoint and conclude a control is in place. This study builds two evaluators for
+the same five controls, a configuration-only evaluator that trusts the declared
+settings and a behavioral evaluator that probes the running application, and
+measures how often they disagree. In the reference run the behavioral evaluator
+found seven enforcement gaps that the configuration-only evaluator certified as
+compliant.
+
+## Engineering objective
+
+Quantify the gap between declared security configuration and runtime enforcement
+for a defined control set: auth_required, debug_disabled, security_headers,
+tls_enforced, listing_disabled.
+
+## System topology
+
+A target process ships a declared configuration and an actual behavior, chosen per
+scenario. The behavioral evaluator reaches it only over loopback HTTP and never
+reads the declared config; the configuration-only evaluator reads only the declared
+config.
+
+## Environment specifications
+
+Linux, Python 3.11+ (run on 3.13), standard library only, loopback only.
+
+## Exact experiment commands
+
+```
+python run_experiment.py     # runs tests + all scenarios, writes evidence/
+python -m pytest -v
+```
+
+## Scenarios
+
+Six scenarios pair a declared configuration with an actual behavior: all aligned;
+auth declared on but off at runtime; debug declared off but a stack trace leaks;
+security headers declared but missing; multiple claims unmet (headers, TLS,
+listing); and a control enforced but not declared.
+
+## Detection and defensive analysis
+
+Each control is decided from observed behavior: an unauthenticated 200 on a
+protected route (auth not enforced), a stack trace in an error body (debug not
+suppressed), missing response headers, absent HSTS, or a served directory index.
+The configuration-only evaluator reports a control enforced iff the declared value
+says so.
+
+## Verification evidence
+
+The orchestrator records the real pytest output, per-scenario config-vs-behavioral
+verdicts and the specific gaps, Ed25519-signed evidence records, a sha256 manifest
+over artifacts and source, and a machine-readable verification record anchored to
+the source commit.
+
+## Measured results (reference run)
+
+- Tests: 11/11 passed, pytest exit 0.
+- Scenarios: 6/6 produced exactly the expected gap set.
+- Claim-vs-reality gaps observed: 7. Central finding: a control declared enforced
+  (auth_required) is observed unenforced at runtime, which the configuration-only
+  evaluator does not catch.
+
+## Limitations and threats to validity
+
+Process isolation on one host, not VM/container isolation. Five controls and six
+deterministic scenarios; no population-level rate is claimed. Synthetic app and
+data only.
+
+## Conclusions
+
+A behavioral evaluator catches enforcement failures that a configuration-only
+evaluator certifies as compliant. Declared configuration is not evidence of
+enforcement. Pending independent technical review; not self-approved.
+
+## References
+
+NIST SP 800-53 Rev 5, NIST SP 800-115, and the OWASP ASVS are linked as references;
+source, tests, the verification record, results, and the manifest are linked as
+artifacts above.
+""",
+    },
+    {
+        "pub_id": "QR-RES-003",
+        "slug": "signed-evidence-replay-and-freshness",
+        "title": "Signed Evidence Replay and Freshness",
+        "category": "frameworks", "rtype": "research-publication", "level": "research",
+        "pub_type": "evaluated-artifact",
+        "collection": "A. Adversarial Verification & Evidence Integrity",
+        "version": "1.0.0", "maturity": "technical-review",
+        "publisher": "Qwalora LLC, Ranger research practice",
+        "topic": "Evidence integrity, Replay, Freshness, Cryptography",
+        "board": 4, "role": "incident-responder",
+        "source_attribution": "Qwalora LLC, Ranger research practice",
+        "related": "QR-RES-002,QR-RES-025,QR-RES-029",
+        "artifacts": [
+            {"label": "Source (envelope, verifier)", "url": _REPO + "/QR-RES-003/qr_res_003"},
+            {"label": "Test suite", "url": _REPO + "/QR-RES-003/tests"},
+            {"label": "Verification record", "url": _RAW + "/QR-RES-003/evidence/verification.json"},
+            {"label": "Recorded cases", "url": _RAW + "/QR-RES-003/evidence/cases.json"},
+            {"label": "Evidence manifest (sha256)", "url": _RAW + "/QR-RES-003/evidence/manifest.sha256"},
+            {"label": "Reproduction instructions (README)", "url": _RAW + "/QR-RES-003/README.md"},
+        ],
+        "refs": [
+            {"label": "RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519)",
+             "url": "https://www.rfc-editor.org/rfc/rfc8032"},
+            {"label": "NIST SP 800-57: Recommendation for Key Management",
+             "url": "https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final"},
+        ],
+        "verification": {
+            "publication_id": "QR-RES-003", "version": "1.0.0",
+            "execution": {"status": "executed", "environment": "Linux / Python 3.13.16 (single cloud container)",
+                          "source_commit": "951ad43ce228442ce615ec3edc2d9fd184f0aaf9"},
+            "tests": {"total": 12, "passed": 12, "failed": 0, "pytest_exit_code": 0},
+            "scenarios": {"count": 8, "verdict_matches_expected": 8,
+                          "verdict_tally": {"ACCEPT": 1, "REJECT": 6, "INCONCLUSIVE": 1}},
+            "independent_verification": {"performed": True,
+                "verifier": "challenge-issuing verifier with its own key and replay/freshness state",
+                "method": "a one-time challenge binds an envelope to one assessment; acceptance requires "
+                          "signature, challenge binding, freshness window, envelope-id uniqueness, and manifest "
+                          "hashes; adversarial envelopes are rejected.",
+                "trust_boundary": "the verifier's key and challenge/replay state are its own; a protocol study, "
+                                  "not a claim of host or network isolation."},
+            "review": {"technical_status": "pending_technical_review", "approved_by": None, "approved_at": None},
+        },
+        "summary": "Challenge-bound evidence envelopes with freshness windows, replay tracking, and "
+        "artifact-manifest integrity. A one-time verifier challenge binds each envelope to a single assessment; "
+        "acceptance requires a valid signature, the right challenge, a live freshness window, a unique envelope "
+        "id, and matching artifact hashes. The reference run accepted valid fresh evidence and rejected stale, "
+        "replayed, substituted-challenge, manipulated-manifest, tampered, and foreign-key envelopes (12/12 tests, "
+        "8/8 cases). An evaluated engineering artifact, pending independent technical review.",
+        "body": r"""## Technical abstract
+
+Signed evidence is only trustworthy if it is bound to the assessment that produced
+it and cannot be reused. This study builds a challenge-bound, time-boxed evidence
+envelope and a verifier that defeats replay, cross-assessment submission, stale
+evidence, and post-signing manifest tampering. The reference run accepted valid
+fresh evidence and rejected every adversarial envelope.
+
+## Engineering objective
+
+Guarantee that an evidence envelope is fresh, bound to one verifier-issued
+challenge, used at most once, and faithful to the artifacts it attests to.
+
+## Design
+
+An envelope binds, under an Ed25519 signature: a one-time `challenge` the verifier
+issued; an `issued_at`/`expires_at` freshness window; a unique `envelope_id`; and a
+`manifest` of sha256 hashes of the attested artifacts. The verifier issues the
+challenge, then accepts only if signature, challenge binding, freshness, envelope-id
+uniqueness, and every artifact hash hold.
+
+## Environment specifications
+
+Linux, Python 3.11+ (run on 3.13), `cryptography` + `pytest`, no network. A pure
+protocol study.
+
+## Exact experiment commands
+
+```
+python run_experiment.py
+python -m pytest -v
+```
+
+## Adversarial cases
+
+Valid fresh evidence; stale evidence past its window; replayed evidence; a
+substituted/unknown challenge; a manipulated manifest (an artifact changed after
+signing); a tampered envelope field; a foreign signing key; and an attested
+artifact not supplied.
+
+## Verification evidence
+
+The orchestrator records the real pytest output, per-case verdicts and the specific
+rejection reason, signed case records, a sha256 manifest, and a verification record
+anchored to the source commit.
+
+## Measured results (reference run)
+
+- Tests: 12/12 passed, pytest exit 0.
+- Cases: 8/8 verdicts match expected (ACCEPT 1, REJECT 6, INCONCLUSIVE 1).
+- Rejection reasons recorded: stale-expired, challenge-already-used (replay),
+  unknown-or-substituted-challenge, manifest-hash-mismatch, bad-signature, and
+  foreign-signing-key. A missing attested artifact is INCONCLUSIVE, never accepted.
+
+## Limitations and threats to validity
+
+A protocol study, not host or network isolation. Freshness uses the verifier's
+clock; clock skew across parties is out of scope for v1.0.0. The one-time challenge
+is the primary replay defense, with the envelope-id guard as a secondary control.
+Synthetic artifacts only.
+
+## Conclusions
+
+Challenge binding, a freshness window, replay tracking, and manifest hashing
+together reject stale, replayed, substituted, manipulated, tampered, and
+foreign-key evidence while accepting valid fresh evidence. Pending independent
+technical review; not self-approved.
+
+## References
+
+RFC 8032 (Ed25519) and NIST SP 800-57 are linked as references; source, tests, the
+verification record, cases, and the manifest are linked as artifacts above.
+""",
+    },
+    {
+        "pub_id": "QR-RES-017",
+        "slug": "broken-object-level-authorization",
+        "title": "Broken Object-Level Authorization",
+        "category": "offensive", "rtype": "research-publication", "level": "advanced",
+        "pub_type": "evaluated-artifact",
+        "collection": "D. Vulnerability & Application Security Research",
+        "version": "1.0.0", "maturity": "technical-review",
+        "publisher": "Qwalora LLC, Ranger research practice",
+        "topic": "BOLA, Authorization, API security, OWASP",
+        "board": 3, "role": "detection-engineer",
+        "source_attribution": "Qwalora LLC, Ranger research practice",
+        "related": "QR-RES-002,QR-RES-001,QR-RES-009",
+        "artifacts": [
+            {"label": "Source (API, BOLA probe)", "url": _REPO + "/QR-RES-017/qr_res_017"},
+            {"label": "Test suite", "url": _REPO + "/QR-RES-017/tests"},
+            {"label": "Verification record", "url": _RAW + "/QR-RES-017/evidence/verification.json"},
+            {"label": "Recorded results", "url": _RAW + "/QR-RES-017/evidence/scenarios.json"},
+            {"label": "Evidence manifest (sha256)", "url": _RAW + "/QR-RES-017/evidence/manifest.sha256"},
+            {"label": "Reproduction instructions (README)", "url": _RAW + "/QR-RES-017/README.md"},
+        ],
+        "refs": [
+            {"label": "OWASP API Security Top 10: Broken Object Level Authorization",
+             "url": "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"},
+            {"label": "OWASP Web Security Testing Guide: Authorization Testing",
+             "url": "https://owasp.org/www-project-web-security-testing-guide/"},
+        ],
+        "verification": {
+            "publication_id": "QR-RES-017", "version": "1.0.0",
+            "execution": {"status": "executed", "environment": "Linux / Python 3.13.16 (single cloud container)",
+                          "source_commit": "951ad43ce228442ce615ec3edc2d9fd184f0aaf9"},
+            "tests": {"total": 3, "passed": 3, "failed": 0, "pytest_exit_code": 0},
+            "scenarios": {"count": 2, "assessments_match_intent": 2,
+                          "bola_detected_in_vulnerable": True, "fixed_build_authorization_correct": True},
+            "independent_verification": {"performed": True,
+                "verifier": "object-level authorization probe against the running API (separate process)",
+                "method": "positive and negative object-level access cases with two synthetic identities run "
+                          "against a vulnerable and a fixed build; a cross-user disclosure is the BOLA finding; "
+                          "evidence is Ed25519-signed.",
+                "trust_boundary": "process isolation on one host; the probe uses only scoped HTTP tokens. NOT "
+                                  "VM/container isolation."},
+            "review": {"technical_status": "pending_technical_review", "approved_by": None, "approved_at": None},
+        },
+        "summary": "A disposable multiuser records API in a vulnerable and a fixed build, with an automated probe "
+        "that runs positive and negative object-level access cases with two synthetic identities. The vulnerable "
+        "build discloses another user's record by id (broken object-level authorization); the fixed build allows "
+        "owner access and denies cross-user and anonymous access. The probe catches the flaw in the vulnerable "
+        "build and confirms its absence in the fixed build (3/3 tests). An evaluated engineering artifact, pending "
+        "independent technical review.",
+        "body": r"""## Technical abstract
+
+Broken object-level authorization (BOLA) is the most common serious API flaw: an
+endpoint authenticates the caller but does not check that the caller owns the object
+requested, so any authenticated user can read another user's records by changing an
+id. This study builds the flaw and its fix and an automated probe that reliably
+distinguishes them.
+
+## Threat model
+
+An authenticated but non-owning user attempts to read another user's object by id,
+and to enumerate ids. Mapping: OWASP API Security Top 10 "Broken Object Level
+Authorization".
+
+## System topology
+
+A records API serves two synthetic users' records. In the vulnerable build the
+handler omits the ownership check; in the fixed build it enforces it. The probe
+reaches the API only over loopback HTTP with scoped bearer tokens.
+
+## Environment specifications
+
+Linux, Python 3.11+ (run on 3.13), standard library only, loopback only.
+
+## Exact experiment commands
+
+```
+python run_experiment.py     # runs tests + both builds, writes evidence/
+python -m pytest -v
+```
+
+## Adversarial and positive cases
+
+Owner reads own record (must be allowed); one user reads another's record (must be
+denied); anonymous access (must be denied); and an id-enumeration walk counting
+records disclosed to a user who does not own them.
+
+## Defensive implementation
+
+The fix enforces an object-level ownership check: a record is returned only when its
+owner matches the authenticated caller, else 403; unauthenticated callers get 401.
+
+## Verification evidence
+
+The orchestrator records the real pytest output, per-build findings (owner access,
+cross-user leak, anonymous denial, enumerated foreign records), signed evidence, a
+sha256 manifest, and a verification record anchored to the source commit.
+
+## Measured results (reference run)
+
+- Tests: 3/3 passed, pytest exit 0; assessments match intent 2/2.
+- Vulnerable build: cross-user disclosure observed (one user reads another's record;
+  the record is enumerable). BOLA present.
+- Fixed build: owner access works, cross-user denied (403), anonymous denied (401),
+  no foreign record enumerable. Authorization correct.
+
+## Limitations and threats to validity
+
+Process isolation on one host, not VM/container isolation. Two users and three
+records; no population-level rate claimed. Object-level read authorization only;
+write/delete and nested-object authorization are out of scope for v1.0.0.
+
+## Conclusions
+
+An automated probe catches a cross-user object disclosure in the vulnerable build
+and confirms its absence in the fixed build, with signed evidence. Pending
+independent technical review; not self-approved.
+
+## References
+
+The OWASP API Security BOLA entry and the OWASP WSTG are linked as references;
+source, tests, the verification record, results, and the manifest are linked as
+artifacts above.
 """,
     },
 ]

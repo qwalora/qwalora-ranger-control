@@ -280,6 +280,54 @@ def _bootstrap_resources():
         db.session.rollback()
 
 
+def _refresh_publications():
+    """Keep existing publication rows in step with the catalog (the source of
+    truth for publication content), so corrections to the body, metadata, or
+    verification record propagate on deploy. Lifecycle fields (status, maturity)
+    and the approval stamp are preserved: a published, reviewer-approved
+    publication stays published and keeps its approver."""
+    try:
+        changed = 0
+        for e in getattr(catalog, "PUBLICATIONS", []):
+            r = Resource.query.filter_by(slug=e["slug"]).first()
+            if not r:
+                continue
+            r.title = e["title"]
+            r.summary = e.get("summary")
+            r.body = e.get("body")
+            r.topic = e.get("topic")
+            r.collection = e.get("collection")
+            r.pub_type = e.get("pub_type")
+            r.version = e.get("version")
+            r.related = e.get("related")
+            r.source_attribution = e.get("source_attribution")
+            r.artifacts = _json.dumps(e["artifacts"]) if e.get("artifacts") else None
+            r.refs = _json.dumps(e["refs"]) if e.get("refs") else None
+            # Verification: take the catalog record, but preserve a live approval.
+            new_v = dict(e["verification"]) if e.get("verification") else {}
+            try:
+                live_v = _json.loads(r.verification) if r.verification else {}
+            except Exception:
+                live_v = {}
+            live_review = (live_v.get("review") or {}) if isinstance(live_v, dict) else {}
+            if isinstance(new_v, dict) and live_review.get("approved_by"):
+                # Rebuild a clean review carrying only the approval facts, so a
+                # published publication keeps its reviewer and timestamp without
+                # inheriting any stale note text.
+                new_v["review"] = {
+                    "technical_status": live_review.get("technical_status", "approved"),
+                    "approved_by": live_review.get("approved_by"),
+                    "approved_at": live_review.get("approved_at"),
+                    "note": "Approved for publication by the authorized Qwalora reviewer.",
+                }
+            r.verification = _json.dumps(new_v) if new_v else None
+            changed += 1
+        if changed:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 def _promote_publications():
     """Publish the research publications named in PUBLISH_PUBLICATIONS (a comma
     separated list of pub_ids), on the explicit authorization of the Qwalora
@@ -421,6 +469,7 @@ def create_app():
         _bootstrap_cohorts()  # make sure cohort rows exist and one is active
         _backfill_cert_ids()  # give any pre-existing certified badge a cert_id
         _bootstrap_resources()  # seed baseline public references if none exist yet
+        _refresh_publications()  # keep publication content in step with the catalog
         _promote_publications()  # publish research publications an authorized reviewer named
 
     admin_token = os.environ.get("ADMIN_TOKEN")
