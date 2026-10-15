@@ -1093,10 +1093,12 @@ def m4stream_check(c):
                           "query": {"match": {"rule.category": "windows"}}}}})
       if code == 200:
           for h in (pp.get("hits", {}) or {}).get("hits", []):
-              blob = json.dumps(h.get("_source", {}))
+              src = h.get("_source", {}) if isinstance(h, dict) else {}
+              blob = json.dumps(src)
               if "4728" in blob:
                   pp_ids.append(h.get("_id"))
-                  pp_titles.append((h.get("_source", {}).get("rule", {}) or {}).get("title"))
+                  rule = src.get("rule", {})
+                  pp_titles.append(rule.get("title") if isinstance(rule, dict) else "rule")
       note("sa_prepackaged_rules", code=code, windows_total=(pp.get("hits", {}) or {}).get("total"),
            matched_4728=len(pp_ids), ids=pp_ids[:3], titles=pp_titles[:3])
       # best-effort custom rule too (documents the 500 if the index is not ready)
