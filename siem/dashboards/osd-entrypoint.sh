@@ -18,9 +18,10 @@ opensearch.ssl.certificateAuthorities: ["/usr/share/opensearch-dashboards/config
 opensearch.username: "kibanaserver"
 opensearch.password: "${KIBANASERVER_PW}"
 opensearch.requestHeadersAllowlist: ["authorization", "securitytenant"]
-opensearch_security.auth.type: ["basic", "jwt"]
+opensearch_security.auth.type: "jwt"
 opensearch_security.jwt.url_param: "authorization"
 opensearch_security.jwt.header: "Authorization"
+opensearch_security.jwt.login_endpoint: "/soc/login"
 opensearch_security.multitenancy.enabled: false
 opensearch_security.cookie.secure: false
 opensearch_security.cookie.ttl: 3600000
