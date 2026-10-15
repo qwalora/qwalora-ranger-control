@@ -27,9 +27,16 @@ plugins.security.enable_snapshot_restore_privilege: true
 plugins.security.check_snapshot_restore_write_privileges: true
 plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]
 plugins.security.system_indices.enabled: true
+# .kibana* is intentionally NOT protected here. It is the OpenSearch Dashboards
+# saved-object index, managed by the kibanaserver service account and isolated per
+# user by the Security plugin's multitenancy (private tenants + kibana tenant
+# permissions). The documented default system-index list does not include it;
+# protecting it makes SystemIndexAccessEvaluator block saved-object writes before
+# multitenancy can route them to the per-tenant index. Candidate and SOC-admin
+# roles hold no index permission on .kibana*, so isolation stays enforced by
+# multitenancy and tenant permissions. system_indices.enabled remains true.
 plugins.security.system_indices.indices:
   - ".opendistro_security"
-  - ".kibana*"
   - ".opensearch-sap*"
   - ".opendistro-alerting*"
   - ".opensearch-observability"
