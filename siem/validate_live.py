@@ -669,8 +669,18 @@ def dataview_check(c):
     tenants = ai.get("tenants") if isinstance(ai, dict) else None
     print(f"[diag] authinfo code={ai_code} user={ai.get('user_name') if isinstance(ai,dict) else None} "
           f"roles={ai.get('roles') if isinstance(ai,dict) else None} tenants={json.dumps(tenants)}", flush=True)
-    tc, tb = c._req("GET", "/_plugins/_security/api/tenants")
-    print(f"[diag] configured_tenants code={tc} names={list(tb.keys()) if isinstance(tb,dict) else tb}", flush=True)
+    _, role_def = c._req("GET", "/_plugins/_security/api/roles/ranger_soc_admin")
+    print(f"[diag] ranger_soc_admin role={json.dumps(role_def)[:500]}", flush=True)
+    _, ks = c._req("GET", "/_plugins/_security/api/roles/kibana_server")
+    try:
+        ks_idx = ks.get("kibana_server", {}).get("index_permissions")
+    except Exception:  # noqa: BLE001
+        ks_idx = ks
+    print(f"[diag] kibana_server index_permissions={json.dumps(ks_idx)[:400]}", flush=True)
+    wc, wb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
+                              "/api/saved_objects/index-pattern/diag-full",
+                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="ranger_soc_admin")
+    print(f"[diag] full_write code={wc} body={wb[:800]}", flush=True)
 
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
