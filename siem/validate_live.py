@@ -657,6 +657,22 @@ def dataview_check(c):
         pass
     print(f"[diag] securityconfig code={sc_code} kibana={json.dumps(kib)[:400]}", flush=True)
 
+    # Diagnostic: private vs global tenant write for a JWT user, with the full error.
+    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+    pc, pb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
+                              "/api/saved_objects/index-pattern/diag-priv",
+                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="__user__")
+    gc, gb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
+                              "/api/saved_objects/index-pattern/diag-glob",
+                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="")
+    print(f"[diag] private_write code={pc} body={pb[:400]}", flush=True)
+    print(f"[diag] global_write code={gc} body={gb[:400]}", flush=True)
+
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
         if not ok:

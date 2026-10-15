@@ -100,13 +100,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def _dash_as_user(subject, cohort, method, path, body=None):
-    """Call the private Dashboards API AS the subject (short-lived JWT) in their
-    own private tenant. Used to provision tenant-scoped saved objects (data views).
-    The token never leaves the server; it is injected into the upstream header only."""
+def _dash_as_user(subject, cohort, method, path, body=None, tenant="__user__"):
+    """Call the private Dashboards API AS the subject (short-lived JWT) in the given
+    tenant (default the subject's own private tenant). Used to provision tenant-scoped
+    saved objects (data views). The token never leaves the server; it is injected into
+    the upstream header only."""
     token = ranger_jwt.mint(subject, _jwt_priv(), board=SIEM_BOARD, cohort=cohort, ttl=600)
     url = DASH + BASE + path
-    hdrs = {"Authorization": "Bearer " + token, "securitytenant": "__user__",
+    hdrs = {"Authorization": "Bearer " + token, "securitytenant": tenant,
             "osd-xsrf": "osd-fetch", "Content-Type": "application/json",
             "Accept-Encoding": "identity"}
     data = json.dumps(body).encode() if body is not None else None
