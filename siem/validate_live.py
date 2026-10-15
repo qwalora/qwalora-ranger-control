@@ -1140,6 +1140,34 @@ def m4stream_check(c):
         lim("detector", f"SA setup raised {type(e).__name__}: {e}")
     out["detector"] = sa_obj
 
+    # SA detectors scan FORWARD on their 1-min schedule, so the chain events (indexed
+    # before the detector existed) may predate its scan window. Emit a fresh,
+    # current-timestamp 4728 event AFTER the detector is live so it lands in the next
+    # scan window. This is authentic continuous telemetry, not a forced result.
+    if sa_obj["detector_id"]:
+        fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        fresh_uid = "m4-live-4728-" + _dt.datetime.now(_dt.timezone.utc).strftime("%H%M%S")
+        fresh_doc = {"uid": fresh_uid, "source": {
+            "@timestamp": fresh_ts,
+            "event": {"dataset": "windows.security", "category": "iam",
+                      "action": "group_member_added", "ingested": fresh_ts, "module": "ranger"},
+            "host": {"name": "dc01", "segment": "identity"},
+            "message": "Member added to Domain Admins: live.test",
+            "winlog": {"event_id": 4728, "channel": "Security",
+                       "event_data": {"TargetUserName": "Domain Admins",
+                                      "MemberName": "CN=live.test",
+                                      "SubjectUserName": "svc-attacker"}},
+            "user": {"name": "live.test"},
+            "ranger": {"candidate_id": CAND, "plane": "operational", "event_uid": fresh_uid},
+            "data": {"synthetic": True}}}
+        try:
+            LiveSink(c).bulk(op_index, [fresh_doc])
+            c.refresh(op_index)
+            note("sa_fresh_trigger_indexed", uid=fresh_uid, ts=fresh_ts)
+            out["trace"]["fresh_trigger_uid"] = fresh_uid
+        except Exception as e:  # noqa: BLE001
+            lim("findings", f"fresh trigger index failed: {type(e).__name__}: {e}")
+
     # SA diagnostics (always captured): distinguish "query too narrow" from
     # "Security Analytics rules indices not initialized" as the root cause.
     diag = {}
