@@ -23,6 +23,39 @@ Date: 2026-10-15. Candidate access remains DISABLED.
 - Dashboards runs JWT-only with `server.basePath: /soc` and per-candidate PRIVATE
   tenants (`enable_global: false`), isolating saved objects per candidate.
 
+## Admin act-as (candidate simulation), hardened
+
+For candidate-specific validation an authenticated Super Admin can drive the real
+candidate SOC experience as a dedicated, non-real test identity. This is a
+validation aid, not a production feature, and is constrained so it cannot be abused:
+
+1. Target is hardcoded to the single synthetic `board2-test` candidate
+   (`github_id = soctest-board2-test`). Any client-supplied handle is ignored.
+2. Requires an authenticated Super Admin session plus explicit per-use
+   authorization (`?authorize=yes`).
+3. Short-lived: the impersonation carries an expiry (`RANGER_SOC_ACTAS_TTL`,
+   default 1800s) and auto-clears; every act-as event is audited.
+4. Write-guarded: while impersonating, the session may reach only `/soc/*` and the
+   act-as controls. Every other portal route is refused (403), so candidate
+   submissions, grading records, admission status, and qualification outcomes
+   cannot be modified. SOC itself is candidate-scoped (per-candidate role + DLS +
+   private tenant) and reaches none of those records.
+5. A real account that happens to share the `board2-test` handle is never hijacked
+   (refused 409).
+6. The admin identity is recorded in the session and in the audit log for the whole
+   impersonation.
+7. Off by default: act-as returns 404 unless `RANGER_SOC_ACTAS_ENABLED` is set. It
+   stays disabled in production after validation unless a permanent implementation
+   is separately approved.
+
+Administrator-authenticated candidate simulation (this act-as path) does NOT replace
+real candidate authentication through GitHub OAuth. Both are validated separately
+before candidate access is recommended.
+
+Deployed (portal commit `761d162`): gateway registers with `test_mode=False`,
+`actas_enabled=False`. To run the candidate-scoped tests, act-as is enabled for the
+window only (`RANGER_SOC_ACTAS_ENABLED=1`) and removed afterward.
+
 ## Validated against the real stack
 
 - OpenSearch Security layer (`validate_live.py jwt`): JWT signature/iss/aud/exp,
