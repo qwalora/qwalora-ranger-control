@@ -32,6 +32,7 @@
           </form>
           {% endif %}
           <a class="btn btn-outline btn-sm" href="/admin/preview" title="Preview the ranger dashboard for any persona, SOC to capstone (no enrollment needed)">{{ ic('user','ic ic-sm') }} Preview a ranger</a>
+          <a class="btn btn-outline btn-sm" href="/admin/cohort/{{ vm.cohort }}/plan" title="Declare what this cohort covers, per board">{{ ic('layers','ic ic-sm') }} Scenario plan</a>
           <a class="btn btn-outline btn-sm" href="/roster.json?cohort={{ vm.cohort }}" target="_blank" rel="noopener" title="Machine-readable roster feed for cohort-sync and grading">{{ ic('hash','ic ic-sm') }} Roster feed</a>
           <span class="pill {% if vm.mode == 'live' %}pill-ok{% else %}pill-violet{% endif %}">
             <span class="dot {% if vm.mode == 'live' %}dot-ok{% else %}dot-violet{% endif %}"></span>Ludus {{ vm.mode }}

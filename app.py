@@ -36,8 +36,9 @@ import notify
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
-from models import (AdminUser, Badge, BoardResult, Candidate, Cohort, Notification,
-                    RangeRequest, Report, ScenarioAssignment, db, ensure_schema)
+from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
+                    CohortScenarioPlan, Notification, RangeRequest, Report,
+                    Resource, ScenarioAssignment, db, ensure_schema)
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
@@ -63,6 +64,11 @@ ENFORCE_DEADLINES = os.environ.get("ENFORCE_DEADLINES", "0") == "1"
 # the signed issued_at, so it is always correct without a background job and the
 # signed claim never changes.
 CERT_VALIDITY_YEARS = int(os.environ.get("CERT_VALIDITY_YEARS", "2"))
+# Blue boards (1-4). Today they are a per-ranger seeded dataset the ranger
+# analyzes in the browser; the shared hosted SIEM is Phase 2. SIEM_ENABLED=1
+# flips the dashboard copy (and, later, the environment wiring) to the real
+# SIEM once it is stood up. Off by default so the UI never over-promises.
+SIEM_LIVE = os.environ.get("SIEM_ENABLED", "0") == "1"
 # Unambiguous alphabet for the public credential id: no 0/O/1/I to keep it
 # readable and typeable off a printed certificate.
 _CERT_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -224,11 +230,15 @@ def _badge_chain(c):
 
 
 STATUS_UI = {
+    "pending": ("Pending review", "pill-amber", "dot-amber"),
     "active": ("Active", "pill-violet", "dot-violet"),
     "graduated": ("Graduated", "pill-ok", "dot-ok"),
     "washed_out": ("Washed out", "pill-amber", "dot-amber"),
     "withdrawn": ("Withdrawn", "pill", "dot"),
+    "rejected": ("Not accepted", "pill", "dot"),
 }
+# The status keys surfaced in admin counts and status filters, in display order.
+STATUS_KEYS = ("pending", "active", "graduated", "washed_out", "withdrawn", "rejected")
 
 
 def _normalize_db_url(url):
@@ -299,6 +309,17 @@ def create_app():
     def _inject_asset_ver():
         return {"asset_ver": asset_ver, "oauth_enabled": githuboauth.enabled(),
                 "csrf_token": _csrf_token(), "token_disabled": token_disabled}
+
+    @app.context_processor
+    def _inject_pending_count():
+        """Badge the admin nav with the number of applicants awaiting approval.
+        Only meaningful on admin pages; cheap count, best-effort."""
+        if not session.get("admin"):
+            return {"pending_count": 0}
+        try:
+            return {"pending_count": Candidate.query.filter_by(status="pending").count()}
+        except Exception:
+            return {"pending_count": 0}
 
     # --- CSRF: browser (cookie-authed) POSTs must carry the session token ----
     # API endpoints authenticate with header tokens (not cookies), so CSRF does
@@ -496,31 +517,62 @@ def create_app():
                         RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT))
                 .count())
 
+    def _slots_used_excluding(host, exclude_id):
+        """Slots held on a host by any range other than exclude_id. Used to make
+        the reserve-before-launch decision without counting the row we are about
+        to deploy."""
+        return (RangeRequest.query
+                .filter(RangeRequest.host == host,
+                        RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT),
+                        RangeRequest.id != exclude_id).count())
+
     def _try_deploy(c, rr):
         """Deploy an isolated range if a slot is free, else park it as
-        queued_slot. Returns the resulting status."""
-        if _slots_used(rr.host) >= MAX_CONCURRENT:
+        queued_slot. Returns the resulting status.
+
+        Concurrency-safe by reserve-before-launch: the row is flipped to
+        "deploying" (a slot-occupying state) and flushed BEFORE the broker is
+        called, so two concurrent callers cannot both pass the cap check and
+        oversubscribe the host. A failed launch releases the reserved slot
+        ("failed", which does not occupy a slot). Idempotent: a range already
+        holding a slot is never redeployed."""
+        # Duplicate-deploy guard: already reserved/deploying/deployed -> leave it.
+        if rr.status in RangeRequest.OCCUPIES_SLOT:
+            return rr.status
+        # Count reserved + provisioning + deployed, excluding this row, against cap.
+        if _slots_used_excluding(rr.host, rr.id) >= MAX_CONCURRENT:
             rr.status = "queued_slot"
             rr.detail = f"waiting for a slot on {rr.host} (cap {MAX_CONCURRENT})"
             return rr.status
-        _ensure_ludus_user(c)
+        # Reserve the slot now, before any slow broker call.
+        rr.status = "deploying"
+        rr.detail = "slot reserved; provisioning"
+        db.session.flush()
         key = _candidate_key(c)
-        # For flag-capture boards, hand the range its per-seed flags to plant, so
-        # each ranger's range holds their own secrets. The grader derives the same
-        # flags from the seed independently, so this only affects the live range.
-        tvars = None
-        if scenarios.kind(rr.board) == "flags":
-            seed = _current_seed(c)
-            if seed:
-                tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
-        broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
-                                user_key=key, template_vars=tvars)
-        status, range_id, detail = broker.deploy_range(c, user_key=key)
-        rr.status = status
-        if range_id:
-            rr.ludus_range_id = range_id
-        rr.wireguard_config = broker.wireguard_config(c, user_key=key)
-        st, sdetail = broker.range_status(c, user_key=key)
+        try:
+            _ensure_ludus_user(c)
+            # For flag-capture boards, hand the range its per-seed flags to plant,
+            # so each ranger's range holds their own secrets. The grader derives
+            # the same flags from the seed independently; this only affects the
+            # live range.
+            tvars = None
+            if scenarios.kind(rr.board) == "flags":
+                seed = _current_seed(c)
+                if seed:
+                    tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
+            broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
+                                    user_key=key, template_vars=tvars)
+            status, range_id, detail = broker.deploy_range(c, user_key=key)
+            if range_id:
+                rr.ludus_range_id = range_id
+            rr.wireguard_config = broker.wireguard_config(c, user_key=key)
+            st, sdetail = broker.range_status(c, user_key=key)
+        except Exception as e:  # noqa: BLE001
+            # Release the reserved slot so a broker failure never pins capacity.
+            rr.status = "failed"
+            rr.detail = ("provisioning failed: %s" % e)[:200]
+            db.session.flush()
+            return rr.status
         now = _dt.datetime.now(_dt.timezone.utc)
         rr.status = st
         rr.detail = f"{detail}; {sdetail}"
@@ -531,6 +583,10 @@ def create_app():
                 _notify(c, "range", "Your board %d lab is ready" % rr.board,
                         "Your range is deployed. Download WireGuard from your dashboard and begin.")
             rr.deployed_at = rr.deployed_at or now
+        elif st not in RangeRequest.OCCUPIES_SLOT:
+            # Broker reported a non-occupying terminal state (e.g. failed); the
+            # reservation is implicitly released by the status itself.
+            rr.detail = f"{detail}; {sdetail}"
         return rr.status
 
     def _provision_for_board(c, n, auto_deploy=True):
@@ -547,7 +603,8 @@ def create_app():
         if not P.is_isolated(n):
             rr.host = "shared"
             rr.status = "deployed"  # shared environment access granted immediately
-            rr.detail = "shared instrumented environment; per-candidate dataset seeded"
+            rr.detail = ("shared SOC SIEM; per-ranger tenant seeded" if SIEM_LIVE
+                         else "shared SOC analysis workspace; per-ranger dataset seeded (answer-free grading)")
             return rr
         rr.host = rr.host or "primary"
         if auto_deploy:
@@ -746,9 +803,13 @@ def create_app():
         if not active:
             return
         total = Candidate.query.filter_by(cohort=active.name).count()
-        remaining = Candidate.query.filter_by(cohort=active.name, status="active").count()
+        # In-flight = active OR pending (awaiting approval). A cohort completes
+        # only when none remain in-flight, so a batch still under review, or one
+        # holding only pending applicants, is never auto-completed.
+        remaining = (Candidate.query.filter_by(cohort=active.name)
+                     .filter(Candidate.status.in_(Candidate.IN_FLIGHT)).count())
         if total == 0 or remaining > 0:
-            return  # nothing enrolled yet, or still in progress
+            return  # nothing enrolled yet, or still in progress / under review
         active.status = "completed"
         active.completed_at = _dt.datetime.now(_dt.timezone.utc)
         nxt = (Cohort.query.filter_by(status="scheduled")
@@ -859,7 +920,12 @@ def create_app():
             _notify(c, "promotion", "Board %d cleared - promoted to board %d" % (n, n + 1),
                     "You earned the %s badge. You are now a %s on board %d."
                     % (nb, P.ROLE_TITLES.get(P.role_of(n + 1), "ranger"), n + 1))
-            _provision_for_board(c, n + 1, auto_deploy=True)
+            # Lazy provisioning: open the next board but never eagerly spin an
+            # isolated GOAD range on promotion. Shared boards (2-4) open instantly
+            # (no VM); isolated boards (5-6) are staged as "configured" and only
+            # deploy a VM when the ranger explicitly starts that lab, subject to
+            # the concurrency cap. auto_deploy=False is the lazy switch.
+            _provision_for_board(c, n + 1, auto_deploy=False)
         return True
 
     def _evaluate_gate(c):
@@ -914,6 +980,9 @@ def create_app():
         prior = Candidate.query.filter_by(github_id=github_id).all()
         if not prior:
             return ("new", "")
+        if any(p.status == "pending" for p in prior):
+            return ("blocked_pending",
+                    "Your application is already in review. Hang tight; you will be notified when it is decided.")
         if any(p.status == "active" for p in prior):
             return ("blocked_active",
                     "You already have an active enrollment. Finish or withdraw it first.")
@@ -940,7 +1009,7 @@ def create_app():
         # handle, so returning-student detection already works by handle.
         github_id = (request.form.get("github_id") or "").strip() or handle
         decision, msg = _enrollment_decision(github_id)
-        if decision in ("blocked_active", "blocked_graduate"):
+        if decision in ("blocked_pending", "blocked_active", "blocked_graduate"):
             return render_template("enroll.html", cohort=cohort, error=msg), 409
         # A brand-new handle in this cohort still can't collide (handle is unique);
         # a true cross-cohort restart lands with the OAuth + identity split.
@@ -948,18 +1017,15 @@ def create_app():
             return render_template("enroll.html", cohort=cohort,
                                    error=f"'{handle}' is already enrolled."), 409
 
+        # Application, not activation. A new ranger lands in "pending": no board,
+        # no environment, nothing provisioned until an admin approves. Approval
+        # (admin_candidate_approve) opens board 1 and the shared SOC environment.
         c = Candidate(handle=handle, name=name, email=email, cohort=cohort, org=org, repo=repo,
-                      github_id=github_id, current_board=1, current_role=P.role_of(1))
+                      github_id=github_id, status="pending",
+                      current_board=1, current_role=P.role_of(1))
         db.session.add(c)
-        db.session.flush()  # assign id before provisioning
-
-        # Progression model: enrollment opens board 1 (SOC, a shared environment),
-        # so a new ranger starts triaging immediately. Isolated GOAD ranges are
-        # provisioned later, when they are promoted into the red-team boards.
-        rr = _provision_for_board(c, 1)
         db.session.commit()
         return render_template("enroll_done.html", candidate=c,
-                               range_status=rr.status, range_detail=rr.detail,
                                broker_mode=broker.mode())
 
     def _auth_candidate(data):
@@ -1322,6 +1388,7 @@ def create_app():
             out.append({
                 "name": co.name, "status": co.status, "sequence": co.sequence,
                 "total": base.count(),
+                "pending": base.filter_by(status="pending").count(),
                 "active": base.filter_by(status="active").count(),
                 "graduated": base.filter_by(status="graduated").count(),
                 "start_at": co.start_at.date().isoformat() if co.start_at else None,
@@ -1417,8 +1484,7 @@ def create_app():
         cands = (Candidate.query.filter_by(org=org)
                  .order_by(Candidate.cohort.desc(), Candidate.current_board.desc(),
                            Candidate.handle).limit(500).all())
-        counts = {k: sum(1 for c in cands if c.status == k)
-                  for k in ("active", "graduated", "washed_out", "withdrawn")}
+        counts = {k: sum(1 for c in cands if c.status == k) for k in STATUS_KEYS}
         counts["all"] = len(cands)
         vm = {"org": org, "login": session.get("sponsor_login"),
               "rows": _sponsor_rows(cands), "counts": counts}
@@ -1468,6 +1534,114 @@ def create_app():
             db.session.commit()
         return redirect(url_for("admin_team"))
 
+    # --- admin: cohort scenario plan (what a cohort covers) ------------------
+    def _cohort_plan_rows(name):
+        existing = {p.board: p for p in CohortScenarioPlan.query.filter_by(cohort=name).all()}
+        rows = []
+        for b in P.BOARD_PLAN:
+            n = b["n"]
+            p = existing.get(n)
+            rows.append({"board": n, "badge": b["badge"],
+                         "role_title": P.ROLE_TITLES.get(b["role"], b["role"]),
+                         "tier": P.tier_of(n), "kind": scenarios.kind(n),
+                         "coverage": (p.coverage if p else ""),
+                         "difficulty": (p.difficulty if p else ""),
+                         "variant": (p.variant if p else ""),
+                         "notes": (p.notes if p else "")})
+        return rows
+
+    def _board_coverage(cohort, board):
+        p = CohortScenarioPlan.query.filter_by(cohort=cohort, board=board).first()
+        return (p.coverage if p else None)
+
+    @app.get("/admin/cohort/<name>/plan")
+    @admin_required
+    def admin_cohort_plan(name):
+        co = Cohort.query.filter_by(name=name).first()
+        if not co:
+            abort(404)
+        vm = {"cohort": name, "status": co.status,
+              "rows": _cohort_plan_rows(name),
+              "difficulties": CohortScenarioPlan.DIFFICULTIES}
+        return render_template("admin_cohort_plan.html", vm=vm)
+
+    @app.post("/admin/cohort/<name>/plan")
+    @admin_required
+    def admin_cohort_plan_save(name):
+        if not Cohort.query.filter_by(name=name).first():
+            abort(404)
+        for b in P.BOARD_PLAN:
+            n = b["n"]
+            cov = (request.form.get("coverage_%d" % n) or "").strip() or None
+            dif = request.form.get("difficulty_%d" % n)
+            dif = dif if dif in CohortScenarioPlan.DIFFICULTIES else None
+            var = (request.form.get("variant_%d" % n) or "").strip() or None
+            notes = (request.form.get("notes_%d" % n) or "").strip() or None
+            p = CohortScenarioPlan.query.filter_by(cohort=name, board=n).first()
+            if not any([cov, dif, var, notes]):
+                if p:
+                    db.session.delete(p)
+                continue
+            if not p:
+                p = CohortScenarioPlan(cohort=name, board=n)
+                db.session.add(p)
+            p.coverage, p.difficulty, p.variant, p.notes = cov, dif, var, notes
+        db.session.commit()
+        return redirect(url_for("admin_cohort_plan", name=name))
+
+    # --- admin: resource library ---------------------------------------------
+    @app.get("/admin/resources")
+    @admin_required
+    def admin_resources():
+        rows = Resource.query.order_by(Resource.status.asc(), Resource.rtype.asc(),
+                                       Resource.title.asc()).all()
+        edit = None
+        eid = request.args.get("edit")
+        if eid and eid.isdigit():
+            edit = Resource.query.get(int(eid))
+        vm = {"rows": [{"id": r.id, "title": r.title, "rtype": r.rtype,
+                        "topic": r.topic, "board": r.board,
+                        "role_title": (P.ROLE_TITLES.get(r.role, r.role) if r.role else None),
+                        "cohort": r.cohort, "visibility": r.visibility,
+                        "status": r.status, "url": r.url} for r in rows],
+              "edit": edit,
+              "rtypes": Resource.RTYPES, "visibilities": Resource.VISIBILITIES,
+              "roles": [(s, P.ROLE_TITLES.get(s, s)) for s in P.ROLES],
+              "boards": [(b["n"], P.badge_for(b["n"])[1]) for b in P.BOARD_PLAN],
+              "cohorts": [co.name for co in Cohort.query.order_by(Cohort.sequence.desc()).all()]}
+        return render_template("admin_resources.html", vm=vm)
+
+    @app.post("/admin/resources")
+    @admin_required
+    def admin_resource_save():
+        rid = (request.form.get("id") or "").strip()
+        r = Resource.query.get(int(rid)) if rid.isdigit() else None
+        if r is None:
+            r = Resource()
+            db.session.add(r)
+        r.title = (request.form.get("title") or "").strip() or "Untitled"
+        r.summary = (request.form.get("summary") or "").strip() or None
+        r.rtype = request.form.get("rtype") if request.form.get("rtype") in Resource.RTYPES else "reference"
+        r.topic = (request.form.get("topic") or "").strip() or None
+        b = (request.form.get("board") or "").strip()
+        r.board = int(b) if b.isdigit() else None
+        r.role = (request.form.get("role") or "").strip() or None
+        r.cohort = (request.form.get("cohort") or "").strip() or None
+        r.visibility = request.form.get("visibility") if request.form.get("visibility") in Resource.VISIBILITIES else "public"
+        r.status = "published" if request.form.get("status") == "published" else "draft"
+        r.url = (request.form.get("url") or "").strip() or None
+        r.body = (request.form.get("body") or "").strip() or None
+        db.session.commit()
+        return redirect(url_for("admin_resources"))
+
+    @app.post("/admin/resources/<int:rid>/delete")
+    @admin_required
+    def admin_resource_delete(rid):
+        r = Resource.query.get_or_404(rid)
+        db.session.delete(r)
+        db.session.commit()
+        return redirect(url_for("admin_resources"))
+
     @app.get("/admin/cohort")
     @admin_required
     def admin_cohort():
@@ -1483,8 +1657,7 @@ def create_app():
         org = (request.args.get("org") or "").strip()
         qtext = (request.args.get("q") or "").strip()
         base = Candidate.query.filter_by(cohort=cohort)
-        counts = {k: base.filter_by(status=k).count()
-                  for k in ("active", "graduated", "washed_out", "withdrawn")}
+        counts = {k: base.filter_by(status=k).count() for k in STATUS_KEYS}
         counts["all"] = base.count()
 
         # Group summary: roll the cohort up by organization. For each org, how
@@ -1511,7 +1684,7 @@ def create_app():
             })
 
         qry = base
-        if status in ("active", "graduated", "washed_out", "withdrawn"):
+        if status in STATUS_KEYS:
             qry = qry.filter_by(status=status)
         if org:
             qry = qry.filter_by(org=org)
@@ -1654,6 +1827,70 @@ def create_app():
                            exit_reason=c.exit_reason)
         return redirect(request.form.get("return") or
                         url_for("admin_cohort", status=request.form.get("return_status", "active")))
+
+    # --- enrollment approval gate -------------------------------------------
+    def _approve_candidate(c):
+        """pending -> active: unlock board 1 (shared SOC, instant, no VM) and
+        notify. Isolated GOAD identity/ranges are still created lazily, only when
+        the ranger explicitly starts a red-team board. Idempotent."""
+        if c.status != "pending":
+            return False
+        c.status = "active"
+        _provision_for_board(c, 1)  # board 1 is shared -> marked ready, no VM, no slot
+        _notify(c, "approved", "Your Qwalora Ranger application is approved",
+                "You're in. Board 1 (SOC Analyst) is open. Sign in to begin.")
+        return True
+
+    def _reject_candidate(c, reason=""):
+        """pending -> rejected (terminal). Revokes the submission token; earned
+        nothing, provisioned nothing. Idempotent."""
+        if c.status != "pending":
+            return False
+        c.status = "rejected"
+        c.exit_reason = reason or "application not accepted"
+        c.exited_at = _dt.datetime.now(_dt.timezone.utc)
+        if c.token and not c.token.startswith("revoked-"):
+            c.token = "revoked-" + c.token[:8]
+        _notify(c, "rejected", "Your Qwalora Ranger application status",
+                "Thank you for applying. Your application was not accepted for this cohort.")
+        _advance_cohorts(c.cohort)  # a rejection can be the last in-flight exit
+        return True
+
+    @app.get("/admin/pending")
+    @admin_required
+    def admin_pending():
+        """The approval queue: every applicant awaiting a decision, oldest first.
+        Optional ?cohort= scope; default is all cohorts."""
+        cohort = (request.args.get("cohort") or "").strip()
+        q = Candidate.query.filter_by(status="pending")
+        if cohort:
+            q = q.filter_by(cohort=cohort)
+        pend = q.order_by(Candidate.created_at.asc()).all()
+        rows = [{"cid": c.id, "ini": _initials(c.name), "name": c.name,
+                 "handle": c.handle, "email": c.email, "org": c.org,
+                 "cohort": c.cohort, "applied": _ago(c.created_at)} for c in pend]
+        return render_template("admin_pending.html",
+                               vm={"rows": rows, "count": len(rows), "cohort": cohort})
+
+    @app.post("/admin/candidates/<int:cid>/approve")
+    @admin_required
+    def admin_candidate_approve(cid):
+        c = Candidate.query.get_or_404(cid)
+        ok = _approve_candidate(c)
+        db.session.commit()
+        if _wants_json():
+            return jsonify(ok=ok, handle=c.handle, status=c.status)
+        return redirect(request.form.get("return") or url_for("admin_pending"))
+
+    @app.post("/admin/candidates/<int:cid>/reject")
+    @admin_required
+    def admin_candidate_reject(cid):
+        c = Candidate.query.get_or_404(cid)
+        ok = _reject_candidate(c, (request.form.get("reason") or "").strip())
+        db.session.commit()
+        if _wants_json():
+            return jsonify(ok=ok, handle=c.handle, status=c.status)
+        return redirect(request.form.get("return") or url_for("admin_pending"))
 
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")
@@ -1807,6 +2044,91 @@ def create_app():
               "clearances": rec["clearances"], "pubkey": signing.public_key_b64()}
         return render_template("certificate.html", vm=vm)
 
+    # --- resource library (public + candidate + admin) ----------------------
+    def _board_label(n):
+        if not n:
+            return None
+        try:
+            return "Board %d · %s" % (int(n), P.badge_for(int(n))[1])
+        except Exception:
+            return "Board %s" % n
+
+    def _resource_row(r):
+        """Public-safe row with display labels. Never leaks visibility/status."""
+        d = r.public_view()
+        d["role_title"] = P.ROLE_TITLES.get(r.role, r.role) if r.role else None
+        d["board_label"] = _board_label(r.board)
+        d["updated"] = _iso(d.pop("updated_at"))
+        return d
+
+    def _public_resources(args):
+        """Published + public resources, filtered. The ONLY resources a request
+        without a candidate/admin session may ever see."""
+        q = Resource.query.filter_by(status="published", visibility="public")
+        rt, topic = args.get("type"), args.get("topic")
+        board, role, search = args.get("board"), args.get("role"), (args.get("q") or "").strip()
+        if rt in Resource.RTYPES:
+            q = q.filter_by(rtype=rt)
+        if topic:
+            q = q.filter_by(topic=topic)
+        if board and board.isdigit():
+            q = q.filter_by(board=int(board))
+        if role:
+            q = q.filter_by(role=role)
+        if search:
+            like = f"%{search}%"
+            q = q.filter(db.or_(Resource.title.ilike(like), Resource.summary.ilike(like)))
+        return q.order_by(Resource.rtype.asc(), Resource.title.asc()).all()
+
+    def _resource_facets():
+        """Filter options drawn from all published public resources, so chips
+        show every available value regardless of the current filter."""
+        allpub = Resource.query.filter_by(status="published", visibility="public").all()
+        return {
+            "types": sorted({r.rtype for r in allpub if r.rtype}),
+            "topics": sorted({r.topic for r in allpub if r.topic}),
+            "boards": sorted({r.board for r in allpub if r.board}),
+            "roles": sorted({(r.role, P.ROLE_TITLES.get(r.role, r.role)) for r in allpub if r.role}),
+            "total": len(allpub),
+        }
+
+    @app.get("/resources")
+    def resources_public():
+        """Public resource library (Cloudera-style faceted grid). Public +
+        published only; no auth; no restricted or draft items ever surfaced."""
+        rows = [_resource_row(r) for r in _public_resources(request.args)]
+        vm = {"rows": rows, "facets": _resource_facets(),
+              "active": {"type": request.args.get("type", ""),
+                         "topic": request.args.get("topic", ""),
+                         "board": request.args.get("board", ""),
+                         "role": request.args.get("role", ""),
+                         "q": request.args.get("q", "")},
+              "count": len(rows)}
+        return render_template("resources_public.html", vm=vm)
+
+    @app.get("/resources.json")
+    def resources_json():
+        """Public JSON API for the resource library, for the public site to
+        consume. Public + published only, safe fields only."""
+        rows = [_resource_row(r) for r in _public_resources(request.args)]
+        return jsonify(count=len(rows), resources=rows)
+
+    def _candidate_resources(c, limit=8):
+        """Resources a signed-in ranger may see for their current board/role:
+        public + candidate visibility, published, scoped to their board (or
+        general, board null) and role (or any). Restricted/draft never returned."""
+        n = c.current_board
+        role = c.current_role or P.role_of(n)
+        q = (Resource.query
+             .filter(Resource.status == "published",
+                     Resource.visibility.in_(("public", "candidate")),
+                     db.or_(Resource.board == n, Resource.board.is_(None)),
+                     db.or_(Resource.role == role, Resource.role.is_(None)),
+                     db.or_(Resource.cohort == c.cohort, Resource.cohort.is_(None))))
+        return [_resource_row(r) for r in
+                q.order_by(Resource.board.isnot(None).desc(),
+                           Resource.rtype.asc(), Resource.title.asc()).limit(limit).all()]
+
     @app.get("/roster.json")
     @admin_required
     def roster_json():
@@ -1891,12 +2213,14 @@ def create_app():
                 decision, msg = _enrollment_decision(gid)
                 if decision in ("blocked_active", "blocked_graduate"):
                     return render_template("oauth_error.html", msg=msg), 409
+                # First GitHub sign-in is an application: land in "pending" with
+                # no board and no environment until an admin approves.
                 c = Candidate(handle=login, name=name, email=email,
                               cohort=_active_cohort_name(), github_id=gid,
+                              status="pending",
                               current_board=1, current_role=P.role_of(1))
                 db.session.add(c)
                 db.session.flush()
-                _provision_for_board(c, 1)
         db.session.commit()
         session["cand"] = c.id
         return redirect(url_for("candidate_me"))
@@ -1905,6 +2229,29 @@ def create_app():
     def auth_logout():
         session.pop("cand", None)
         return redirect(ranger_site)
+
+    @app.get("/lab/launch")
+    def lab_launch():
+        """Server-side gate behind the public 'Start your lab' CTA. The button is
+        never the control: this endpoint decides, from the signed-in identity and
+        the candidate's status in the DB, where the person may go. It provisions
+        nothing itself; approved rangers deploy their lab explicitly from /me.
+
+          not signed in  -> GitHub sign-in (which is the application) or /enroll
+          pending        -> /me (application-pending status)
+          rejected/exited-> /me (status + next steps)
+          graduated      -> /me (certified view)
+          active         -> /me (their assigned board; the portal resumes an
+                            existing lab rather than deploying a duplicate)
+        """
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))  # sign-in == application
+            return redirect(url_for("enroll_form"))
+        # Every authenticated status lands on the portal, which renders the
+        # correct per-status view. The decision is made here, server-side.
+        return redirect(url_for("candidate_me"))
 
     # --- candidate self-service --------------------------------------------
     def _current_candidate():
@@ -1957,6 +2304,8 @@ def create_app():
         rlab, rpc, rdt = _REPORT_UI.get(rep_status, (None, None, None))
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
+            "applied": c.status == "pending", "rejected": c.status == "rejected",
+            "siem_live": SIEM_LIVE,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
             "badges": bc["chain"], "certified": bc["certified"],
@@ -1978,6 +2327,8 @@ def create_app():
                               for nt in (Notification.query.filter_by(candidate_id=c.id)
                                          .order_by(Notification.id.desc()).limit(8).all())],
             "unread": Notification.query.filter_by(candidate_id=c.id, read=False).count(),
+            "resources": (_candidate_resources(c) if c.is_active else []),
+            "board_coverage": (_board_coverage(c.cohort, n) if c.is_active else None),
         }
 
     def _demo_vm(n, graduated):
@@ -2016,7 +2367,8 @@ def create_app():
             "cur_report_status": None, "cur_report_label": None,
             "cur_report_pcls": None, "cur_report_dot": None, "cur_report_notes": None,
             "report_open": not graduated, "pass_bar": P.PASS_BAR,
-            "notifications": [], "unread": 0,
+            "siem_live": SIEM_LIVE,
+            "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
         }
 
     @app.get("/admin/preview")

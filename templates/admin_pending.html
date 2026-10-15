@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Approvals · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('pending_q', '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Approvals</div>
+          <div class="rg-sub">Applicants awaiting a decision. Approving opens Board 1 and the shared SOC
+            environment; no isolated range or VM is provisioned until the ranger reaches and starts a red-team board.</div>
+        </div>
+        <span class="pill {% if vm.count %}pill-amber{% else %}pill-ok{% endif %}">
+          <span class="dot {% if vm.count %}dot-amber{% else %}dot-ok{% endif %}"></span>{{ vm.count }} pending</span>
+      </div>
+
+      <div class="co-list" style="padding-top:16px">
+        {% for r in vm.rows %}
+        <div class="co-row" style="grid-template-columns:1.6fr 1.3fr 1fr auto">
+          <div class="co-who">
+            <span class="av av-32">{{ r.ini }}</span>
+            <div class="co-id"><b>{{ r.name }}</b><span class="mono dim">@{{ r.handle }} · {{ r.email }}</span></div>
+          </div>
+          <div class="co-id"><b>{{ r.cohort }}</b><span class="mono dim">{% if r.org %}{{ r.org }}{% else %}no org{% endif %}</span></div>
+          <span class="mono dim">applied {{ r.applied }}{% if r.applied != 'now' %} ago{% endif %}</span>
+          <div style="display:flex;gap:8px">
+            <form method="post" action="/admin/candidates/{{ r.cid }}/approve">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <button class="btn btn-primary btn-sm">{{ ic('shield','ic ic-sm') }} Approve</button>
+            </form>
+            <form method="post" action="/admin/candidates/{{ r.cid }}/reject"
+                  onsubmit="return confirm('Decline {{ r.handle }}? This cannot be undone.');">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <button class="btn btn-ghost btn-sm">Decline</button>
+            </form>
+          </div>
+        </div>
+        {% else %}
+        <div class="empty"><div class="ring">{{ ic('users') }}</div><div>No applications waiting. You're all caught up.</div></div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

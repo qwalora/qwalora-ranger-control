@@ -1,38 +1,28 @@
 {% extends "base.html" %}
 {% from "_brand.html" import authnav, authfoot %}
-{% block title %}Enrolled · Qwalora Ranger{% endblock %}
+{% block title %}Application received · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="page">
 {{ authnav('Reviewer sign-in', '/admin/login') }}
 <div class="page-main">
   <div class="card">
     <div class="card-head">
-      <span class="eyebrow"><span class="d"></span>Enrolled · cohort {{ candidate.cohort }}</span>
+      <span class="eyebrow"><span class="d"></span>Application received · cohort {{ candidate.cohort }}</span>
       <h1 class="t">{{ candidate.name }} <span class="mono dim" style="font-size:16px;font-weight:400">@{{ candidate.handle }}</span></h1>
     </div>
     <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
-      <div class="field">
-        <label class="label">Submission token</label>
-        <div class="tokenbox"><code>{{ candidate.token }}</code></div>
-        <p class="dim" style="font-size:12px;line-height:1.5">Keep this. Send it as the
-          <span class="mono">X-Candidate-Token</span> header when posting written reports to
-          <span class="mono">/reports</span>. Shown once.</p>
-      </div>
-      <div class="field">
-        <label class="label">Range · GOAD (Game of Active Directory)</label>
-        <div style="display:flex;align-items:center;gap:9px;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
-          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ range_status }}</span>
-          <span class="muted" style="font-size:12.5px">{{ range_detail }}</span>
+      <div class="verify-banner vb-warn">
+        <div>
+          <b>Pending review</b>
+          <span>Your application is in. An admin reviews each applicant before a seat and
+          environment are granted. You will be notified at {{ candidate.email }} when it is decided.</span>
         </div>
-        <p class="dim" style="font-size:12px;line-height:1.5">Your isolated range is configured but not built yet.
-          Start the lab to deploy it and get your WireGuard profile:</p>
-        <div class="tokenbox" style="margin-top:6px"><code>curl -X POST https://portal.qwalora.com/labs/start \
-  -H "X-Candidate-Token: &lt;your token&gt;" \
-  -H "Content-Type: application/json" \
-  -d '{"handle":"{{ candidate.handle }}"}'</code></div>
       </div>
-      <p class="lead" style="font-size:13px">Then: connect over WireGuard, work the four roles per board, and open
-        one pull request per day. The program grades your repo at cohort sync and publishes a signed result you can verify yourself.</p>
+      <p class="lead" style="font-size:13px;line-height:1.6">Nothing is provisioned yet. On approval,
+        Board 1 (SOC Analyst) and the shared SOC environment open, and you progress board by board
+        from SOC analyst to capstone. Isolated red-team ranges are built only when you reach and
+        explicitly start those boards. The program grades your work and publishes a signed result
+        you can verify yourself.</p>
       <a class="btn btn-ghost" href="https://ranger.qwalora.com" style="align-self:flex-start">Back to the range</a>
     </div>
   </div>

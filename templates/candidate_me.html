@@ -50,6 +50,27 @@
       </div>
       <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
 
+        {% if vm.applied %}
+        <div class="verify-banner vb-warn">
+          {{ ic('clock','ic') }}
+          <div>
+            <b>Application pending review</b>
+            <span>An admin reviews each applicant before a seat and environment are granted.
+            You will be notified by email when it is decided. Nothing is provisioned yet.</span>
+          </div>
+        </div>
+        {% elif vm.rejected %}
+        <div class="verify-banner vb-warn">
+          {{ ic('shield','ic') }}
+          <div>
+            <b>Not accepted for this cohort</b>
+            <span>Thank you for applying. Your application was not accepted this time. You're
+            welcome to apply again for a future cohort.</span>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if not vm.applied and not vm.rejected %}
         <div class="field">
           <label class="label">Your progress</label>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -65,7 +86,11 @@
             {% for b in vm.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
             <span class="pip cert {% if vm.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
           </div>
+          {% if vm.board_coverage %}
+          <p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>
+          {% endif %}
         </div>
+        {% endif %}
 
         {% if vm.notifications %}
         <div class="field">
@@ -107,7 +132,11 @@
             {% endif %}
           </div>
           {% if vm.tier == 'shared' and vm.range_status == 'deployed' %}
-          <p class="dim" style="font-size:12px;margin-top:8px">Your SIEM session is ready. Work this board in the browser.</p>
+          {% if vm.siem_live %}
+          <p class="dim" style="font-size:12px;margin-top:8px">Your shared SOC SIEM session is ready. Investigate this board's telemetry in the console; grading is answer-free and server-side.</p>
+          {% else %}
+          <p class="dim" style="font-size:12px;margin-top:8px">Your analysis workspace is ready: a per-ranger seeded dataset for this board, worked in the browser. Grading is answer-free and server-side. (The hosted shared SIEM is rolling out.)</p>
+          {% endif %}
           {% endif %}
         </div>
 
@@ -141,6 +170,22 @@
           {% elif vm.cur_report_status == 'pending' %}
           <p class="dim" style="font-size:12px;margin-top:8px">Your report is in review. You will be promoted when it is approved and your objective is at {{ vm.pass_bar }}%.</p>
           {% endif %}
+        </div>
+        {% endif %}
+
+        {% if vm.resources %}
+        <div class="field">
+          <label class="label">Resources for this board</label>
+          <div class="record">
+            {% for r in vm.resources %}
+            <a class="rec-row rec-cleared" {% if r.url %}href="{{ r.url }}" target="_blank" rel="noopener"{% else %}href="/resources"{% endif %} style="text-decoration:none">
+              <span class="res-type res-type-{{ r.rtype }}" style="flex:none">{{ r.rtype }}</span>
+              <div class="rec-id"><b>{{ r.title }}</b>{% if r.summary %}<span class="muted">{{ r.summary }}</span>{% endif %}</div>
+              {% if r.url %}<span class="pill"><span class="dot"></span>{{ ic('ext','ic ic-sm') }} Open</span>{% endif %}
+            </a>
+            {% endfor %}
+          </div>
+          <p class="dim" style="font-size:11.5px;margin-top:6px">Reference material, not lab solutions. More in the <a href="/resources">resource library</a>.</p>
         </div>
         {% endif %}
 

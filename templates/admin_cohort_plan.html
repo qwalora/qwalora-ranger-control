@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}{{ vm.cohort }} scenario plan · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('cohort', vm.cohort) }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">{{ vm.cohort }} · scenario plan</div>
+          <div class="rg-sub">Declare what this cohort covers, per board. This is the admin record of intent
+            and the anchor for documentation. Scenarios stay seed-unique per ranger; difficulty and variant
+            are forward hooks for deeper scenario pools. Coverage shows to rangers on that board.</div>
+        </div>
+        <a class="btn btn-ghost btn-sm" href="/admin/cohort?cohort={{ vm.cohort }}">Back to cohort</a>
+      </div>
+
+      <form method="post" action="/admin/cohort/{{ vm.cohort }}/plan" style="padding-top:16px">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <div class="co-list">
+          {% for r in vm.rows %}
+          <div class="plan-row">
+            <div class="plan-head">
+              <span class="rec-pip t{{ r.board }}">{{ r.board }}</span>
+              <div class="co-id"><b>{{ r.badge }} · {{ r.role_title }}</b><span class="mono dim">{{ r.tier }} · {{ r.kind }}</span></div>
+              <select class="input" name="difficulty_{{ r.board }}" style="max-width:150px">
+                <option value="">difficulty…</option>
+                {% for d in vm.difficulties %}<option value="{{ d }}" {% if r.difficulty==d %}selected{% endif %}>{{ d }}</option>{% endfor %}
+              </select>
+              <input class="input" name="variant_{{ r.board }}" placeholder="variant tag" value="{{ r.variant }}" style="max-width:150px">
+            </div>
+            <input class="input" name="coverage_{{ r.board }}" placeholder="What this board covers for this cohort (shown to rangers)" value="{{ r.coverage }}" style="width:100%;margin-top:8px">
+            <textarea class="input" name="notes_{{ r.board }}" placeholder="Internal notes (not shown to rangers)" style="width:100%;margin-top:8px;min-height:40px">{{ r.notes }}</textarea>
+          </div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:14px"><button class="btn btn-primary btn-sm">{{ ic('plus','ic ic-sm') }} Save plan</button></div>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

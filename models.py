@@ -103,7 +103,12 @@ class Candidate(db.Model):
     # Ludus linkage: one candidate maps to exactly one Ludus user, which owns one range.
     ludus_user_id = db.Column(db.String(64), nullable=True)   # Ludus userID
     ludus_key_enc = db.Column(db.Text, nullable=True)         # Fernet-encrypted Ludus user API key
-    # Lifecycle: active -> graduated | withdrawn | washed_out (the three exit points).
+    # Lifecycle: pending -> active -> graduated | withdrawn | washed_out, plus
+    # pending -> rejected. A candidate is "pending" from application until an
+    # admin approves (then "active") or declines (then "rejected"). No board and
+    # no environment are provisioned until approval. The column default stays
+    # "active" so seeded/demo rows and tests are unaffected; the two real
+    # application paths (enroll, GitHub sign-in) set "pending" explicitly.
     status = db.Column(db.String(20), nullable=False, default="active", index=True)
     current_board = db.Column(db.Integer, nullable=False, default=1)   # 1..6, the board they're on
     # DB column is "board_role": current_role is a reserved keyword in Postgres.
@@ -121,11 +126,20 @@ class Candidate(db.Model):
     badges = db.relationship("Badge", backref="candidate", lazy=True,
                              cascade="all, delete-orphan")
 
-    TERMINAL = ("graduated", "withdrawn", "washed_out")
+    # Terminal states: no further progression, no environment.
+    TERMINAL = ("graduated", "withdrawn", "washed_out", "rejected")
+    # In-flight: enrolled and not yet terminal. A cohort completes only when none
+    # of its candidates are in-flight (so a cohort of only-pending rangers, or a
+    # cohort mid-review, is never auto-completed).
+    IN_FLIGHT = ("pending", "active")
 
     @property
     def is_active(self):
         return self.status == "active"
+
+    @property
+    def is_pending(self):
+        return self.status == "pending"
 
     def roster_entry(self):
         return {"handle": self.handle, "name": self.name,
@@ -284,3 +298,64 @@ class Badge(db.Model):
     cert_id = db.Column(db.String(40), nullable=True, index=True)
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "level", name="uq_badge_per_level"),)
+
+
+class Resource(db.Model):
+    """A single admin-managed reference item. One content model is the source of
+    truth for both the public resource library (public + published items) and the
+    candidate-scoped resource view (items for the ranger's board/role plus general
+    references). Access control is enforced server-side: restricted and draft
+    items, and their metadata, are never emitted on the public surface.
+
+    Resources are references and technical documentation, never lectures, guided
+    lessons, or step-by-step lab solutions."""
+    __tablename__ = "resources"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    summary = db.Column(db.String(400), nullable=True)
+    # guide | reference | playbook | dataset-doc | whitepaper | video
+    rtype = db.Column(db.String(40), nullable=False, default="reference", index=True)
+    topic = db.Column(db.String(80), nullable=True, index=True)
+    board = db.Column(db.Integer, nullable=True, index=True)   # 1..6, or null = general
+    role = db.Column(db.String(40), nullable=True)             # role slug, or null = any
+    cohort = db.Column(db.String(40), nullable=True)           # a cohort, or null = all
+    # public (anyone) | candidate (signed-in rangers) | restricted (staff only)
+    visibility = db.Column(db.String(20), nullable=False, default="public", index=True)
+    status = db.Column(db.String(20), nullable=False, default="draft", index=True)  # draft | published
+    url = db.Column(db.String(500), nullable=True)   # external or asset link
+    body = db.Column(db.Text, nullable=True)         # inline reference text (markdown)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    RTYPES = ("guide", "reference", "playbook", "dataset-doc", "whitepaper", "video")
+    VISIBILITIES = ("public", "candidate", "restricted")
+    STATUSES = ("draft", "published")
+
+    def public_view(self):
+        """Safe projection for public/candidate surfaces. Never includes the
+        visibility/status control fields or anything staff-only."""
+        return {"id": self.id, "title": self.title, "summary": self.summary,
+                "rtype": self.rtype, "topic": self.topic, "board": self.board,
+                "role": self.role, "url": self.url,
+                "updated_at": (self.updated_at or self.created_at)}
+
+
+class CohortScenarioPlan(db.Model):
+    """What a cohort covers, per board, declared by an admin. Records coverage,
+    difficulty intent, an optional scenario family/variant tag (a forward hook
+    for later generator pool-deepening), and notes. Generators stay seed-driven
+    today; this is the admin-facing statement of intent and the anchor for
+    documentation, not yet a generator switch."""
+    __tablename__ = "cohort_scenario_plans"
+    id = db.Column(db.Integer, primary_key=True)
+    cohort = db.Column(db.String(40), nullable=False, index=True)
+    board = db.Column(db.Integer, nullable=False)   # 1..6
+    coverage = db.Column(db.String(400), nullable=True)   # what this board covers
+    difficulty = db.Column(db.String(20), nullable=True)  # intro | standard | advanced
+    variant = db.Column(db.String(40), nullable=True)     # scenario family/variant tag (future)
+    notes = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (db.UniqueConstraint("cohort", "board", name="uq_plan_per_cohort_board"),)
+
+    DIFFICULTIES = ("intro", "standard", "advanced")

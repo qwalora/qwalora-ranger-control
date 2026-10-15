@@ -19,6 +19,7 @@
 
     <div class="nav-group">
       <div class="gl">Queue</div>
+      <a class="nav-item {% if active=='pending_q' %}on{% endif %}" href="/admin/pending"><span class="l">{{ ic('users') }}</span><span class="lbl">Approvals</span>{% if pending_count %}<span class="unread-dot">{{ pending_count }}</span>{% endif %}</a>
       <a class="nav-item {% if active=='all' %}on{% endif %}" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span></a>
       <a class="nav-item {% if active=='pending' %}on{% endif %}" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span></a>
       <a class="nav-item {% if active=='approved' %}on{% endif %}" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span></a>
@@ -29,6 +30,7 @@
       <div class="gl">Program</div>
       <a class="nav-item {% if active=='cohort' %}on{% endif %}" href="/admin/cohorts"><span class="l">{{ ic('users') }}</span><span class="lbl">Cohort</span></a>
       <a class="nav-item {% if active=='ranges' %}on{% endif %}" href="/admin/ranges"><span class="l">{{ ic('layers') }}</span><span class="lbl">Ranges</span></a>
+      <a class="nav-item {% if active=='resources' %}on{% endif %}" href="/admin/resources"><span class="l">{{ ic('inbox') }}</span><span class="lbl">Resources</span></a>
       <a class="nav-item {% if active=='team' %}on{% endif %}" href="/admin/team"><span class="l">{{ ic('shield') }}</span><span class="lbl">Team</span></a>
     </div>
   </div>
@@ -42,6 +44,7 @@
 
 {%- macro adminrail(active='', cohort='2026-A') -%}
 <nav class="rail">
+  <a class="rb {% if active=='pending_q' %}on{% endif %}" href="/admin/pending" title="Approvals">{{ ic('users') }}{% if pending_count %}<span class="unread-dot">{{ pending_count }}</span>{% endif %}</a>
   <a class="rb {% if active in ('all','pending','approved','needs') %}on{% endif %}" href="/admin?status=pending" title="Reports">{{ ic('inbox') }}</a>
   <a class="rb {% if active=='cohort' %}on{% endif %}" href="/admin/cohorts" title="Cohort">{{ ic('users') }}</a>
   <a class="rb {% if active=='ranges' %}on{% endif %}" href="/admin/ranges" title="Ranges">{{ ic('layers') }}</a>
