@@ -48,7 +48,7 @@ class LiveCluster:
             self._ctx = ssl._create_unverified_context()
 
     # --- transport -------------------------------------------------------
-    def _req(self, method, path, body=None, auth=None, ndjson=False):
+    def _req(self, method, path, body=None, auth=None, ndjson=False, bearer=None):
         url = self.base + path
         headers = {}
         data = None
@@ -59,9 +59,13 @@ class LiveCluster:
             else:
                 data = json.dumps(body).encode()
                 headers["Content-Type"] = "application/json"
-        u, p = auth or self.admin
-        headers["Authorization"] = "Basic " + base64.b64encode(
-            f"{u}:{p}".encode()).decode()
+        if bearer is not None:
+            # JWT auth path, exactly as Dashboards forwards the token.
+            headers["Authorization"] = "Bearer " + bearer
+        else:
+            u, p = auth or self.admin
+            headers["Authorization"] = "Basic " + base64.b64encode(
+                f"{u}:{p}".encode()).decode()
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, context=self._ctx, timeout=self.timeout) as r:
@@ -165,6 +169,21 @@ class LiveCluster:
 
     def delete_role(self, name):
         return self._req("DELETE", f"/_plugins/_security/api/roles/{name}")
+
+    def put_rolesmapping(self, role, users=None, backend_roles=None):
+        body = {}
+        if users:
+            body["users"] = list(users)
+        if backend_roles:
+            body["backend_roles"] = list(backend_roles)
+        code, resp = self._req(
+            "PUT", f"/_plugins/_security/api/rolesmapping/{role}", body=body)
+        if code not in (200, 201):
+            raise LiveError(f"put_rolesmapping {role}: {code} {resp}")
+        return resp
+
+    def delete_rolesmapping(self, role):
+        return self._req("DELETE", f"/_plugins/_security/api/rolesmapping/{role}")
 
     def get_user(self, name):
         return self._req("GET", f"/_plugins/_security/api/internalusers/{name}")

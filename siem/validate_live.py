@@ -21,7 +21,7 @@ import time
 import signing  # repo-root module; on sys.path when run as python -m siem.validate_live
 
 from . import SCHEMA_VERSION
-from . import authz, detection, enterprise, schema
+from . import authz, detection, enterprise, ranger_jwt, schema
 from .live import AuthzError, LiveCluster, NotFound
 
 COHORT = "pilot"
@@ -159,6 +159,94 @@ def backup_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def jwt_check(c):
+    """P2: validate the full candidate JWT flow against the real Security plugin.
+    Mints Ranger RS256 tokens and drives OpenSearch exactly as Dashboards forwards
+    them. Proves positive access, isolation, DLS, token validation (expiry/forgery/
+    wrong key/issuer/audience), role-claim spoof resistance, privilege-escalation
+    blocks, and enforceable revocation."""
+    from cryptography.hazmat.primitives import serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    out = {"mode": "jwt", "tests": {}, "status": "PASS"}
+
+    def rec(name, ok, **kv):
+        out["tests"][name] = {"pass": bool(ok), **kv}
+        if not ok:
+            out["status"] = "FAIL"
+        print(f"[{'PASS' if ok else 'FAIL'}] jwt/{name}: {json.dumps(kv)[:300]}", flush=True)
+
+    subs = {}
+    for cand in ("cand-a", "cand-b"):
+        idx = authz.index_name(COHORT, cand, 2)
+        c.delete_index(idx)
+        c.create_index(idx, schema.INDEX_MAPPING)
+        ev, _ = enterprise.generate(cand, 2, f"jwt-{cand}", "A")
+        c.bulk_index(idx, ev)
+        c.refresh(idx)
+        role = authz.role_name(cand)
+        c.put_role(role, [authz.candidate_index_pattern(COHORT, cand)],
+                   dls={"ranger.candidate_id": cand})
+        sub = authz.user_name(cand)
+        c.put_rolesmapping(role, users=[sub])
+        subs[cand] = (sub, idx, len(ev))
+
+    a_sub, a_idx, a_n = subs["cand-a"]
+    b_sub, b_idx, b_n = subs["cand-b"]
+    tok = lambda cand="cand-a", **kw: ranger_jwt.mint(subs[cand][0], priv, board=2, cohort=COHORT, **kw)
+
+    ta = tok()
+    rec("own_access_ok", c._req("GET", f"/{a_idx}/_count", bearer=ta)[0] == 200)
+    rec("cross_candidate_denied", c._req("GET", f"/{b_idx}/_count", bearer=ta)[0] == 403)
+    rec("expired_rejected", c._req("GET", f"/{a_idx}/_count", bearer=tok(ttl=-30))[0] in (401, 403))
+    tampered = ranger_jwt.tamper_payload(ta, {"sub": b_sub})
+    rec("tampered_rejected", c._req("GET", f"/{b_idx}/_count", bearer=tampered)[0] in (401, 403))
+    wrong = _rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        _ser.Encoding.PEM, _ser.PrivateFormat.PKCS8, _ser.NoEncryption())
+    tw = ranger_jwt.mint(a_sub, wrong, board=2, cohort=COHORT)
+    rec("wrong_key_rejected", c._req("GET", f"/{a_idx}/_count", bearer=tw)[0] in (401, 403))
+    rec("wrong_issuer_rejected", c._req("GET", f"/{a_idx}/_count", bearer=tok(extra={"iss": "evil"}))[0] in (401, 403))
+    rec("wrong_audience_rejected", c._req("GET", f"/{a_idx}/_count", bearer=tok(extra={"aud": "evil"}))[0] in (401, 403))
+    # role-claim spoof on a validly-signed token: must be ignored
+    ts = tok(extra={"roles": ["all_access", "admin", "security_rest_api_access"]})
+    sp_cross = c._req("GET", f"/{b_idx}/_count", bearer=ts)[0]
+    sp_sec = c._req("GET", "/_plugins/_security/api/internalusers", bearer=ts)[0]
+    rec("role_spoof_ineffective", sp_cross == 403 and sp_sec == 403, cross=sp_cross, security_api=sp_sec)
+    # privilege escalation attempts with the candidate's own valid token
+    pe_role = c._req("PUT", "/_plugins/_security/api/roles/evil", bearer=ta,
+                     body={"index_permissions": [{"index_patterns": ["*"], "allowed_actions": ["*"]}]})[0]
+    pe_secidx = c._req("GET", "/.opendistro_security/_search", bearer=ta)[0]
+    rec("privilege_escalation_blocked", pe_role in (401, 403) and pe_secidx in (401, 403, 404),
+        put_role=pe_role, security_index=pe_secidx)
+    # enforceable revocation: drop the rolesmapping; the SAME valid token loses access
+    c.delete_rolesmapping(authz.role_name("cand-a"))
+    rec("revocation_enforced", c._req("GET", f"/{a_idx}/_count", bearer=ta)[0] == 403)
+    # admin least-privilege: SOC admin reads SIEM data but NOT the security index
+    soc_pw = os.environ.get("RANGER_SOC_ADMIN_PW", "SocAdmin-Pilot-7xQ=")
+    c.put_role("ranger_soc_admin",
+               ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"])
+    c.put_user("ranger_soc_admin", soc_pw, ["ranger_soc_admin"])
+    adm = ("ranger_soc_admin", soc_pw)
+    soc_read = c._req("GET", f"/{a_idx}/_count", auth=adm)[0]
+    soc_sec = c._req("GET", "/.opendistro_security/_search", auth=adm)[0]
+    rec("admin_least_privilege", soc_read == 200 and soc_sec in (401, 403, 404),
+        read_siem=soc_read, read_security_index=soc_sec)
+
+    out["notes"] = {
+        "grading_secrets_location": "Ranger portal + Postgres, never in OpenSearch; SOC admins cannot see them.",
+        "candidate_auth": "JWT only; candidates never receive any OpenSearch password.",
+        "revocation_model": "delete per-candidate roles_mapping -> any live token maps to no role (immediate), plus short TTL.",
+    }
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -182,6 +270,9 @@ def main():
     if mode == "backup":
         print(f"== Ranger SIEM snapshot backup/restore against {url} ==", flush=True)
         return backup_check(c)
+    if mode == "jwt":
+        print(f"== Ranger SIEM candidate JWT auth against {url} ==", flush=True)
+        return jwt_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health

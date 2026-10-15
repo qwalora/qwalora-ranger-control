@@ -35,6 +35,67 @@ fi
 
 # ---- running as uid 1000 ----
 SENTINEL="$DATA/.ranger_security_applied"
+SENTINEL_JWT="$DATA/.ranger_jwt_applied"
+
+# v2: install the candidate JWT authc domain via securityadmin (config type). The
+# roles claim is intentionally NOT trusted (no roles_key); authz is by username
+# (sub) -> server-side roles_mapping. Guarded so it applies once.
+if [ ! -f "$SENTINEL_JWT" ] && [ -n "${RANGER_JWT_PUBLIC_B64:-}" ]; then
+  (
+    cat > "$CONF/opensearch-security/config.yml" <<EOF
+---
+_meta:
+  type: "config"
+  config_version: 2
+config:
+  dynamic:
+    http:
+      anonymous_auth_enabled: false
+    authc:
+      jwt_auth_domain:
+        description: "Ranger candidate JWT (RS256, issuer/audience enforced)"
+        http_enabled: true
+        transport_enabled: false
+        order: 0
+        http_authenticator:
+          type: jwt
+          challenge: false
+          config:
+            signing_key: "$RANGER_JWT_PUBLIC_B64"
+            jwt_header: "Authorization"
+            required_issuer: "qwalora-ranger"
+            required_audience: "qwalora-siem"
+            subject_key: "sub"
+            jwt_clock_skew_tolerance_seconds: 30
+        authentication_backend:
+          type: noop
+      basic_internal_auth_domain:
+        description: "Internal users (admin, kibanaserver, ranger_*)"
+        http_enabled: true
+        transport_enabled: true
+        order: 1
+        http_authenticator:
+          type: basic
+          challenge: true
+          config: {}
+        authentication_backend:
+          type: internal
+    authz: {}
+EOF
+    for i in $(seq 1 60); do
+      if "$TOOLS/securityadmin.sh" -t config -f "$CONF/opensearch-security/config.yml" \
+          -icl -nhnv -cacert "$CERTS/ca.pem" -cert "$CERTS/admin.pem" \
+          -key "$CERTS/admin-key.pem" -h localhost -p 9200 >/tmp/sa-jwt.log 2>&1; then
+        touch "$SENTINEL_JWT"
+        echo "[ranger] securityadmin applied JWT authc domain."
+        break
+      fi
+      sleep 5
+    done
+    [ -f "$SENTINEL_JWT" ] || { echo "[ranger] JWT authc NOT applied; retry next boot."; tail -n 20 /tmp/sa-jwt.log || true; }
+  ) &
+fi
+
 if [ ! -f "$SENTINEL" ] && [ -n "${RANGER_NEW_ADMIN_PW:-}" ]; then
   (
     hash_pw() { bash "$TOOLS/hash.sh" -p "$1" 2>/dev/null | tr -d '\r' | tail -n 1; }
