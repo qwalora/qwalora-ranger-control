@@ -45,6 +45,16 @@ indexed event  m4-live-sllauncher-211634   (ranger-op-pilot-board2-test-b2)
                {"wildcard":{"winlog.event_data.ParentImage":"*\\sllauncher.exe"}}  -> 200
 ```
 
+### Associations (verbatim from the run)
+
+| Association | Evidence |
+|---|---|
+| event → detector | finding `206abfea-aa1e-423e-b380-0d92024946ff` has `detectorId = jxVsQaEBbaZn28UUivf2` |
+| detector → rule | detector input `pre_packaged_rules = [9aa01d62-7667-4d3b-acb8-8cb5103e2014]`; finding `rule_ids = [9aa01d62-…]` |
+| finding → event | finding `associated_doc_ids = [m4-live-sllauncher-211634]`, `index = ranger-op-pilot-board2-test-b2` |
+| alert → finding | alert `50ad9f32-1a5f-4aa7-9d48-225dd45475e9` has `finding_ids = [206abfea-aa1e-423e-b380-0d92024946ff]`, `trigger_name = dll-sideload`, `state = ACTIVE` |
+| event → investigation | candidate JWT query `{"wildcard":{"winlog.event_data.ParentImage":"*\\sllauncher.exe"}}` on `ranger-op-pilot-board2-test-b2` → HTTP 200 |
+
 SA execution left real plugin artifacts: `.opensearch-sap-windows-detectors-queries-000001`
 (2 docs), `.opensearch-sap-windows-alerts-history-2026.10.15-1` (1 doc),
 `.opensearch-sap-detectors-config`. Findings vs alerts are reported separately: the
