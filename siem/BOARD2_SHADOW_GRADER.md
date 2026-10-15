@@ -163,6 +163,12 @@ from the protected truth of a seed, grades each, and records expected band / act
 score / agreement / review flags / reason. Full results across five seeds:
 **`siem/BOARD2_CALIBRATION_RESULTS.md`**. Asserted by `test_calibration.py`.
 
+**Scope caveat.** The suite grades synthetically generated submissions built from
+the hidden truth. It validates the grader's behaviour (scoring, anchors, review
+triggers, anti-gaming bounds) against known inputs; it is **not** a measurement of
+real candidate competence and does not independently validate the assessment
+against human performance. That requires the real-cohort shadow run in §8.
+
 Nine archetypes: `fully_correct`, `technically_correct_alternative`,
 `partially_correct`, `missed_incidents`, `false_positive`,
 `unsupported_fabricated_evidence`, `correct_evidence_incorrect_conclusion`,
