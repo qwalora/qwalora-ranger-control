@@ -669,18 +669,19 @@ def dataview_check(c):
     tenants = ai.get("tenants") if isinstance(ai, dict) else None
     print(f"[diag] authinfo code={ai_code} user={ai.get('user_name') if isinstance(ai,dict) else None} "
           f"roles={ai.get('roles') if isinstance(ai,dict) else None} tenants={json.dumps(tenants)}", flush=True)
-    _, role_def = c._req("GET", "/_plugins/_security/api/roles/ranger_soc_admin")
-    print(f"[diag] ranger_soc_admin role={json.dumps(role_def)[:500]}", flush=True)
-    _, ks = c._req("GET", "/_plugins/_security/api/roles/kibana_server")
-    try:
-        ks_idx = ks.get("kibana_server", {}).get("index_permissions")
-    except Exception:  # noqa: BLE001
-        ks_idx = ks
-    print(f"[diag] kibana_server index_permissions={json.dumps(ks_idx)[:400]}", flush=True)
-    wc, wb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
-                              "/api/saved_objects/index-pattern/diag-full",
-                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="ranger_soc_admin")
-    print(f"[diag] full_write code={wc} body={wb[:800]}", flush=True)
+    # Experiment: NAMED tenant write (vs the failing private tenant).
+    tn = "soc_admin_tn"
+    c._req("PUT", f"/_plugins/_security/api/tenants/{tn}", body={"description": "SOC admin tenant"})
+    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": [tn], "allowed_actions": ["kibana_all_write"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+    nc, nb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
+                              "/api/saved_objects/index-pattern/diag-named",
+                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant=tn)
+    print(f"[diag] named_tenant_write code={nc} body={nb[:500]}", flush=True)
 
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
