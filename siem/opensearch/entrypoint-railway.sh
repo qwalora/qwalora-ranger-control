@@ -1,20 +1,96 @@
 #!/bin/bash
-# Railway mounts persistent volumes owned by root (see docs.railway.com/volumes#permissions).
-# OpenSearch runs as uid 1000 and refuses to run as root, so the container is started as
-# root (RAILWAY_RUN_UID=0), we fix ownership of the data volume, then drop to uid 1000 and
-# exec the stock OpenSearch entrypoint. This is the only reason a custom image exists.
+# Ranger SIEM OpenSearch entrypoint for Railway.
+#   1. (as root) fix volume ownership, write managed TLS certs from runtime secrets,
+#      ensure the snapshot repo dir exists, then drop to uid 1000.
+#   2. (as uid 1000) on FIRST boot only, rotate the reserved admin/kibanaserver
+#      credentials and install least-privilege users via securityadmin (the REST API
+#      cannot touch reserved users), guarded by a sentinel so restarts never clobber
+#      runtime-provisioned candidate users. Then exec OpenSearch in the foreground.
 set -euo pipefail
 
-DATA_DIR="${RAILWAY_VOLUME_MOUNT_PATH:-/usr/share/opensearch/data}"
-OS_ENTRYPOINT="/usr/share/opensearch/opensearch-docker-entrypoint.sh"
+CONF=/usr/share/opensearch/config
+CERTS="$CONF/certs"
+SEC="$CONF/opensearch-security"
+TOOLS=/usr/share/opensearch/plugins/opensearch-security/tools
+DATA="${RAILWAY_VOLUME_MOUNT_PATH:-/usr/share/opensearch/data}"
+OS_ENTRYPOINT=/usr/share/opensearch/opensearch-docker-entrypoint.sh
+
+write_cert() { # $1 env var holding base64, $2 destination filename
+  local v="${1}"; local f="$2"
+  if [ -n "${!v:-}" ]; then echo "${!v}" | base64 -d > "$CERTS/$f"; fi
+}
 
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p "$DATA_DIR"
-  # Own the volume (and the config dir the security demo installer writes into) as opensearch.
-  chown -R 1000:1000 "$DATA_DIR" || true
-  chown -R 1000:1000 /usr/share/opensearch/config || true
-  # chroot --userspec drops to uid:gid 1000 without needing gosu/setpriv to be installed.
-  exec chroot --skip-chdir --userspec=1000:1000 / "$OS_ENTRYPOINT" "$@"
+  mkdir -p "$DATA" "$DATA/snapshots" "$CERTS"
+  write_cert RANGER_CA_B64 ca.pem
+  write_cert RANGER_NODE_CERT_B64 node.pem
+  write_cert RANGER_NODE_KEY_B64 node-key.pem
+  write_cert RANGER_ADMIN_CERT_B64 admin.pem
+  write_cert RANGER_ADMIN_KEY_B64 admin-key.pem
+  chmod 600 "$CERTS"/*-key.pem 2>/dev/null || true
+  chmod 644 "$CERTS"/ca.pem "$CERTS"/node.pem "$CERTS"/admin.pem 2>/dev/null || true
+  chown -R 1000:1000 "$DATA" "$CERTS"
+  exec chroot --skip-chdir --userspec=1000:1000 / "$0" "$@"
+fi
+
+# ---- running as uid 1000 ----
+SENTINEL="$DATA/.ranger_security_applied"
+if [ ! -f "$SENTINEL" ] && [ -n "${RANGER_NEW_ADMIN_PW:-}" ]; then
+  (
+    hash_pw() { bash "$TOOLS/hash.sh" -p "$1" 2>/dev/null | tr -d '\r' | tail -n 1; }
+    AH=$(hash_pw "$RANGER_NEW_ADMIN_PW")
+    KH=$(hash_pw "$RANGER_NEW_KIBANA_PW")
+    IH=$(hash_pw "$RANGER_INGEST_PW")
+    SH=$(hash_pw "$RANGER_SEARCH_PW")
+    VH=$(hash_pw "$RANGER_VALIDATOR_PW")
+    cat > "$SEC/internal_users.yml" <<EOF
+---
+_meta:
+  type: "internalusers"
+  config_version: 2
+admin:
+  hash: "$AH"
+  reserved: true
+  backend_roles: ["admin"]
+  description: "Ranger break-glass admin"
+kibanaserver:
+  hash: "$KH"
+  reserved: true
+  description: "Dashboards server account"
+ranger_ingest:
+  hash: "$IH"
+  reserved: false
+  opendistro_security_roles: ["ranger_ingest_role"]
+  description: "Ingestion identity (write ranger-*)"
+ranger_search:
+  hash: "$SH"
+  reserved: false
+  opendistro_security_roles: ["ranger_search_role"]
+  description: "Backend search identity (read ranger-*)"
+ranger_validator:
+  hash: "$VH"
+  reserved: false
+  opendistro_security_roles: ["all_access", "security_rest_api_access"]
+  description: "Isolated validation identity (disableable)"
+EOF
+    # Wait for the node, then apply ONLY the internalusers config via the admin cert.
+    ok=0
+    for i in $(seq 1 60); do
+      if "$TOOLS/securityadmin.sh" -t internalusers -f "$SEC/internal_users.yml" \
+          -icl -nhnv -cacert "$CERTS/ca.pem" -cert "$CERTS/admin.pem" \
+          -key "$CERTS/admin-key.pem" -h localhost -p 9200 >/tmp/sa.log 2>&1; then
+        ok=1; break
+      fi
+      sleep 5
+    done
+    if [ "$ok" = "1" ]; then
+      touch "$SENTINEL"
+      echo "[ranger] securityadmin applied internalusers; reserved creds rotated."
+    else
+      echo "[ranger] securityadmin did NOT apply (node not ready or error); will retry next boot."
+      tail -n 20 /tmp/sa.log || true
+    fi
+  ) &
 fi
 
 exec "$OS_ENTRYPOINT" "$@"

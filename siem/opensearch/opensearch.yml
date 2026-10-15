@@ -1,0 +1,35 @@
+cluster.name: qwalora-ranger-siem
+network.host: 0.0.0.0
+discovery.type: single-node
+
+# Snapshot repository lives on the persistent volume (P1.7 backup/restore).
+path.repo: ["/usr/share/opensearch/data/snapshots"]
+
+# Managed TLS (P1.1/P1.6): Ranger-issued CA, node, and admin certs written at
+# startup from runtime secrets. Transport and HTTP both use them; clients verify
+# against the Ranger CA. No demo certificates.
+plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/ca.pem
+
+plugins.security.allow_default_init_securityindex: true
+plugins.security.authcz.admin_dn:
+  - 'CN=admin.ranger.internal'
+plugins.security.nodes_dn:
+  - 'CN=opensearch.ranger.internal'
+plugins.security.audit.type: internal_opensearch
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.check_snapshot_restore_write_privileges: true
+plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]
+plugins.security.system_indices.enabled: true
+plugins.security.system_indices.indices:
+  - ".opendistro_security"
+  - ".kibana*"
+  - ".opensearch-sap*"
+  - ".opendistro-alerting*"
+  - ".opensearch-observability"
