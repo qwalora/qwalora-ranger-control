@@ -429,6 +429,87 @@ def socgw_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def socadmin_check(c):
+    """Stage 1: validate the SOC administrator authorization boundary over the REAL
+    JWT transport the admin's browser session uses. Provisions the exact
+    `ranger_soc_admin` role the /soc gateway creates, maps sub=ranger_soc_admin to
+    it, mints a short-lived Ranger JWT (no password), and asserts least privilege
+    against the live Security plugin: oversight read across all candidate indices,
+    but no write, no index/security mutation, no privilege escalation, no cluster
+    administration beyond monitor + alerting/securityanalytics, and no reach outside
+    the ranger-* / alerting / SAP scope."""
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    out = {"mode": "socadmin", "tests": {}, "status": "PASS"}
+
+    def rec(name, ok, **kv):
+        out["tests"][name] = {"pass": bool(ok), **kv}
+        if not ok:
+            out["status"] = "FAIL"
+        print(f"[{'PASS' if ok else 'FAIL'}] socadmin/{name}: {json.dumps(kv)[:300]}", flush=True)
+
+    # Two candidate indices (ranger-*) so we can prove cross-candidate OVERSIGHT read
+    # (the SOC admin legitimately sees all candidates, unlike a candidate).
+    idxs = {}
+    for cand in ("cand-a", "cand-b"):
+        idx = authz.index_name(COHORT, cand, 2)
+        if not c.index_exists(idx):
+            c.create_index(idx, schema.INDEX_MAPPING)
+            ev, _ = enterprise.generate(cand, 2, f"socadm-{cand}", "A")
+            c.bulk_index(idx, ev)
+            c.refresh(idx)
+        idxs[cand] = idx
+    a_idx, b_idx = idxs["cand-a"], idxs["cand-b"]
+
+    # Provision EXACTLY what soc_gateway._provision(admin) creates.
+    c.put_role("ranger_soc_admin",
+               ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor",
+                              "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": ["__user__"],
+                                    "allowed_actions": ["kibana_all_write"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+
+    # A non-ranger index to prove the index scope is tight (not all_access).
+    nonranger = f"zzz-nonranger-{int(time.time())}"
+    c.create_index(nonranger)
+
+    tok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT, ttl=600)
+    g = lambda m, p, body=None: c._req(m, p, body=body, bearer=tok)[0]
+
+    # Positive: oversight read across candidates + cluster monitor.
+    rec("monitor_ok", g("GET", "/_cluster/health") == 200)
+    rec("oversight_read_cand_a", g("GET", f"/{a_idx}/_count") == 200)
+    rec("oversight_read_cand_b", g("GET", f"/{b_idx}/_count") == 200)
+    # Negative: no write to SIEM data.
+    rec("write_denied", g("POST", f"/{a_idx}/_doc", {"x": 1}) in (401, 403))
+    rec("delete_doc_denied", g("DELETE", f"/{a_idx}/_doc/nope") in (401, 403))
+    rec("delete_index_denied", g("DELETE", f"/{a_idx}") in (401, 403))
+    # Negative: no reach outside the ranger-*/alerting/SAP scope.
+    rec("non_ranger_read_denied", g("GET", f"/{nonranger}/_count") in (401, 403))
+    # Negative: no security administration / privilege escalation.
+    rec("security_api_denied", g("GET", "/_plugins/_security/api/internalusers") in (401, 403))
+    rec("security_index_denied", g("GET", "/.opendistro_security/_search") in (401, 403, 404))
+    rec("create_role_denied",
+        g("PUT", "/_plugins/_security/api/roles/evil",
+          {"index_permissions": [{"index_patterns": ["*"], "allowed_actions": ["*"]}]}) in (401, 403))
+    # Negative: no cluster administration beyond monitor.
+    rec("cluster_settings_denied",
+        g("PUT", "/_cluster/settings", {"persistent": {"action.auto_create_index": "false"}}) in (401, 403))
+
+    c.delete_index(nonranger)  # leave the ranger_soc_admin role in place (gateway maintains it)
+
+    out["notes"] = {
+        "transport": "Ranger RS256 JWT, sub=ranger_soc_admin, injected server-side by the gateway; never a password, never in a URL.",
+        "scope": "read-only oversight on ranger-*/alerting/SAP + cluster_monitor + alerting/securityanalytics admin; no all_access, no security API, no index or cluster mutation.",
+        "standing_credential": "none; the JWT is short-lived (10 min) and the role carries no password.",
+    }
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -461,6 +542,9 @@ def main():
     if mode == "socgw":
         print(f"== Ranger /soc gateway end-to-end validation ==", flush=True)
         return socgw_check(c)
+    if mode == "socadmin":
+        print(f"== Ranger SOC administrator authorization boundary ==", flush=True)
+        return socadmin_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
