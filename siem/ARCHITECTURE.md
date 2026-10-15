@@ -251,3 +251,86 @@ credential-mapping model above. On approval, the two services are provisioned on
 Railway and the built components are validated against the live cluster. The VPS
 remains the documented fallback only if end-to-end HTTP-layer TLS or a multi-node
 cluster becomes a hard requirement.
+
+## 11. Pilot resource allocation and usage controls (for approval, pre-provisioning)
+
+Exact initial allocation, bounded so spend is deterministic. Nothing is provisioned
+until this is approved.
+
+### Per-service resource limits (Railway Replica Limits)
+
+| Service | Image (pinned) | JVM heap | Replica limit (cap) | Volume |
+|---|---|---|---|---|
+| opensearch | opensearchproject/opensearch:2.17.1 | `-Xms1g -Xmx1g` | 2 GB RAM / 1 vCPU | 10 GB at /usr/share/opensearch/data |
+| opensearch-dashboards | opensearchproject/opensearch-dashboards:2.17.1 | n/a (Node) | 1 GB RAM / 0.5 vCPU | none |
+
+Replica limits are hard per-service caps (a service that exceeds its cap is stopped,
+not billed past it). The 1 GB heap suits the pilot's tiny per-candidate data; it is
+raised to 2 GB (and the OpenSearch cap to 3 GB) only if query performance needs it,
+which would move the estimate toward the top of the range below and is flagged for
+approval before being changed. Image versions are pinned and matched (engine and
+Dashboards on the same minor).
+
+### Bounded pilot estimate (Railway actual-usage rates, Oct 2026)
+
+| Line | Expected actual | Est. USD/month |
+|---|---|---|
+| opensearch RAM (~1.3 to 1.6 GB resident at 1 GB heap) | | ~13 to 16 |
+| opensearch vCPU (bursty, ~0.2 avg) | | ~4 |
+| opensearch volume (10 GB x 0.15) | | ~1.5 |
+| dashboards RAM (~0.5 to 0.7 GB) | | ~5 to 7 |
+| dashboards vCPU (~0.1 avg) | | ~2 |
+| egress (private networking between services; small Dashboards traffic) | | ~1 to 2 |
+| **Incremental Phase 2 SIEM total** | | **~27 to 33 USD/month** |
+
+This is inside the 40 to 50 USD/month target with margin. The existing portal and
+Postgres (~10 to 25) are unchanged. Steady-state at a 2 GB heap, if the cohort grows,
+is ~40 to 47; anything above ~50 requires approval before the change is made.
+
+### Usage controls set before any billable service runs
+
+- **Workspace Compute usage limit:** soft email alert at **55 USD**, hard limit at
+  **75 USD** per billing cycle. The hard limit is the billing circuit-breaker: Railway
+  takes workloads offline before spend exceeds it, so this is a bounded commitment, not
+  an open one. (Note: a hard limit stops every workload in the workspace, including the
+  portal, so it is set with margin above normal spend; the replica limits and the soft
+  alert are the day-to-day guardrails.)
+- **Replica limits** as in the table above, so each service's usage is capped
+  deterministically regardless of load.
+- **Private networking** for all inter-service traffic (broker to OpenSearch, Dashboards
+  to OpenSearch) via the services' internal URLs, so the OpenSearch API is never exposed
+  publicly and egress is not billed.
+- **Serverless (app sleep): off** for OpenSearch (stateful, must stay up) and off for
+  Dashboards for a live SOC (cold start on candidate access); revisited only if idle
+  cost becomes material.
+
+### Candidate access to Dashboards (confirming the identity model)
+
+GitHub OAuth at Ranger stays the single candidate identity. Two access paths, both
+enforcing isolation at the OpenSearch Security layer (never UI-only filtering, never a
+shared admin account):
+
+1. **Backend-brokered queries (preferred, default).** The candidate investigates
+   through the Ranger portal, which proxies their queries to OpenSearch using a
+   per-candidate restricted service identity minted by the broker. The candidate never
+   holds an OpenSearch credential; the admin credential stays in the broker. This is the
+   strongest posture and satisfies control 3.
+2. **OpenSearch Dashboards via JWT auth.** For the full Dashboards investigation UI,
+   OpenSearch Security's JWT auth domain is enabled. After GitHub OAuth, the Ranger
+   backend issues a short-lived signed JWT whose `backend_role` claim maps to the
+   candidate's index/DLS-scoped role; OpenSearch validates the JWT and applies that role.
+   One identity, no password or admin credential in the frontend, isolation enforced by
+   the Security plugin at the API layer. Ranger already signs tokens (Ed25519 clearances),
+   so the signing capability exists; this is implementable with the current identity
+   model and is therefore **not** a blocker. If, in implementation, JWT auth could not be
+   wired to the Ranger identity without weakening isolation, that would be reported as a
+   blocker rather than worked around.
+
+### What happens on approval
+
+Provision the two services with the limits above, set the usage limits first, wire the
+broker over private networking, enable the Security plugin with the per-candidate roles,
+then run the live validation (the 15 existing suites against the real cluster, plus the
+added integration tests for credential handling, API isolation, persistence across
+restart, backup recovery, and revoked-candidate access) and report measured memory, CPU,
+volume, query latency, and actual Railway cost.
