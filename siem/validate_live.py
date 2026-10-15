@@ -1408,6 +1408,98 @@ def m4stream_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def m4diag_check(c):
+    """M4.2 follow-up DIAGNOSIS: retrieve the exact pre-packaged windows 4728 rule,
+    the mappings view for the op index, the detector's applied field mappings, and
+    the detector config (timestamp field), so the no-finding cause is identified
+    from real API data rather than guessed. Introspection only; cleans up after."""
+    import datetime as _dt
+    CAND = "board2-test"
+    op_index = f"ranger-op-{COHORT}-{authz._slug(CAND)}-b2".lower()
+    RULE_ID = os.environ.get("M4_RULE_ID", "9aa01d62-7667-4d3b-acb8-8cb5103e2014")
+    out = {"mode": "m4diag", "op_index": op_index, "rule_id": RULE_ID}
+
+    # fresh op index + one enriched 4728 event (current timestamp)
+    c.delete_index(op_index)
+    c.create_index(op_index, schema.INDEX_MAPPING)
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    doc = {"_id": "diag-4728-1", "_source": {
+        "@timestamp": now,
+        "event": {"dataset": "windows.security", "category": "iam",
+                  "action": "group_member_added", "ingested": now, "module": "ranger",
+                  "code": "4728", "provider": "Microsoft-Windows-Security-Auditing"},
+        "host": {"name": "dc01"},
+        "message": "Member added to Domain Admins",
+        "winlog": {"event_id": 4728, "channel": "Security",
+                   "provider_name": "Microsoft-Windows-Security-Auditing",
+                   "event_data": {"TargetUserName": "Domain Admins",
+                                  "MemberName": "CN=live.test",
+                                  "SubjectUserName": "svc-attacker"}},
+        "user": {"name": "live.test"},
+        "ranger": {"candidate_id": CAND, "plane": "operational", "event_uid": "diag-4728-1"},
+        "data": {"synthetic": True}}}
+    c.bulk_index(op_index, [doc])
+    c.refresh(op_index)
+
+    # 1) the exact rule content (selection + logsource)
+    code, rr = c._req("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
+                      body={"query": {"ids": {"values": [RULE_ID]}}}, timeout=60)
+    rule_src = None
+    if code == 200:
+        hits = (rr.get("hits", {}) or {}).get("hits", [])
+        if hits:
+            rule_src = hits[0].get("_source", {})
+    out["rule_source"] = rule_src
+    print("[m4diag] RULE_SOURCE: " + json.dumps(rule_src, default=str)[:1500], flush=True)
+
+    # 2) mappings view: what windows aliases are unmapped on our index
+    code, view = c._req("GET",
+                        f"/_plugins/_security_analytics/mappings/view?index_name={op_index}&rule_topic=windows",
+                        timeout=60)
+    out["mappings_view"] = {"code": code,
+                            "unmapped_field_aliases": (view or {}).get("unmapped_field_aliases"),
+                            "unmapped_index_fields": (view or {}).get("unmapped_index_fields")}
+    print("[m4diag] MAPPINGS_VIEW: " + json.dumps(out["mappings_view"], default=str)[:1500], flush=True)
+
+    # 3) apply the view's recommended mappings (supported, preserves rule integrity),
+    #    then read back the applied mappings
+    code, auto = c._req("POST", "/_plugins/_security_analytics/mappings",
+                        body={"index_name": op_index, "rule_topic": "windows", "partial": True},
+                        timeout=120)
+    out["auto_map_apply"] = {"code": code, "body": json.dumps(auto)[:300]}
+    print("[m4diag] AUTO_MAP_APPLY: " + json.dumps(out["auto_map_apply"], default=str)[:400], flush=True)
+    code, applied = c._req("GET", f"/_plugins/_security_analytics/mappings?index_name={op_index}",
+                           timeout=60)
+    out["applied_mappings_code"] = code
+    print("[m4diag] APPLIED_MAPPINGS: " + json.dumps(applied, default=str)[:1500], flush=True)
+
+    # 4) create a detector and read how SA configured it (timestamp field etc.)
+    detector = {"type": "detector", "name": "ranger-op-diag", "detector_type": "windows",
+                "enabled": True, "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+                "inputs": [{"detector_input": {"description": "diag", "indices": [op_index],
+                            "custom_rules": [], "pre_packaged_rules": [{"id": RULE_ID}]}}],
+                "triggers": [{"name": "t", "types": ["windows"], "sev_levels": ["high"],
+                              "ids": [RULE_ID], "severity": "1", "actions": []}]}
+    code, dbody = c._req("POST", "/_plugins/_security_analytics/detectors", body=detector, timeout=120)
+    did = dbody.get("_id") if code in (200, 201) else None
+    out["detector_create_code"] = code
+    out["detector_id"] = did
+    if did:
+        code, dget = c._req("GET", f"/_plugins/_security_analytics/detectors/{did}", timeout=60)
+        det = ((dget.get("detector") if isinstance(dget, dict) else None) or {})
+        out["detector_config"] = {"timefield": det.get("time_field") or det.get("timeField"),
+                                   "enabled": det.get("enabled"),
+                                   "monitor_id": det.get("monitor_id")}
+        print("[m4diag] DETECTOR_CONFIG: " + json.dumps(dget, default=str)[:1200], flush=True)
+    # cleanup
+    if did:
+        c._req("DELETE", f"/_plugins/_security_analytics/detectors/{did}", timeout=60)
+    c.delete_index(op_index)
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def m4stop_check(c):
     """Teardown + verification for M4.2: delete EVERY detector named
     ranger-op-board2test (across all prior bounded runs), the disposable op indices,
@@ -1533,6 +1625,9 @@ def main():
     if mode == "m4stop":
         print(f"== Ranger M4.2 teardown + no-unattended-workload verification ==", flush=True)
         return m4stop_check(c)
+    if mode == "m4diag":
+        print(f"== Ranger M4.2 detector-mismatch diagnosis ==", flush=True)
+        return m4diag_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
