@@ -247,6 +247,65 @@ def jwt_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def dashauth_check(c):
+    """P2.6: empirically validate how OpenSearch Dashboards 2.17.1 accepts a Ranger
+    JWT in the BROWSER/gateway path (header vs url param vs none), against the live
+    Dashboards. Confirms the header-injection transport the gateway will use so the
+    token never appears in a URL."""
+    import urllib.error as _e
+    import urllib.request as _u
+
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    dash = os.environ.get("DASHBOARDS_URL", "http://dashboards.railway.internal:5601").rstrip("/")
+    cand = "cand-a"
+    idx = authz.index_name(COHORT, cand, 2)
+    if not c.index_exists(idx):
+        c.create_index(idx, schema.INDEX_MAPPING)
+        ev, _ = enterprise.generate(cand, 2, "dash-a", "A")
+        c.bulk_index(idx, ev)
+        c.refresh(idx)
+    role = authz.role_name(cand)
+    c.put_role(role, [authz.candidate_index_pattern(COHORT, cand)],
+               dls={"ranger.candidate_id": cand})
+    sub = authz.user_name(cand)
+    c.put_rolesmapping(role, users=[sub])
+    token = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
+
+    acct = "/api/v1/configuration/account"
+
+    def hit(headers=None, qs=""):
+        req = _u.Request(dash + acct + qs, headers=headers or {}, method="GET")
+        try:
+            with _u.urlopen(req, timeout=30) as r:
+                return r.status, r.read(500).decode(errors="replace")
+        except _e.HTTPError as ex:
+            return ex.code, ex.read(300).decode(errors="replace")
+        except Exception as ex:  # noqa: BLE001
+            return -1, str(ex)[:160]
+
+    base_hdr = {"osd-xsrf": "true"}
+    out = {"mode": "dashauth", "dashboards": dash, "probes": {}}
+    out["probes"]["no_auth"] = hit(base_hdr)
+    out["probes"]["bearer_header"] = hit({**base_hdr, "Authorization": "Bearer " + token})
+    out["probes"]["url_param"] = hit(base_hdr, qs="?authorization=" + token)
+
+    na = out["probes"]["no_auth"][0]
+    bh, bh_body = out["probes"]["bearer_header"]
+    up = out["probes"]["url_param"][0]
+    out["no_auth_rejected"] = na in (401,)
+    out["header_auth_works"] = bh == 200 and (sub in bh_body or "user_name" in bh_body)
+    out["url_param_auth_works"] = up == 200
+    out["recommended_transport"] = (
+        "authorization_header" if out["header_auth_works"] else
+        ("url_param" if out["url_param_auth_works"] else "undetermined"))
+    out["status"] = "PASS" if (out["no_auth_rejected"] and out["header_auth_works"]) else "WARN"
+    print(f"[{out['status']}] dashauth: no_auth={na} bearer={bh} url_param={up} "
+          f"transport={out['recommended_transport']}", flush=True)
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -273,6 +332,9 @@ def main():
     if mode == "jwt":
         print(f"== Ranger SIEM candidate JWT auth against {url} ==", flush=True)
         return jwt_check(c)
+    if mode == "dashauth":
+        print(f"== Ranger Dashboards JWT transport probe ==", flush=True)
+        return dashauth_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
