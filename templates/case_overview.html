@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Board 2 Case · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <div style="max-width:980px;margin:0 auto;padding:24px 16px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="pill"><span class="dot"></span>{{ ic('shield','ic ic-sm') }} Board 2 · Threat Hunter</span>
+      <span class="pill pill-amber"><span class="dot dot-amber"></span>Qualification case · graded</span>
+      <span class="muted" style="font-size:12.5px">Attempt {{ case.attempt }} · scenario v{{ case.scenario_version }} · rubric v{{ case.rubric_version }}</span>
+    </div>
+
+    <h1 style="margin:16px 0 4px">Assigned investigation</h1>
+    <p class="muted" style="margin:0 0 16px">Assessment window {{ window_from }} to {{ window_to }} · organization {{ org }}</p>
+
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <h3 style="margin:0 0 8px">{{ ic('target','ic ic-sm') }} Your task</h3>
+      <p style="margin:0;line-height:1.55">{{ brief }}</p>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <a class="btn" href="/soc/launch">{{ ic('search','ic ic-sm') }} Open SOC (OpenSearch Dashboards)</a>
+      <a class="btn btn-ghost" href="/case/{{ case.id }}">{{ ic('edit','ic ic-sm') }} Open investigation workspace</a>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <h3 style="margin:0 0 8px">Status</h3>
+      <p style="margin:0" class="muted">Case lifecycle: <strong>{{ case.status }}</strong>.
+      {% if locked %}Your investigation has been submitted and is locked. Await evaluation.{% else %}
+      Investigate in the SOC, document your findings in the workspace, verify your evidence, then submit.{% endif %}</p>
+    </div>
+
+    <p class="muted" style="font-size:12px;margin-top:16px">Workflow: Board 2 &rarr; Assigned Case &rarr; Open SOC &rarr; Investigate &rarr; Document findings &rarr; Verify evidence &rarr; Submit investigation &rarr; Await evaluation.</p>
+  </div>
+</div>
+{% endblock %}

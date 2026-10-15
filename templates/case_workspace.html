@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Investigation Workspace · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <div style="max-width:1040px;margin:0 auto;padding:16px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;background:var(--bg,#0d0f12);padding:10px 0;z-index:5;border-bottom:1px solid var(--line,#23262c)">
+      <span class="pill pill-amber"><span class="dot dot-amber"></span>Qualification case · graded</span>
+      <a class="btn btn-sm" href="/soc/launch">{{ ic('search','ic ic-sm') }} Open SOC</a>
+      <span class="muted" id="status" style="font-size:12.5px">Status: {{ submission_status }}</span>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        {% if not locked %}
+        <button class="btn btn-ghost btn-sm" id="saveBtn">{{ ic('save','ic ic-sm') }} Save draft</button>
+        <button class="btn btn-ghost btn-sm" id="verifyBtn">{{ ic('check-circle','ic ic-sm') }} Verify evidence</button>
+        <button class="btn btn-sm" id="submitBtn">{{ ic('send','ic ic-sm') }} Submit investigation</button>
+        {% else %}
+        <span class="pill">{{ ic('lock','ic ic-sm') }} Submitted · locked · awaiting evaluation</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <p class="muted" style="font-size:12px;margin:10px 0">Window {{ window_from }} to {{ window_to }} · {{ org }}. Cite only events from your own assigned index. Each citation needs an event_uid and the exact query you ran. Make sure each citation supports your specific conclusion.</p>
+
+    <fieldset {% if locked %}disabled{% endif %} id="form" style="border:none;padding:0;margin:0">
+      <label class="lbl">Environment baseline and anomalies</label>
+      <textarea class="input" id="baseline" rows="3" placeholder="What normal looks like here, and what stood out."></textarea>
+
+      <div id="incidents" style="margin-top:16px"></div>
+      <button class="btn btn-ghost btn-sm" id="addIncident" type="button">{{ ic('plus','ic ic-sm') }} Add incident</button>
+
+      <label class="lbl" style="margin-top:16px">Overall conclusion</label>
+      <textarea class="input" id="overall" rows="2"></textarea>
+      <label class="lbl">Stated limitations / uncertainty</label>
+      <textarea class="input" id="limits" rows="2"></textarea>
+    </fieldset>
+
+    <div id="results" class="card" style="padding:12px;margin-top:16px;display:none"></div>
+  </div>
+</div>
+
+<template id="incidentTpl">
+  <div class="card incident" style="padding:14px;margin-bottom:12px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <div style="flex:1;min-width:180px"><label class="lbl">Label</label><input class="input f-label" placeholder="short name"></div>
+      <div><label class="lbl">Disposition</label><select class="input f-disp">{% for d in dispositions %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select></div>
+      <div><label class="lbl">Severity</label><select class="input f-sev">{% for s in severities %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select></div>
+      <div><label class="lbl">Confidence</label><input class="input f-conf" type="number" min="0" max="100" value="50" style="width:80px"></div>
+      <button class="btn btn-ghost btn-sm rm" type="button">{{ ic('trash','ic ic-sm') }}</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <div style="flex:1;min-width:160px"><label class="lbl">ATT&CK techniques (comma)</label><input class="input f-tech" placeholder="T1078, T1059.001"></div>
+      <div style="flex:1;min-width:160px"><label class="lbl">Primary identity</label><input class="input f-id"></div>
+      <div style="flex:1;min-width:160px"><label class="lbl">Actor IP</label><input class="input f-ip"></div>
+    </div>
+    <label class="lbl" style="margin-top:8px">Affected assets (comma)</label><input class="input f-assets">
+    <label class="lbl" style="margin-top:8px">Cited evidence</label>
+    <table class="evtbl" style="width:100%;font-size:13px"><thead><tr><th>event_uid</th><th>query (DSL JSON)</th><th>role</th><th>status</th><th></th></tr></thead><tbody class="evrows"></tbody></table>
+    <button class="btn btn-ghost btn-sm addEv" type="button">{{ ic('plus','ic ic-sm') }} Add citation</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <div style="flex:1;min-width:200px"><label class="lbl">Detection gap</label><input class="input f-gap"></div>
+      <div style="flex:1;min-width:200px"><label class="lbl">Proposed detection</label><input class="input f-prop"></div>
+    </div>
+    <label class="lbl" style="margin-top:8px">Response recommendations (comma)</label><input class="input f-resp">
+    <label class="lbl" style="margin-top:8px">Analyst conclusion</label><textarea class="input f-concl" rows="2"></textarea>
+  </div>
+</template>
+<template id="evRowTpl">
+  <tr><td><input class="input e-uid" style="width:100%"></td><td><textarea class="input e-query" rows="1" placeholder='{"query":{"ids":{"values":["..."]}}}'></textarea></td>
+  <td><select class="input e-role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></td>
+  <td class="e-status muted">—</td><td><button class="btn btn-ghost btn-sm e-rm" type="button">{{ ic('trash','ic ic-sm') }}</button></td></tr>
+</template>
+
+<script>
+const CSRF = {{ csrf_token|tojson }};
+const CID = {{ case.id }};
+const LOCKED = {{ 'true' if locked else 'false' }};
+const PRE = {{ (payload or {})|tojson }};
+
+function el(html){const t=document.createElement('template');t.innerHTML=html.trim();return t.content.firstChild;}
+function addIncident(data){
+  const node=document.getElementById('incidentTpl').content.firstElementChild.cloneNode(true);
+  document.getElementById('incidents').appendChild(node);
+  node.querySelector('.rm').onclick=()=>node.remove();
+  node.querySelector('.addEv').onclick=()=>addEv(node,{});
+  if(data){
+    node.querySelector('.f-label').value=data.label||'';
+    node.querySelector('.f-disp').value=data.disposition||'confirmed_incident';
+    node.querySelector('.f-sev').value=data.severity||'medium';
+    node.querySelector('.f-conf').value=data.confidence??50;
+    node.querySelector('.f-tech').value=(data.attack_techniques||[]).join(', ');
+    node.querySelector('.f-id').value=data.primary_identity||'';
+    node.querySelector('.f-ip').value=data.actor_ip||'';
+    node.querySelector('.f-assets').value=(data.affected_assets||[]).join(', ');
+    node.querySelector('.f-gap').value=(data.detection_assessment||{}).gap||'';
+    node.querySelector('.f-prop').value=(data.detection_assessment||{}).proposed_detection||'';
+    node.querySelector('.f-resp').value=(data.response_recommendations||[]).join(', ');
+    node.querySelector('.f-concl').value=data.analyst_conclusion||'';
+    (data.cited_evidence||[]).forEach(c=>addEv(node,c));
+  }
+  return node;
+}
+function addEv(node,c){
+  const row=document.getElementById('evRowTpl').content.firstElementChild.cloneNode(true);
+  node.querySelector('.evrows').appendChild(row);
+  row.querySelector('.e-rm').onclick=()=>row.remove();
+  if(c){row.querySelector('.e-uid').value=c.event_uid||'';
+    row.querySelector('.e-query').value=c.query?JSON.stringify(c.query):'';
+    if(c.role)row.querySelector('.e-role').value=c.role;}
+}
+function collect(){
+  const incs=[...document.querySelectorAll('.incident')].map(n=>{
+    const cites=[...n.querySelectorAll('.evrows tr')].map(r=>{
+      let q={}; try{q=JSON.parse(r.querySelector('.e-query').value||'{}');}catch(e){q={"_invalid":true};}
+      return {event_uid:r.querySelector('.e-uid').value.trim(), query:q, role:r.querySelector('.e-role').value};
+    }).filter(c=>c.event_uid||Object.keys(c.query).length);
+    const csv=s=>s.split(',').map(x=>x.trim()).filter(Boolean);
+    return {label:n.querySelector('.f-label').value, disposition:n.querySelector('.f-disp').value,
+      severity:n.querySelector('.f-sev').value, confidence:Number(n.querySelector('.f-conf').value),
+      attack_techniques:csv(n.querySelector('.f-tech').value), primary_identity:n.querySelector('.f-id').value,
+      actor_ip:n.querySelector('.f-ip').value, affected_assets:csv(n.querySelector('.f-assets').value),
+      cited_evidence:cites, detection_assessment:{gap:n.querySelector('.f-gap').value, proposed_detection:n.querySelector('.f-prop').value},
+      response_recommendations:csv(n.querySelector('.f-resp').value), analyst_conclusion:n.querySelector('.f-concl').value};
+  });
+  return {baseline_summary:document.getElementById('baseline').value, overall_conclusion:document.getElementById('overall').value,
+    stated_limitations:document.getElementById('limits').value, incidents:incs};
+}
+async function post(path,body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(body||{})});
+  return {code:r.status, data:await r.json().catch(()=>({}))};
+}
+function showResults(html){const d=document.getElementById('results');d.style.display='block';d.innerHTML=html;}
+let saveTimer=null;
+function scheduleSave(){if(LOCKED)return;clearTimeout(saveTimer);saveTimer=setTimeout(doSave,1200);document.getElementById('status').textContent='Status: editing…';}
+async function doSave(){const {data}=await post(`/case/${CID}/draft`,collect());document.getElementById('status').textContent='Status: draft saved';return data;}
+
+if(!LOCKED){
+  if(PRE&&PRE.incidents){document.getElementById('baseline').value=PRE.baseline_summary||'';
+    document.getElementById('overall').value=PRE.overall_conclusion||'';document.getElementById('limits').value=PRE.stated_limitations||'';
+    PRE.incidents.forEach(addIncident);} else {addIncident({disposition:'confirmed_incident'});}
+  document.getElementById('addIncident').onclick=()=>addIncident({disposition:'confirmed_incident'});
+  document.getElementById('form').addEventListener('input',scheduleSave);
+  document.getElementById('saveBtn').onclick=async()=>{const d=await doSave();
+    showResults('<strong>Draft saved.</strong> '+(d.validation&&d.validation.ok?'Validation OK.':'Validation issues: '+((d.validation&&d.validation.errors||[]).map(e=>e.code+' @ '+e.path).join('; ')||'')));};
+  document.getElementById('verifyBtn').onclick=async()=>{await doSave();const {data}=await post(`/case/${CID}/verify`,collect());
+    const v=(data.verification||{}).incidents||[];let rows='';v.forEach(i=>i.citations.forEach(c=>{rows+=`<tr><td>${c.event_uid||'(empty)'}</td><td>${c.exists}</td><td>${c.in_scope}</td><td>${c.reproduces}</td><td>${c.reference_valid?'valid':'<em>invalid</em>'}</td><td>${(c.errors||[]).join(', ')}</td></tr>`;}));
+    showResults('<strong>Evidence check (existence, scope, reproducibility):</strong><table class="evtbl" style="width:100%;font-size:12.5px"><thead><tr><th>uid</th><th>exists</th><th>in_scope</th><th>reproduces</th><th>reference</th><th>errors</th></tr></thead><tbody>'+rows+'</tbody></table><p class="muted" style="font-size:12px">This check never reveals anything about the scenario; it only confirms your citations are real and reproducible.</p>');};
+  document.getElementById('submitBtn').onclick=async()=>{if(!confirm('Submit and lock this investigation? You cannot edit after submitting.'))return;await doSave();
+    const {code,data}=await post(`/case/${CID}/submit`,{});
+    if(code===200){showResults('<strong>Submitted.</strong> Your evidence record is signed and locked. Awaiting evaluation.');setTimeout(()=>location.reload(),900);}
+    else{showResults('<strong>Not submitted ('+(data.stage||'error')+').</strong> '+((data.validation&&(data.validation.errors||[]).map(e=>e.code+' @ '+e.path).join('; '))||'Fix invalid evidence citations (see Verify) and try again.'));}};
+}
+</script>
+{% endblock %}

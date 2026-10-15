@@ -2863,6 +2863,16 @@ def create_app():
         except Exception as e:  # noqa: BLE001
             app.logger.warning("SOC gateway not registered: %s", e)
 
+    # Board 2 SOC case management + investigation workspace (/case). Behind the
+    # RANGER_CASE_UI feature flag (routes 404 when off) so production stays dark
+    # until validation completes. Reuses the candidate session, models, and signing.
+    try:
+        import case_routes
+        case_routes.register(app, Candidate, db,
+                             {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("case UI not registered: %s", e)
+
     return app
 
 
