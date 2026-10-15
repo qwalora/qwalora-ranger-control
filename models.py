@@ -125,38 +125,97 @@ def ensure_schema(db):
         except Exception:
             db.session.rollback()
 
-    # Non-destructive pathway normalization. Python read-time normalization
-    # (pathways.normalize_pathway) is NOT sufficient once any SQL predicate filters by
-    # pathway (cohort selection, catalog assignment, reporting): a legacy 'cyber-ops'
-    # row would be missed by `WHERE pathway='strata'`. This idempotent value remap keeps
-    # persisted values canonical so SQL predicates are always correct. It drops nothing
-    # and is reversible; a genuine 'strata'/'parallax' row is untouched. Safe per boot.
-    normalize_persisted_pathways(db, existing_tables)
+    # Pathway normalization at startup is DETECTION-ONLY by default (no writes). An
+    # ordinary boot must not silently modify production records; writing on every start
+    # is a repeatable, uncontrolled mutation. The actual remap is a versioned, explicitly
+    # authorized one-shot migration (RANGER_PATHWAY_MIGRATE=1 or `python migrate_pathways.py`),
+    # run under its own transaction with rollback. See normalize_persisted_pathways.
+    startup_pathway_check(db, existing_tables)
+
+
+_PATHWAY_TABLES = ("cohorts", "scenario_catalog_entries")
+
+
+def detect_legacy_pathways(db, existing_tables=None):
+    """Read-only. Return {table: count_of_legacy_rows} for rows still under an interim
+    pathway id ('cyber-ops'/'cyber-ai'). Performs NO writes, so it is safe on every boot
+    and against production. Portable across SQLite and PostgreSQL."""
+    from sqlalchemy import inspect as _inspect
+    if existing_tables is None:
+        existing_tables = set(_inspect(db.engine).get_table_names())
+    legacy_ids = list(pathways.LEGACY_PATHWAY_ALIASES.keys())
+    out = {}
+    for table in _PATHWAY_TABLES:
+        if table not in existing_tables:
+            continue
+        try:
+            rows = db.session.execute(
+                db.text(f"SELECT COUNT(*) FROM {table} "
+                        f"WHERE pathway IN :legacy").bindparams(
+                            db.bindparam("legacy", expanding=True)),
+                {"legacy": legacy_ids}).scalar()
+            out[table] = int(rows or 0)
+        except Exception:
+            db.session.rollback()
+    return out
+
+
+def startup_pathway_check(db, existing_tables=None):
+    """Called on every boot. Detects legacy pathway values WITHOUT writing. Only when the
+    operator explicitly authorizes it (env RANGER_PATHWAY_MIGRATE truthy) does it run the
+    one-shot migration; otherwise it leaves records untouched and returns the detection
+    result so boot code can log a warning. Never crash-loops the app."""
+    import logging
+    import os as _os
+    try:
+        found = detect_legacy_pathways(db, existing_tables)
+    except Exception:
+        db.session.rollback()
+        return {"detected": {}, "migrated": None}
+    total = sum(found.values())
+    authorized = str(_os.environ.get("RANGER_PATHWAY_MIGRATE", "")).strip().lower() in ("1", "true", "yes")
+    if total and not authorized:
+        logging.getLogger("ranger").warning(
+            "legacy pathway values present (%s); startup is detection-only. Run the "
+            "authorized migration (RANGER_PATHWAY_MIGRATE=1 or migrate_pathways.py).", found)
+        return {"detected": found, "migrated": None}
+    if total and authorized:
+        migrated = normalize_persisted_pathways(db, existing_tables)
+        logging.getLogger("ranger").warning("authorized pathway migration applied: %s", migrated)
+        return {"detected": found, "migrated": migrated}
+    return {"detected": found, "migrated": {}}
 
 
 def normalize_persisted_pathways(db, existing_tables=None):
-    """Remap legacy interim pathway ids ('cyber-ops'->'strata', 'cyber-ai'->'parallax')
-    to canonical ids in every table that persists a `pathway` column. Idempotent and
-    non-destructive (UPDATE of values only; no DROP/ALTER of structure). Returns a dict
-    {table: rows_updated}. Swallows per-table errors so boot never crash-loops."""
+    """Versioned, non-destructive pathway migration. Remaps legacy interim ids
+    ('cyber-ops'->'strata', 'cyber-ai'->'parallax') to canonical ids in every table that
+    persists a `pathway` column. Runs inside a SINGLE transaction per table with explicit
+    rollback on error (no partial writes), is idempotent (a second run updates 0 rows),
+    and is value-only (no DROP/ALTER; genuine rows untouched). Returns {table: rows_updated}.
+
+    This is NOT called on ordinary startup; it runs only under explicit authorization
+    (startup_pathway_check with RANGER_PATHWAY_MIGRATE, or migrate_pathways.py). Python
+    read-time normalization (pathways.normalize_pathway) is insufficient once any SQL
+    predicate filters by pathway, which is why canonical persistence matters."""
     from sqlalchemy import inspect as _inspect
     if existing_tables is None:
         existing_tables = set(_inspect(db.engine).get_table_names())
     counts = {}
-    for table in ("cohorts", "scenario_catalog_entries"):
+    for table in _PATHWAY_TABLES:
         if table not in existing_tables:
             continue
         updated = 0
-        for legacy, canonical in pathways.LEGACY_PATHWAY_ALIASES.items():
-            try:
+        try:
+            for legacy, canonical in pathways.LEGACY_PATHWAY_ALIASES.items():
                 res = db.session.execute(
                     db.text(f"UPDATE {table} SET pathway = :canon WHERE pathway = :legacy"),
                     {"canon": canonical, "legacy": legacy})
-                db.session.commit()
                 updated += (res.rowcount or 0)
-            except Exception:
-                db.session.rollback()
-        counts[table] = updated
+            db.session.commit()            # one transaction per table: all remaps or none
+            counts[table] = updated
+        except Exception:
+            db.session.rollback()          # rollback leaves the table exactly as it was
+            counts[table] = 0
     return counts
 
 
@@ -561,6 +620,54 @@ class ScenarioCatalogEntry(db.Model):
     STATUSES = ("draft", "schema_validated", "capability_validated",
                 "executable_tested", "calibrated", "approved", "catalog_eligible",
                 "deprecated")
+
+
+class AssessmentBlueprint(db.Model):
+    """F1 - a versioned, immutable assessment blueprint shared by the assessment contract
+    (siem/assessment_contract.py). It separates the ten assessment concerns as JSON and is
+    pinned by content hash so an in-flight cohort's rules never change. Pathway-aware
+    (stable ids strata/parallax); does NOT alter STRATA grading (a STRATA blueprint simply
+    records the existing objective-bar policy). Additive table; nothing existing changes."""
+    __tablename__ = "assessment_blueprints"
+    id = db.Column(db.Integer, primary_key=True)
+    pathway = db.Column(db.String(20), nullable=False, default=pathways.DEFAULT_PATHWAY, index=True)
+    blueprint_version = db.Column(db.Integer, nullable=False, default=1)
+    environment_version = db.Column(db.String(40), nullable=True)
+    content_hash = db.Column(db.String(64), nullable=True)      # immutability anchor
+    blueprint_json = db.Column(db.Text, nullable=True)          # the full declarative blueprint
+    status = db.Column(db.String(24), nullable=False, default="draft", index=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("pathway", "blueprint_version",
+                                          name="uq_blueprint_pathway_version"),)
+    STATUSES = ("draft", "approved", "active", "retired")
+
+
+class UnitResult(db.Model):
+    """F1 - a signed, pathway-scoped qualification decision for one assessment unit. Produced
+    by the common contract's sign_decision and verifiable with verify_decision. STRATA keeps
+    writing BoardResult unchanged; UnitResult is the additive, pathway-neutral record (used by
+    PARALLAX now, and available to represent STRATA later without changing BoardResult today).
+    Reviewer adjudications are appended as NEW rows referencing parent_record_hash; a signed
+    row is never mutated."""
+    __tablename__ = "unit_results"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    pathway = db.Column(db.String(20), nullable=False, default=pathways.DEFAULT_PATHWAY, index=True)
+    curriculum_version = db.Column(db.String(20), nullable=True)
+    unit_ref = db.Column(db.String(80), nullable=False, index=True)
+    blueprint_version = db.Column(db.Integer, nullable=True)
+    blueprint_hash = db.Column(db.String(64), nullable=True)
+    qualified = db.Column(db.Boolean, nullable=False, default=False)
+    reason = db.Column(db.String(60), nullable=True)
+    decision_json = db.Column(db.Text, nullable=True)           # full auditable decision
+    record_hash = db.Column(db.String(64), nullable=True)       # hash of the signed record
+    parent_record_hash = db.Column(db.String(64), nullable=True)  # for append-only adjudications
+    kind = db.Column(db.String(30), nullable=False, default="qualification_decision")
+    signature = db.Column(db.Text, nullable=True)               # Ed25519 over the record
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    KINDS = ("qualification_decision", "reviewer_adjudication")
 
 
 class Case(db.Model):
