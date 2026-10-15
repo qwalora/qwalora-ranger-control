@@ -817,6 +817,63 @@ def tenantprobe_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def discoverdiag_check(c):
+    """Diagnose 'No results' in Discover without touching data or permissions. Uses
+    the ranger_soc_admin JWT to read ranger-* document counts and the actual
+    @timestamp min/max, compares against the Last-90-days window and the scenario
+    window, and reads back the saved data view. Determines whether the empty result
+    is the dataset, the data view, authorization, or the gateway."""
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    import soc_gateway as gw
+    atok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
+    out = {"mode": "discoverdiag", "checks": {}}
+
+    def show(name, v):
+        out["checks"][name] = v
+        print(f"[discoverdiag] {name}: {json.dumps(v)[:400]}", flush=True)
+
+    # 1. Authorized document count across ranger-* (admin oversight JWT).
+    tot_code, tot = c._req("GET", "/ranger-*/_count", bearer=atok)
+    show("ranger_star_count", {"code": tot_code, "count": tot.get("count") if isinstance(tot, dict) else tot})
+    # per-index counts (admin broker, for the record)
+    _, cat = c._req("GET", "/_cat/indices/ranger-*?format=json&h=index,docs.count")
+    show("per_index", cat if isinstance(cat, list) else str(cat)[:300])
+
+    # 2. min/max @timestamp over ranger-* via the admin JWT.
+    agg = {"size": 0, "aggs": {"min_ts": {"min": {"field": "@timestamp"}},
+                               "max_ts": {"max": {"field": "@timestamp"}}}}
+    mc, mb = c._req("GET", "/ranger-*/_search", body=agg, bearer=atok)
+    mn = mb.get("aggregations", {}).get("min_ts", {}).get("value_as_string") if isinstance(mb, dict) else None
+    mx = mb.get("aggregations", {}).get("max_ts", {}).get("value_as_string") if isinstance(mb, dict) else None
+    show("timestamp_min_max", {"code": mc, "min": mn, "max": mx})
+
+    # 3/4. Counts in the Last-90-days window vs the scenario window (overlap check).
+    def rng_count(gte, lte=None):
+        q = {"range": {"@timestamp": {"gte": gte}}}
+        if lte:
+            q["range"]["@timestamp"]["lte"] = lte
+        code, b = c._req("GET", "/ranger-*/_count", body={"query": q}, bearer=atok)
+        return code, (b.get("count") if isinstance(b, dict) else b)
+    l90c, l90 = rng_count("now-90d/d")
+    schem = rng_count("2026-03-01", "2026-05-01")
+    show("count_last_90d", {"code": l90c, "count": l90})
+    show("count_scenario_window_mar_may_2026", {"code": schem[0], "count": schem[1]})
+
+    # 5. The saved data view's index pattern + time field (admin tenant).
+    dc, db = gw._dash_as_user("ranger_soc_admin", COHORT, "GET",
+                              "/api/saved_objects/index-pattern/ranger-all-events",
+                              tenant="ranger_soc_admin")
+    show("data_view", {"code": dc, "has_ranger_star": '"ranger-*"' in db,
+                       "has_timefield": '"@timestamp"' in db})
+
+    out["diagnosis"] = (
+        "dataset timestamps outside the selected time range" if (l90 == 0 and isinstance(schem[1], int) and schem[1] > 0)
+        else "see counts")
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -861,6 +918,9 @@ def main():
     if mode == "tenantprobe":
         print(f"== Ranger tenant provisioning mechanism probe ==", flush=True)
         return tenantprobe_check(c)
+    if mode == "discoverdiag":
+        print(f"== Ranger Discover empty-result diagnosis ==", flush=True)
+        return discoverdiag_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
