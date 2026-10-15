@@ -16,6 +16,8 @@ import secrets
 
 from flask_sqlalchemy import SQLAlchemy
 
+import pathways
+
 db = SQLAlchemy()
 
 
@@ -49,9 +51,11 @@ def ensure_schema(db):
             ("exit_reason", "VARCHAR(200)"),
         ],
         "cohorts": [
-            # M4.3.1 pathway-awareness: existing cohorts default to cyber-ops, so
-            # backward compatibility holds (no grading/access change for them).
-            ("pathway", "VARCHAR(20) DEFAULT 'cyber-ops'"),
+            # M4.3.1 pathway-awareness: existing cohorts default to the STRATA pathway
+            # (stable id 'strata'), so backward compatibility holds (no grading/access
+            # change). Any row persisted under the interim id 'cyber-ops' is normalized
+            # to 'strata' at read time by pathways.normalize_pathway (non-destructive).
+            ("pathway", "VARCHAR(20) DEFAULT 'strata'"),
             ("curriculum_version", "VARCHAR(20)"),
         ],
         "range_requests": [
@@ -290,14 +294,15 @@ class Cohort(db.Model):
     completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
     note = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
-    # M4.3.1 pathway-awareness. Existing cohorts default to cyber-ops -> no change in
-    # curriculum, grading, or access. cyber-ai cohorts are a future, separately
-    # approved curriculum and do NOT inherit the six-board sequence.
-    pathway = db.Column(db.String(20), nullable=False, default="cyber-ops")
+    # M4.3.1 pathway-awareness. Existing cohorts default to STRATA ('strata') -> no
+    # change in curriculum, grading, or access. PARALLAX ('parallax') cohorts use a
+    # separately approved curriculum and do NOT inherit the six-board sequence. Stable
+    # ids only; legacy 'cyber-ops'/'cyber-ai' values normalize via pathways module.
+    pathway = db.Column(db.String(20), nullable=False, default=pathways.DEFAULT_PATHWAY)
     curriculum_version = db.Column(db.String(20), nullable=True)
 
     STATUSES = ("scheduled", "active", "completed")
-    PATHWAYS = ("cyber-ops", "cyber-ai")
+    PATHWAYS = pathways.PATHWAYS
 
 
 class AdminUser(db.Model):
@@ -487,7 +492,7 @@ class ScenarioCatalogEntry(db.Model):
     """M4.3.1 - a validated, versioned, immutable scenario package in the catalog.
 
     The catalog is pathway-aware WITHOUT being duplicated: one table, a `pathway`
-    column (cyber-ops today; cyber-ai later). An entry holds the full declarative
+    column (stable ids 'strata' / 'parallax'). An entry holds the full declarative
     ScenarioSpec (siem/scenario_spec.py) plus its content hash (immutability),
     calibration vector, and approval record. Only status `catalog_eligible` is
     selectable for cohort assignment. Hidden truth is never stored here; the spec's
@@ -499,7 +504,7 @@ class ScenarioCatalogEntry(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     spec_id = db.Column(db.String(80), nullable=False, index=True)
     spec_version = db.Column(db.Integer, nullable=False, default=1)
-    pathway = db.Column(db.String(20), nullable=False, default="cyber-ops", index=True)
+    pathway = db.Column(db.String(20), nullable=False, default=pathways.DEFAULT_PATHWAY, index=True)
     specialization = db.Column(db.String(40), nullable=True)
     environment_type = db.Column(db.String(40), nullable=False, default="soc-opensearch")
     spec_type = db.Column(db.String(40), nullable=False, default="soc-investigation")

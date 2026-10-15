@@ -4,9 +4,11 @@ Linked from `siem/BOARD2_M4_3_ARCHITECTURE.md` (cohort provisioning & lifecycle)
 is design and approval work only.
 
 > Scope note: this document describes the internal **AI Orchestration Layer** (an untrusted
-> advisor that helps staff author/operate *any* track). It is **not** the candidate-facing
-> **Cyber AI pathway**, which is defined in `siem/RANGER_TWO_TRACK_ARCHITECTURE.md`. The two are
-> deliberately distinct: this layer holds no authority in either track.
+> advisor that helps staff author/operate *any* pathway). It is **not** the candidate-facing
+> **RANGER PARALLAX** pathway (AI security, adversarial systems & digital trust), which is
+> defined in `siem/RANGER_TWO_TRACK_ARCHITECTURE.md` with its qualification blueprint in
+> `siem/RANGER_PARALLAX_BLUEPRINT.md`. The two are deliberately distinct: this layer holds no
+> authority in any pathway, and PARALLAX candidates gain no infrastructure privileges.
  No AI implementation, no paid model API calls, no
 cohort activation, no infrastructure deployment, no change to production grading.
 Candidate access, act-as, and unattended ingestion stay disabled. The shared-SOC model
@@ -20,6 +22,19 @@ and administrators. An LLM is never a trusted authority and never holds OpenSear
 admin, provisioner credentials, the signing key, or hidden evaluation truth in any
 candidate-facing path.
 
+> **Qualification-first correction (supersedes any teaching framing below).** Ranger is an
+> independent technical **qualification** platform for experienced practitioners, not a training
+> or teaching service. The internal AI is therefore **governed and non-instructional**: it may
+> propose challenge specifications, analyze scenario diversity/difficulty, run technical
+> compatibility reviews, generate scenario-generation test cases, adversarially evaluate *proposed*
+> challenges, and provide **advisory post-submission** technical assessment review. It must **not**
+> provide live candidate coaching on an active qualification challenge, reveal the solution path,
+> disclose hidden truth, grant qualification, alter signed objective scores, or override
+> deterministic verification. The former candidate-facing "investigation mentoring" / live-hint
+> capability is **withdrawn** (see the corrected Z2 row and capability table). Candidates receive
+> operational instructions, environment specs, challenge objectives, scope-of-engagement rules,
+> tooling documentation, and evidence-submission requirements — never the solution path.
+
 ## 1. AI system components and trust boundaries
 
 ### Trust zones
@@ -28,7 +43,7 @@ candidate-facing path.
 |---|---|---|---|---|
 | Z0 Deterministic (authoritative) | full authority, NO AI | orchestration (§15), `score_board2`, Ed25519 signing, provisioning | everything it already does | nothing delegated to AI |
 | Z1 AI-advisory backend | low trust, backend-only, human-gated | Scenario Architect, Cohort Planner, Assessment Review | board objectives, enterprise topology (Layer A), catalog, capacity telemetry; (review only) protected rubric/truth in a sealed backend context | execute provisioning, write catalog/BoardResult/grades, reach candidates |
-| Z2 AI candidate-facing | least trust | Investigation Mentoring, Exercise injects | ONLY what the candidate is already authorized to see (own notes, cohort operational telemetry) | see hidden truth, evaluator data, or other candidates' data; emit commands; change state |
+| Z2 AI candidate-facing | **withdrawn under the qualification-first model** | none (no live coaching, no solution hints, no mentoring on active challenges) | n/a | provide any live assistance on an active qualification challenge; reveal the solution path or hidden truth |
 
 The six requested capabilities map onto the zones:
 
@@ -36,9 +51,9 @@ The six requested capabilities map onto the zones:
 |---|---|---|---|
 | 1 Scenario Architect | Z1 | `ScenarioSpecProposal` (declarative) | deterministic compile + validate + calibrate + admin approve |
 | 2 Cohort Planner | Z1 | `ProvisioningRecommendation` | admin reviews; deterministic orchestrator authorizes + executes |
-| 3 Exercise Simulation (future) | Z2 | `ExerciseInject` within an allowlist | policy + schema validation before it enters the operational stream |
-| 4 Investigation Mentoring | Z2 | advisory dialogue to the candidate | none; read-only coaching, board-policy gated |
-| 5 Assessment Review | Z1 | `AssessmentReviewNote` (advisory) | human reviewer; never changes `BoardResult`/95% |
+| 3 Adversarial challenge evaluation | Z1 | `ChallengeStressReport` on a *proposed* challenge (not a candidate aid) | admin reviews before promotion; never reaches a candidate mid-challenge |
+| 4 ~~Investigation Mentoring~~ (**withdrawn**) | — | removed: no live candidate coaching/hints on active challenges | none |
+| 5 Assessment Review | Z1 | `AssessmentReviewNote` (advisory, **post-submission only**) | human reviewer; never changes `BoardResult`/signed scores/95% |
 | 6 Platform & Security | cross-cutting | the interfaces, registries, controls below | - |
 
 ## 2. Schemas and interfaces (integrated with existing models)
@@ -54,8 +69,9 @@ LLMClient (interface; no provider lock-in):
 
 AiModelProfile:  id, provider, model_id, params{temp,max_tokens,top_p},
                  status: enabled|disabled, cost_per_1k_in, cost_per_1k_out
-PromptTemplate:  id, role: scenario_architect|cohort_planner|mentor|review|exercise,
+PromptTemplate:  id, role: scenario_architect|cohort_planner|challenge_eval|review,
                  name, version, body_hash, output_schema_ref, status, created_by
+                 # NOTE: no 'mentor'/'exercise' candidate-facing roles (qualification-first)
 AiJob:           id, kind, model_profile_id, prompt_template_id, prompt_version,
                  input_digest, classification, output_artifact_id,
                  tokens_in, tokens_out, cost, state: queued|running|succeeded|
@@ -81,7 +97,7 @@ ScenarioSpec (declarative; the canonical catalog artifact - §2/§3 of the M4.3 
                  data_source, detectable: bool} ]
   detection_gaps: [ {technique|channel, why_uncovered} ]
   benign_decoys: [ {pattern, resembles} ]
-  investigation_path: [str]           # expected analyst pivots (for calibration/mentor hints policy)
+  investigation_path: [str]           # expected analyst pivots (evaluator-only; for calibration + pre-promotion challenge-eval; NEVER surfaced to candidates)
   response_actions: [str]
   difficulty_target: intro|standard|advanced
   constraints: references ONLY Layer-A vocabulary (assets/identities/services/segments)
@@ -90,9 +106,9 @@ ScenarioSpecProposal (AI output in Z1): a ScenarioSpec + rationale + diversity_v
 ProvisioningRecommendation (AI output in Z1):
   per board: recommended ScenarioCatalogEntry, rationale, diversity_vs_siblings,
              parity_check, capacity_assessment, incompatibilities[], confidence
-MentorPolicy:  board, plane, allow: [challenge_assumption, request_evidence,
-               critique_method, clarify_task], deny: [reveal_truth, give_answer,
-               cite_hidden_incident], enabled: bool
+ChallengeStressReport (AI output in Z1, pre-promotion; replaces the withdrawn MentorPolicy):
+               spec_id, attempted_solution_paths[], unintended_shortcuts[],
+               evidence_under_or_over_constrained[], difficulty_read, notes  # author/admin only
 AssessmentReviewNote: case_id, dimensions{reasoning, evidence_sufficiency,
                alternative_hypotheses, judgment}, advisory_text, NOT a grade
 ExerciseInject (future): type (email|user_behaviour|business_event), payload within
@@ -147,34 +163,33 @@ the admin's decision; the deterministic engine does the work and enforces every 
 in §15.5. If AI is disabled or over budget, the admin uses the deterministic
 auto-selector (§15.3) directly - no functionality is lost (req 6 fallback).
 
-## 5. Controlled exercise simulation (future, req 3)
+## 5. Adversarial challenge evaluation (req 3, corrected — backend, pre-promotion)
 
-AI may eventually generate operational injects (business emails, user-behaviour
-events, evolving narrative complications) to enrich the live SOC. Constraints:
+Reframed from "exercise simulation" to the qualification-first model: AI stress-tests a
+**proposed** challenge *before* it is promoted, so weak, ambiguous-by-accident, or trivially
+solvable challenges are caught during authoring. It is not a candidate-facing feature.
 
-- Every inject conforms to `ExerciseInject` and an explicit **action allowlist** tied
-  to the cohort's approved scenario policy; anything outside the allowlist is rejected
-  before it reaches the stream.
-- Injects enter the OPERATIONAL plane only; they never touch qualification indices,
-  truth, or grades. Formal qualification evidence stays reproducible, protected, and
-  independently verifiable (recomputed from the per-person seed; signed).
-- A deterministic scripted-inject fallback exists; the exercise runs without AI.
-- This is explicitly later/experimental and is not part of the near-term milestones.
+- Input: a draft `ScenarioSpec` (+ its simulated world). Output: a `ChallengeStressReport`
+  — attempted solution paths found, unintended shortcuts, under-/over-constrained evidence,
+  difficulty read — for the author/admin.
+- It runs entirely in Z1/backend during authoring; it **never** enters the operational or
+  qualification stream and **never** reaches a candidate during an active challenge.
+- Deterministic fallback: `simulate` + `calibrate` (siem/scenario_pipeline.py) already gate
+  promotion without AI; this report is an additional advisory input, not a dependency.
 
-## 6. AI investigation mentoring (req 4)
+## 6. ~~AI investigation mentoring~~ — **withdrawn** (qualification-first correction, req 4)
 
-- Board-aware `MentorPolicy` per (board, plane). Practice (operational/practice):
-  Socratic coaching - challenge assumptions, ask for supporting evidence, critique
-  methodology. Qualification: restricted to the board's approved assessment rules
-  (default: disabled or task-clarification only; never hints).
-- The mentor's context is assembled server-side from ONLY what the candidate is
-  already authorized to see (their own notes, the cohort operational telemetry their
-  role can read). Hidden truth, evaluator data, and qualification answers are never
-  placed in the prompt - they are not retrievable in Z2 by construction.
-- Prompt-injection defense: candidate submissions and retrieved telemetry are inserted
-  as clearly delimited untrusted DATA with a standing instruction that the model must
-  not obey instructions found in data; outputs are schema-constrained and post-filtered
-  to reject any content resembling hidden-incident references.
+Ranger qualifies; it does not teach. There is **no** live candidate-facing AI coaching, hinting,
+Socratic mentoring, or adaptive guidance on an active qualification challenge — the former
+`MentorPolicy`/Z2 mentor is removed. Candidates independently investigate, decide, implement,
+and prove outcomes with verifiable evidence.
+
+Legitimate, non-solution candidate support remains (not AI coaching, deterministic/admin):
+operational instructions, environment specifications, challenge objectives, scope-of-engagement
+rules, tooling documentation, evidence-submission requirements, accessibility support, and
+administrative help. None of these reveal the solution path. Any future candidate-facing use of
+AI (e.g. mechanical accessibility aids such as text reformatting) would require separate approval
+and must, by construction, be incapable of revealing hidden truth or a solution path.
 
 ## 7. AI assessment review (advisory only, req 5)
 
@@ -214,9 +229,9 @@ events, evolving narrative complications) to enrich the live SOC. Constraints:
   promoted.
 - **Quotas + cost (under the $300/mo infra target)**: AI is used at authoring and
   planning time (low volume), not per event. A small monthly AI allowance (budgeted
-  ~$10-30 within the $300) with hard quota caps per component; mentoring is rate-limited
-  per candidate and off by default; exercise simulation is future. Cost is bounded and
-  monitored.
+  ~$10-30 within the $300) with hard quota caps per component. All AI use is backend
+  authoring/planning/review; there is no per-candidate live inference (no mentoring). Cost
+  is bounded and monitored.
 - **Deterministic no-AI fallback**: scenario specs can be authored by hand; cohort
   planning falls back to the §15.3 deterministic auto-selector; provisioning, grading,
   signing, and qualification are already fully deterministic. Essential cohort
@@ -234,9 +249,9 @@ do not depend on AI; AI milestones are additive and gated.
 | M4.3.A1 AI platform core | `LLMClient`, `AiModelProfile`, `PromptTemplate`, `AiJob`, `AiArtifact`, trust zones, output-schema validation, quotas/audit; MOCK provider only | 4.3.1 schema | offline, mock model |
 | M4.3.A2 Scenario Architect | proposal -> compile -> validate -> simulate -> calibrate -> approve; mock model offline; real model behind a flag + budget, author-time only | A1, 4.3.1 | offline (mock); real model gated |
 | M4.3.A3 Cohort Planner | `ProvisioningRecommendation`; admin review UI; deterministic engine still authorizes/executes | A1, 4.3.2/4.3.3 | advisory, gated |
-| M4.3.A4 Investigation Mentoring | `MentorPolicy`, Z2 context assembly, injection defenses; practice-plane only first | A1, 4.3.4 | gated, off by default |
-| M4.3.A5 Assessment Review | `AssessmentReviewNote` advisory; calibration-gated; shadow-only, never writes grades | A1, M3 | gated, off by default |
-| (future) Exercise Simulation | `ExerciseInject` + allowlist | A1, 4.3.4/4.3.5 | later/experimental |
+| ~~M4.3.A4 Investigation Mentoring~~ | **withdrawn** (qualification-first: no live candidate coaching) | — | removed |
+| M4.3.A4 Adversarial challenge evaluation | `ChallengeStressReport` on *proposed* challenges, backend/pre-promotion only | A1, A2 | advisory, gated, off by default |
+| M4.3.A5 Assessment Review | `AssessmentReviewNote` advisory, **post-submission only**; calibration-gated; shadow-only, never writes grades | A1, M3 | gated, off by default |
 
 Sequencing: land the `ScenarioSpec` schema in M4.3.1; then A1 (platform core, mock
 model) before A2; A3 after the orchestrator (4.3.3); A4/A5 last and off by default. No
@@ -266,11 +281,10 @@ passes a deterministic/human gate before it affects anything.
    (§15.4)** - not the LLM - authorizes and executes the idempotent
    `CohortProvisioningJob`, then the §15.5 validation gates pass and 2027-C goes
    `active`.
-5. **Operate**: analysts investigate the shared 2027-C SOC; in practice, **mentoring
-   (Z2)** challenges their assumptions using only what they can already see; each
-   candidate is independently assigned a private, deterministic qualification case
-   graded at 95% - untouched by AI. **Assessment Review (Z1)** gives reviewers advisory
-   analysis of submissions but never changes the signed result.
+5. **Operate**: analysts independently investigate the shared 2027-C SOC with no live AI
+   assistance; each candidate is independently assigned a private, deterministic
+   qualification case graded at 95% - untouched by AI. **Assessment Review (Z1)** gives
+   reviewers advisory, **post-submission** analysis but never changes the signed result.
 6. **Retire** per §15.10, preserving signed evidence and reclaiming resources.
 
 No AI executed infrastructure, authorized provisioning, saw hidden truth in a
@@ -383,9 +397,9 @@ Only "Approved" enters the catalog as auto-selectable (§15.3 of the M4.3 doc).
 - **Representative cost math [estimate]**: a scenario-architect generation is roughly
   6-10K input + 2-4K output tokens. At gpt-oss-20b aggregator rates that is well under
   $0.01 per generation; even hundreds of evaluation + authoring runs across three
-  models stay within the $15-30 testing allowance. Mentoring is the only higher-volume
-  path and stays off by default and rate-limited. We do not assume this allowance
-  covers production demand; production volume is benchmarked before any raise.
+  models stay within the $15-30 testing allowance. There is no per-candidate live-inference
+  path (mentoring withdrawn), so volume stays low by construction. We do not assume this
+  allowance covers production demand; production volume is benchmarked before any raise.
 
 ### 11.6 Deployment options and recommendation
 

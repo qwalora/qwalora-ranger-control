@@ -25,13 +25,16 @@ from __future__ import annotations
 import hashlib
 
 import signing  # canonical JSON for content hashing
+import pathways  # stable pathway ids + legacy normalization (strata/parallax)
 from . import capability_inventory as capinv
 
 SCENARIO_SPEC_VERSION = 1
 
 # Envelope fields (common to every pathway/spec_type).
-#   pathway: cyber-ops (existing six-board SOC program) | cyber-ai (future)
-#   specialization: optional sub-area (e.g. deepfake-forensics) for cyber-ai
+#   pathway: strata (STRATA, existing six-board SOC program) | parallax (PARALLAX,
+#            digital-forensics & AI-security). Stable internal ids only (see root
+#            `pathways`); legacy 'cyber-ops'/'cyber-ai' are normalized, never emitted.
+#   specialization: optional sub-area (e.g. deepfake-forensics) for parallax
 #   curriculum_version: the versioned assessment blueprint this spec belongs to
 ENVELOPE_KEYS = {
     "spec_id", "spec_version", "pathway", "specialization", "curriculum_version",
@@ -57,7 +60,7 @@ PRIVILEGED_DENYLIST = {
 EVIDENCE_KIND_EVENT_REFERENCE = "event_reference"   # {event_uid, index, query, role} - case_contract (implemented)
 EVIDENCE_KIND_MEDIA_ASSET = "media_asset"           # future: BlobRef + provenance + consent (deepfake forensics)
 EVIDENCE_KIND_FILE_HASH = "file_hash"               # future: sha256 + provenance
-EVIDENCE_KIND_MODEL_TRACE = "model_trace"           # future: LLM/agent trace (cyber-ai)
+EVIDENCE_KIND_MODEL_TRACE = "model_trace"           # future: LLM/agent trace (parallax)
 EVIDENCE_KIND_DOCUMENT = "document"                 # future: document artifact + hash
 EVIDENCE_KIND_SYSTEM_STATE = "system_state"         # future: verified system-state capture
 KNOWN_EVIDENCE_KINDS = (EVIDENCE_KIND_EVENT_REFERENCE, EVIDENCE_KIND_MEDIA_ASSET,
@@ -130,6 +133,13 @@ def validate_schema(spec: dict) -> dict:
     if spec.get("spec_version") != SCENARIO_SPEC_VERSION:
         errors.append(_err("BAD_SPEC_VERSION", "spec_version",
                            f"spec_version must be {SCENARIO_SPEC_VERSION}"))
+
+    # pathway must be a known stable id (legacy 'cyber-ops'/'cyber-ai' accepted and
+    # normalized). Marketing names are never valid pathway values.
+    pw = spec.get("pathway")
+    if str(pw or "").strip() and not pathways.is_valid_pathway(pw):
+        errors.append(_err("INVALID_PATHWAY", "pathway",
+                           f"unknown pathway {pw!r}; expected one of {pathways.PATHWAYS}"))
 
     # evidence kinds must be known and implemented
     for ek in (spec.get("evidence_kinds") or []):

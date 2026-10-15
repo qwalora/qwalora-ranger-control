@@ -23,19 +23,20 @@ from . import enterprise, detection, schema, case_contract
 CAPABILITY_INVENTORY_VERSION = 1
 FOUNDATION_VERSION = "valyria-1"   # the persistent Valyria enterprise foundation id
 
-# Ranger is an extensible platform with two cybersecurity PATHWAYS: cyber-ops (the
-# existing 26-week six-board SOC/red-team program) and cyber-ai (a future specialized
-# pathway: deepfake forensics, LLM/agent security, prompt injection, AI red teaming,
-# AI assurance). cyber-ai does NOT inherit the six-board sequence; its curriculum is
-# designed and approved separately. A capability inventory is PER environment type,
-# not SOC-only: the SOC/OpenSearch inventory is one builder; future environment types
-# (e.g. media-forensics for deepfake assessments) register their own builder here
-# without changing the catalog, cohort, or evidence-verification contracts. Today only
-# the SOC environment is implemented.
-PATHWAY_CYBER_OPS = "cyber-ops"
-PATHWAY_CYBER_AI = "cyber-ai"      # future; declared, not implemented
+# Ranger is an extensible platform with two PATHWAYS (stable internal ids; see the
+# root `pathways` module for the single source of truth and the display-only branding):
+#   strata   - RANGER STRATA: the existing 26-week six-board SOC/adversarial program.
+#   parallax - RANGER PARALLAX: the digital-forensics & AI-security pathway (deepfake
+#              forensics, synthetic-identity fraud, LLM/agent security, adversarial AI
+#              assessment). PARALLAX does NOT inherit the six-board sequence; its
+#              curriculum is designed and approved separately.
+# A capability inventory is PER environment type, not SOC-only: the SOC/OpenSearch
+# inventory is one builder; PARALLAX environment types (e.g. media-forensics) register
+# their own builder here without changing the catalog, cohort, or evidence-verification
+# contracts. Today only the SOC environment is implemented.
+from pathways import PATHWAY_STRATA, PATHWAY_PARALLAX  # stable ids, not marketing names
 ENVIRONMENT_SOC_OPENSEARCH = "soc-opensearch"
-# Declared, not implemented (future cyber-ai environment types):
+# Declared, not implemented (future PARALLAX environment types):
 ENVIRONMENT_MEDIA_FORENSICS = "media-forensics"   # deepfake audio/video forensics
 ENVIRONMENT_LLM_REDTEAM = "llm-redteam"           # LLM/agent security, prompt injection
 KNOWN_ENVIRONMENT_TYPES = (ENVIRONMENT_SOC_OPENSEARCH, ENVIRONMENT_MEDIA_FORENSICS,
@@ -211,7 +212,7 @@ def _build_soc_opensearch_inventory() -> dict:
 
     inventory = {
         "capability_inventory_version": CAPABILITY_INVENTORY_VERSION,
-        "pathway": PATHWAY_CYBER_OPS,
+        "pathway": PATHWAY_STRATA,
         "environment_type": ENVIRONMENT_SOC_OPENSEARCH,
         "foundation": foundation,
         "telemetry": telemetry,

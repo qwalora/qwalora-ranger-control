@@ -1,9 +1,11 @@
 # Board 2+ M4.3 — Cohort-shared operational SOC: architecture & integration (revised for approval)
 
-> Track context: this document is the **cyber-ops** track. The day-one two-track platform
-> (cyber-ops + cyber-ai) is defined in `siem/RANGER_TWO_TRACK_ARCHITECTURE.md`, which gates the
-> lock of M4.3.1. This document is unchanged by that revision — cyber-ops keeps its six-board
-> program, OpenSearch, and future Ludus/GOAD architecture.
+> Track context: this document is the **RANGER STRATA** pathway (stable id `strata`). The
+> day-one two-track platform (STRATA + RANGER PARALLAX, id `parallax`) is defined in
+> `siem/RANGER_TWO_TRACK_ARCHITECTURE.md`, with the PARALLAX qualification blueprint in
+> `siem/RANGER_PARALLAX_BLUEPRINT.md`; together they gate the lock of M4.3.1. This document is
+> unchanged by that work — STRATA keeps its six-board program, 95% standard, OpenSearch, and
+> future Ludus/GOAD architecture.
 
 Planning and architecture only. No implementation, no candidate access, no
 continuous/unattended ingestion until this revision receives final approval. M3
@@ -614,15 +616,16 @@ approved.
 
 ### AI/LLM architecture (separate linked document)
 
-The AI-assisted scenario engineering, cohort planning, exercise simulation, investigation
-mentoring, assessment review, and the AI platform/security model are specified in
-`siem/BOARD2_M4_AI_ARCHITECTURE.md`. AI is an untrusted advisor that emits declarative
-proposals into this deterministic, human-gated pipeline; it never authorizes or executes
-provisioning, never changes grades or `PASS_BAR = 95.0`, and never holds admin/provisioner
-credentials or hidden truth. The shared `ScenarioSpec` schema (consumed identically by
-human and AI authors) lands in M4.3.1 so the catalog is not rebuilt later; the additive AI
-milestones (A1 platform core, A2 Scenario Architect, A3 Cohort Planner, A4 Mentoring, A5
-Assessment Review) are sequenced and gated in that document. The deterministic
+The AI-assisted scenario engineering, cohort planning, adversarial challenge evaluation,
+post-submission assessment review, and the AI platform/security model are specified in
+`siem/BOARD2_M4_AI_ARCHITECTURE.md`. Under the qualification-first model, AI is a governed,
+non-instructional, untrusted advisor that emits declarative proposals into this deterministic,
+human-gated pipeline; it never coaches candidates on active challenges, never reveals the
+solution path or hidden truth, never authorizes or executes provisioning, and never changes
+grades or `PASS_BAR = 95.0`. The shared `ScenarioSpec` schema (consumed identically by human
+and AI authors) lands in M4.3.1 so the catalog is not rebuilt later; the additive AI milestones
+(A1 platform core, A2 Scenario Architect, A3 Cohort Planner, A4 Adversarial challenge evaluation,
+A5 post-submission Assessment Review) are sequenced and gated in that document. The deterministic
 M4.3.1-M4.3.7 do not depend on AI, and a deterministic no-AI fallback covers all essential
 provisioning and qualification.
 

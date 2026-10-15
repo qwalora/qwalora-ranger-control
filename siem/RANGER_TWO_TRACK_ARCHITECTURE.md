@@ -1,435 +1,361 @@
-# Ranger two-track platform — Cyber Operations + Cyber AI: integrated architecture & minimum viable qualification scope (for approval)
+# Ranger two-pathway platform — STRATA + PARALLAX: integrated architecture (for review)
 
-Status: **design and approval work only.** This document defines and submits for review the
-day-one two-track Ranger platform. It gates the lock of M4.3.1: the deterministic cyber-ops
-foundation (`siem/capability_inventory.py`, `siem/scenario_spec.py`, `siem/scenario_pipeline.py`,
-`models.ScenarioCatalogEntry`, `Cohort.pathway/curriculum_version`, regression suite
-`siem/tests/test_scenario_catalog.py`) is implemented and green, but **M4.3.1 is not locked and no
-Cyber AI concrete (capability builder, media lab, scenario catalog, grader) is implemented** until
-this blueprint and the Cyber AI assessment blueprint are approved.
+Status: **design and approval work only.** Ranger is an advanced, independent technical
+**qualification** platform for experienced practitioners (senior security engineers, red-team
+specialists, AI-security specialists, security architects). It is **not** a training, teaching,
+or course platform. Its purpose is to establish whether a candidate can independently investigate
+unfamiliar complex systems, find genuine weaknesses, make defensible technical decisions,
+implement solutions, and prove outcomes with verifiable evidence. Qwalora may publish educational
+material separately; that is never a Ranger assessment.
 
-Hard gates preserved (unchanged from prior reviews): no paid GPU processing; no acquisition of
-non-licensed media; no Ludus/GOAD/Proxmox provisioning; no candidate activation; no change to
-cyber-ops grading, `PASS_BAR = 95.0`, `score_board2`, `BoardResult`, Ed25519 signing, or hidden
-truth; candidate access / act-as / unattended ingestion stay disabled. Combined infrastructure
-target stays **under $300/month**; any projected overage is surfaced for approval before spend.
+This document and the linked PARALLAX blueprint (`siem/RANGER_PARALLAX_BLUEPRINT.md`) gate the
+lock of M4.3.1. The deterministic foundation (`siem/capability_inventory.py`,
+`siem/scenario_spec.py`, `siem/scenario_pipeline.py`, `pathways.py`, `models.ScenarioCatalogEntry`,
+`Cohort.pathway/curriculum_version`, `siem/tests/test_scenario_catalog.py`) is implemented and
+green and is **preserved**; **M4.3.1 is not locked** and no PARALLAX concrete is implemented until
+this architecture and the PARALLAX blueprint are approved.
 
-Cross-links: `siem/BOARD2_M4_3_ARCHITECTURE.md` (cohort-shared SOC, provisioning & lifecycle
-orchestration, §15) and `siem/BOARD2_M4_AI_ARCHITECTURE.md` (the internal **AI Orchestration
-Layer** — an untrusted advisor that proposes into a deterministic/human-gated pipeline). Note the
-deliberate separation of two distinct uses of "AI":
+Hard gates preserved: no paid GPU processing; no non-licensed media; no Ludus/GOAD/Proxmox;
+no always-on GPU; no candidate activation; no change to STRATA grading, `PASS_BAR = 95.0`,
+`score_board2`, `BoardResult`, Ed25519 signing, or hidden truth; candidate access / act-as /
+unattended ingestion stay disabled. Combined infrastructure target stays **under $300/month**;
+any projected overage is surfaced for approval before spend.
 
-- **AI Orchestration Layer** (BOARD2_M4_AI_ARCHITECTURE.md): internal tooling that *assists staff*
-  authoring/operating *any* track. It is an untrusted advisor. Zone model Z0/Z1/Z2 unchanged.
-- **Cyber AI pathway** (this document): a *candidate-facing qualification track* whose subject
-  matter is AI/media security. It is a program, not a tool.
-
-These never merge. The AI Orchestration Layer may help staff author Cyber AI scenarios exactly as
-it helps author cyber-ops scenarios, under the same Z0/Z1/Z2 trust boundaries; it holds no
-authority in either track.
+Cross-links: `siem/BOARD2_M4_3_ARCHITECTURE.md` (STRATA cohort-shared SOC + provisioning
+orchestration), `siem/BOARD2_M4_AI_ARCHITECTURE.md` (the internal **AI Orchestration Layer** — a
+governed, non-instructional, untrusted advisor), `siem/RANGER_PARALLAX_BLUEPRINT.md` (PARALLAX
+qualification blueprint).
 
 ---
 
-## 0. Grounding — the two-track seams that already exist in code
+## 0. Pathway identity (finalized) and the two "AI" uses that never merge
 
-The M4.3.1 foundation was built track-neutral, so "both pathways in the foundation now" is already
-true at the envelope/abstraction layer. Concrete Cyber AI builders are intentionally withheld
-pending this review.
-
-| Seam | Symbol (implemented) | State |
+| | RANGER STRATA | RANGER PARALLAX |
 |---|---|---|
-| Pathway identity | `capability_inventory.PATHWAY_CYBER_OPS` / `PATHWAY_CYBER_AI`; `models.Cohort.PATHWAYS=("cyber-ops","cyber-ai")`, `Cohort.pathway` (default `cyber-ops`), `Cohort.curriculum_version` | present |
-| Per-environment capability inventory | `capability_inventory.build_inventory(environment_type)` dispatch; `ENVIRONMENT_SOC_OPENSEARCH` implemented; `ENVIRONMENT_MEDIA_FORENSICS`, `ENVIRONMENT_LLM_REDTEAM` declared, raise `NotImplementedError` | SOC implemented; AI envs **gated** |
-| Typed ScenarioSpec | `scenario_spec` common envelope + `spec_type`→payload-validator registry (`register_payload_validator`); `soc-investigation` implemented | envelope generic; AI spec_types **gated** |
-| Polymorphic evidence | `KNOWN_EVIDENCE_KINDS` = event_reference (implemented) + media_asset/file_hash/model_trace/document/system_state (declared); `IMPLEMENTED_EVIDENCE_KINDS=(event_reference,)` | event impl; media/model **gated** |
-| Out-of-DB media | `scenario_spec.BLOB_REF_CONTRACT` (uri, sha256, media_type, bytes, provenance, rights_consent, authenticity_assessment) | contract declared |
-| Catalog record | `models.ScenarioCatalogEntry` (pathway-aware, `content_hash` immutability, STATUSES) | present |
+| Stable internal id | `strata` | `parallax` |
+| Public branding (display-only, configurable) | "RANGER STRATA — Enterprise Defense & Adversarial Systems" | "RANGER PARALLAX — AI Security, Adversarial Systems & Digital Trust" |
+| Structure | existing 26-week, six-board, 130 graded days | **own** challenge architecture (not six boards by default) |
+| Qualification standard | 95% (`PASS_BAR`), unchanged | **separately approved** (no inherited 95%) |
+| Environment | OpenSearch SOC (+ future Ludus/GOAD) | Valyria Financial AI env (§3): CPU/sandbox/OpenSearch/browser/metered inference |
 
-What this document adds is the **first-class Cyber AI definitions** these seams were shaped to
-carry, plus the common program/track layer above cohorts, plus the media-evidence subsystem — all
-for approval before implementation.
+Stable ids are the only values used in authorization, grading, qualification, persistence,
+validation, and tests (`pathways.py`). Marketing names never appear in logic. The two distinct
+uses of "AI" are kept separate and neither gets uncontrolled infrastructure privilege or authority
+over qualification:
+
+- **AI Orchestration Layer** (internal, staff-facing): proposes/analyzes/stress-tests challenges
+  and gives advisory post-submission review. Governed, non-instructional, untrusted. No live
+  candidate coaching, no hidden-truth disclosure, no grading authority.
+- **RANGER PARALLAX** (candidate-facing qualification): the pathway in which candidates
+  investigate, attack in authorized labs, defend, and assure AI systems, and prove it with
+  verifiable evidence.
 
 ---
 
-## 1. Common Ranger program/track architecture (review item 1)
-
-A **Program** is the platform. A **Track** (a.k.a. pathway) is an independently versioned
-qualification line. Tracks share authentication, cohort orchestration, Case/CaseSubmission,
-provenance, and Ed25519 signing; they do **not** share curriculum shape, scenario types, evidence
-kinds, environment, or qualification standards.
+## 1. Common pathway architecture (shared control plane, no duplication)
 
 ```
-Program (Ranger)
- └─ Track {pathway, name}                       cyber-ops | cyber-ai
+Ranger (one control plane, one auth, one signing authority)
+ └─ Pathway {id: strata|parallax}
      └─ CurriculumDefinition {pathway, curriculum_version}   independently versioned, immutable once published
          └─ AssessmentUnit[] {unit_type, order, blueprint_ref, environment_type}
-             unit_type ∈ {board, module, lab-exercise, case-investigation}
+             unit_type ∈ {board, lab-challenge, case-investigation, design-review}
      └─ QualificationPolicy {pathway, curriculum_version, pass rule, signing}
 ```
 
-Key rule: **a Track does not inherit another Track's structure.** cyber-ops `CurriculumDefinition`
-= the existing 26-week, six-board sequence (`unit_type=board`, environment `soc-opensearch`, and
-later `ludus-goad`). cyber-ai `CurriculumDefinition` = its own ordered units
-(`unit_type ∈ {module, lab-exercise, case-investigation}`, environments `media-forensics` /
-`llm-redteam`) — **no six boards, no 95% bar by default.** The six-board constants and
-`score_board2`/`PASS_BAR` are cyber-ops-scoped and untouched.
+A pathway never inherits another's structure. STRATA's `CurriculumDefinition` = the six-board,
+130-graded-day sequence (`unit_type=board`, env `soc-opensearch`, later `ludus-goad`), 95% bar —
+unchanged. PARALLAX's `CurriculumDefinition` is defined in the blueprint (`unit_type ∈
+{lab-challenge, case-investigation, design-review}`, envs under §3), with its own qualification
+policy.
 
-### Result records (preserve, then generalize additively)
-
-`BoardResult` stays exactly as is for cyber-ops (objective fields, signature, 95% bar). Cyber AI
-needs a signed, verifiable unit result without overloading `BoardResult`. Proposed additive model
-`UnitResult` (pathway-scoped), produced by the **same** signing primitive (`signing.sign`) and the
-**same** independent-verification discipline as `verify_evidence`:
-
-```
-UnitResult {id, candidate_id, cohort_id, pathway, curriculum_version,
-            unit_type, unit_ref, score, passed, rubric_breakdown(json),
-            submission_id -> CaseSubmission, signature, created_at}
-```
-
-`BoardResult` is unchanged; cyber-ops may keep writing it, or a later migration may make it a
-`UnitResult` view — not in scope now. No cyber-ops row changes shape in this milestone.
-
-### Curriculum versioning
-
-`CurriculumDefinition` is immutable once published (content-hashed, same discipline as
-`ScenarioCatalogEntry.content_hash`). A new cohort binds to one `(pathway, curriculum_version)`;
-in-flight cohorts never change version. This is the cross-track generalization of the immutable
-scenario-version binding already approved in M4.3 §5/§9.
+Result records: `BoardResult` is untouched for STRATA. PARALLAX produces a signed, pathway-scoped
+`UnitResult` from the **same** `signing.sign` primitive and the **same** independent-verification
+discipline as `case_contract.verify_evidence`. `PASS_BAR`/`score_board2` stay STRATA-scoped.
+Curriculum definitions are content-hashed and immutable once published (same discipline as
+`ScenarioCatalogEntry.content_hash`); an in-flight cohort never changes version.
 
 ---
 
-## 2. Cyber AI capability inventory (review item 2)
+## 2. RANGER PARALLAX — six competency domains (not six boards)
 
-Same contract as the SOC inventory (`capability_inventory.build_inventory`): a versioned,
-machine-readable statement of what Ranger can **actually produce and verify**, grounded in real
-tools, with an availability state per capability, and used as the authority a Cyber AI ScenarioSpec
-is validated against. Two environment builders, both registered behind the existing dispatch:
+PARALLAX is an advanced AI-security qualification spanning six domains. These are competency
+domains, **not** an automatic one-board-per-domain mapping; the blueprint composes them into a
+smaller number of **integrated, multi-disciplinary challenges**. Summary (full treatment in the
+blueprint):
 
-### 2a. `media-forensics` environment
-
-| Capability group | Concrete tool / method (open-source, CPU-first) | Availability (MVP) |
+| # | Domain | Representative senior-level challenge focus |
 |---|---|---|
-| Container/codec inspection | `ffprobe`, MP4 atom/box walk, Matroska/WebM parse, codec & encoder tag extraction | available |
-| Frame/stream extraction | `ffmpeg` (bounded: max duration/frames/resolution), keyframe/GOP structure | available |
-| Image tamper analysis | Error-Level Analysis (ELA), noise/PRNU residual, double-JPEG quantization, resampling traces (CPU) | available |
-| Audio forensics | spectral/spectrogram analysis, sample-rate/codec consistency, splice/discontinuity detection, F0/formant continuity | available |
-| Forensic metadata | EXIF/XMP/IPTC (`exiftool`), filesystem/container timestamps, geotags, software tags | available |
-| Media provenance | **C2PA / Content Credentials** manifest verification, signature/claim validation, assertion chain | available (verify only) |
-| Evidence hashing | `sha256` content hash (authoritative), perceptual hash (pHash/dHash) for derived-artifact linkage | available |
-| Cross-modal consistency | lip-sync / audio-visual alignment, face-landmark temporal stability (CPU heuristics) | limited (heuristic MVP) |
-| Learned deepfake detectors | open-source detector models (e.g. frequency-domain / CNN) run as **metered GPU** or slow-CPU jobs | limited (metered, optional) |
+| D1 | Agentic AI security, authorization & tool-use boundaries | confine a tool-using agent: authorization scoping, confused-deputy, unsafe tool chaining, privilege boundaries |
+| D2 | LLM & RAG security | prompt injection (direct/indirect), retrieval authorization, cross-tenant data isolation, context/trust-boundary failures |
+| D3 | AI red teaming & adversarial evaluation | structured adversarial evaluation of a model/app, mitigation design, and **validation that the mitigation holds** |
+| D4 | AI infrastructure, model artifacts, data provenance & supply chain | model/artifact integrity, unsafe deserialization, poisoned/backdoored artifacts, provenance & supply-chain controls |
+| D5 | Synthetic-media forensics, identity abuse & multimodal fraud | deepfake/multimodal investigation with provenance, metadata, and reproducible forensic observations |
+| D6 | AI security monitoring, incident response, assurance & recovery | detect/triage/respond to an AI-system incident with telemetry, then assure and recover |
 
-Authoritative-vs-advisory rule, enforced in schema (mirrors `BLOB_REF_CONTRACT.authenticity`):
-**verified provenance** (hash match, C2PA signature validation, metadata extraction — reproducible,
-machine-checkable) is authoritative; **model authenticity scores** are advisory and tagged
-`authenticity_assessment`, never conflated with provenance and never themselves the ground truth.
+Every domain is scored on real engineering and investigative reasoning, secure design, and
+**independent verification** of outcomes — never on completing a scripted walkthrough.
 
-### 2b. `llm-redteam` environment
+### Compute mapping (no Ludus, no always-on GPU)
 
-| Capability group | Concrete method | Availability (MVP) |
+| Activity | Runs on | GPU? |
 |---|---|---|
-| Sandboxed target model | a small local model (CPU) **or** metered inference endpoint, isolated harness, no tools/no network by default | limited (metered) |
-| Prompt-injection exercises | direct & indirect injection corpora, success oracle on a declared canary/secret | available (CPU oracle) |
-| Jailbreak / policy-evasion | attempt → deterministic policy oracle (did a declared forbidden behavior occur) | available |
-| Tool/agent security | sandboxed agent with mock tools; exfiltration/over-privilege detection via trace inspection | limited |
-| Model evaluation | structured-output conformance, refusal consistency, injection-resistance scoring | available |
-| Evidence: `model_trace` | full prompt/response/tool-call trace, hashed, replayable | available (verify) |
+| Agent/RAG/LLM app behavior (D1, D2) | sandboxed CPU applications (the Valyria AI apps, §3), candidate drives them via API/browser | no |
+| Prompt-injection / jailbreak / tool-abuse oracles (D1–D3) | deterministic CPU oracles over canary/secret + trace inspection | no |
+| Target-model responses where a model is needed | small local CPU model **or** **metered** hosted inference (capped) | metered only |
+| Adversarial evaluation harness (D3) | CPU harness + structured scoring | no |
+| Artifact/supply-chain analysis (D4) | CPU: hashing, unpickling-in-sandbox detection, manifest/provenance checks | no |
+| Media forensics (D5) | CPU: ffprobe/ffmpeg (bounded), exiftool, ELA/noise, audio spectral, C2PA verify, sha256/pHash | no (learned detectors optional, metered) |
+| Security telemetry, detection, hunting (D6) | **OpenSearch** (reuses the existing cluster + Security Analytics) | no |
+| Evidence, custody, submission, verification | Postgres + object store + `signing` (reused) | no |
 
-Grounding discipline identical to SOC: the inventory builder observes real tool output (e.g.
-`ffprobe`/`exiftool` on a licensed sample; a canary-oracle run) rather than hand-declaring fields,
-so a Cyber AI ScenarioSpec cannot reference an observation Ranger cannot actually produce. Both
-builders remain **gated** (return `NotImplementedError` today) until this inventory is approved.
+Only optional learned-detector / target-model inference touches GPU, and only via **metered**
+hosted inference within the capped allowance — never a dedicated or always-on GPU.
 
 ---
 
-## 3. Media-evidence architecture (review item 3)
+## 3. The Valyria Financial AI environment (integrated PARALLAX target)
 
-Large binaries never enter Postgres or OpenSearch (this is why `BLOB_REF_CONTRACT` already exists).
-The subsystem:
+A single fictional environment — Valyria Financial's AI platform — gives PARALLAX challenges a
+coherent, enterprise-realistic system to investigate, attack (in authorized labs), defend, and
+assure. It extends the existing fictional Valyria org (shared lore with STRATA) without sharing
+STRATA's SOC qualification surface.
+
+Components (all CPU/sandboxed/metered, no Ludus):
+
+- **Controlled LLM applications** — e.g. a customer-support assistant and an internal
+  "analyst copilot", each with system prompts, guardrails, and deliberately realistic trust-boundary
+  weaknesses for specific challenges.
+- **Retrieval services (RAG)** — vector/keyword retrieval over tenant-partitioned document stores,
+  with authorization boundaries candidates must test (D2).
+- **Tool-using agents** — agents with scoped tool access (ticketing, "payments" sandbox, file
+  retrieval) exercising authorization and confused-deputy surfaces (D1).
+- **Model artifacts & registry** — stored model/adapter artifacts with provenance manifests and
+  supply-chain metadata; some challenges seed integrity/poisoning issues (D4). Artifacts are
+  content-addressed BlobRefs (§4), analyzed in sandbox.
+- **Security telemetry** — application, agent, retrieval, and inference logs shipped into
+  **OpenSearch** so D6 monitoring/IR challenges use the real cluster + Security Analytics (reuses
+  the STRATA SIEM infrastructure, separate indices/tenant).
+- **Synthetic-media evidence** — licensed genuine + consent-based manipulated + ambiguous media
+  artifacts attached to D5 cases via the media-evidence subsystem (§4).
+
+Hidden ground truth (the injected weakness, the manipulation log, the poisoned artifact) lives in
+the evaluator-only layer and is recomputed/verified server-side; it is never in a candidate path.
+
+---
+
+## 4. Evidence architecture — AI artifacts, model traces & media (reuses BlobRef + signing)
+
+Large/binary evidence never enters Postgres or OpenSearch (why `scenario_spec.BLOB_REF_CONTRACT`
+exists). One subsystem serves all PARALLAX evidence kinds:
 
 ```
-Ingest → sha256 (immutable source hash) → object store (content-addressed key = sha256)
-       → MediaAsset row (BlobRef only) → CustodyEvent (signed, append-only)
-Derive (any workbench transform) → derived BlobRef {derived_from, transform, params_hash}
-       → provenance DAG (source → derived → derived…)
-Serve  → short-TTL signed URL, candidate-scoped, never a public object ACL
+Ingest → sha256 (immutable source hash) → content-addressed object store → BlobRef row
+       → CustodyEvent (Ed25519-signed, append-only)
+Derive (any workbench transform / tool run) → derived BlobRef {derived_from, transform, params_hash}
+       → provenance DAG; re-running a transform reproduces the hash
+Serve  → short-TTL, candidate-scoped signed URL (never a public object ACL)
 Retain → retention window + legal-hold for open cases → scheduled reclamation
 ```
 
-- **Object storage.** Railway bucket (S3-compatible; `mcp__Railway__create-bucket`) or equivalent.
-  Objects are immutable and keyed by content hash; re-ingest of identical bytes dedupes.
-- **Immutable source hash.** `sha256` computed at ingest, stored on `MediaAsset`, re-verified on
-  every read; mismatch = integrity failure, access denied, custody event raised.
-- **Derived-artifact tracking.** Every workbench output (extracted frame, ELA map, spectrogram,
-  C2PA report) is itself a hashed BlobRef with `derived_from` + the transform + a hash of its
-  parameters, forming a reproducible provenance DAG. Re-running a transform must reproduce the hash.
-- **Chain of custody.** Append-only `CustodyEvent` log (actor, action, asset hash, timestamp, case),
-  each event Ed25519-signed with the **existing** `signing` module — same primitive as evidence
-  records. Tamper-evident; exportable for the submission.
-- **Candidate access control.** A candidate may read only assets attached to a case assigned to
-  them, served via short-TTL signed URLs minted server-side after an authz check (reuses existing
-  authentication + cohort/case authorization). Restricted assets and their metadata never appear on
-  any public API.
-- **Secure retention.** Per-asset retention window; **legal-hold** blocks deletion while a case is
-  open or under review; candidate-derived artifacts are reclaimed after retention; **source media
-  is kept only within its documented license/consent terms** and purged otherwise.
+Evidence kinds (polymorphic, from `scenario_spec`): `event_reference` (implemented, OpenSearch
+telemetry), and — for PARALLAX, gated — `model_trace` (prompt/response/tool-call trace, hashed,
+replayable), `file_hash`, `media_asset` (BlobRef + provenance + rights/consent +
+authenticity_assessment), `document`, `system_state`. **Verified provenance** (hash match, C2PA
+signature, extracted metadata, a replayed trace) is authoritative; a **learned-model score** is
+advisory, tagged `authenticity_assessment`, and never the ground truth.
 
-Proposed additive models (for approval, not implemented): `MediaAsset`, `CustodyEvent`,
-`EvidenceBundle` (the signed set attached to a case). No existing table changes.
+Chain of custody, candidate access control, and retention are as in the media subsystem: every
+access/transform is a signed `CustodyEvent`; candidates read only assets on their assigned case;
+source media kept only within its license/consent terms.
 
 ---
 
-## 4. Browser-based forensic workbench (review item 4)
+## 5. Candidate workbench (qualification-first, no solution path)
 
-A portal workbench page (reuses existing auth + portal shell) where a candidate selects an
-authorized asset and runs forensic tools. **No tool runs in the request path**; every tool is a
-bounded, queued job.
+A browser workbench (reuses existing auth + portal shell) where a candidate independently works a
+challenge in the Valyria AI environment. It presents **operational instructions, environment
+specs, challenge objectives, scope-of-engagement rules, tooling documentation, and
+evidence-submission requirements** — and nothing that reveals the solution path. No live AI
+coaching, no hints, no walkthrough.
 
 ```
-Workbench (browser) → enqueue ForensicJob {tool, asset_hash, params}
-  → bounded CPU worker (sandboxed, see §7) → derived BlobRef + structured result + custody event
-  → workbench renders result; candidate cites results as evidence in the case
-Optional: GPU-backed detector job → metered inference → advisory authenticity_assessment (tagged)
+Workbench → act on the live sandboxed AI apps/agents/retrieval (D1–D3), analyze artifacts (D4),
+            run bounded CPU forensic tools (D5), query OpenSearch telemetry (D6)
+          → each action/result is captured as hashed evidence + a signed custody event
+          → candidate cites evidence and submits via Case/CaseSubmission
+Optional  → metered detector/target-model inference (off by default; advisory output only)
 ```
 
-- **Bounded CPU jobs.** Reuse the existing background-worker + `pg_try_advisory_lock` pattern
-  (M4.3 §A.4 / scheduler) for a small job queue. Hard caps: wall-clock timeout, memory/cpu cgroup
-  limits, output-size cap, max concurrent jobs per candidate.
-- **Tool catalog.** `ffprobe`/`ffmpeg`, `exiftool`, ELA/noise (Pillow/numpy), audio spectral
-  (librosa/numpy), C2PA verify, hashers — each a declarative tool descriptor mapping to an
-  isolated runner; no arbitrary command execution (the `PRIVILEGED_DENYLIST` discipline from
-  `scenario_spec` extends here: a job is data, not a shell).
-- **Optional metered GPU.** Detector-model inference via HF Inference Providers pass-through
-  (same metered, no-dedicated-GPU, cost-capped model as BOARD2_M4_AI_ARCHITECTURE §11), **off by
-  default**, invoked only for specific detector tools, output always advisory.
-
-MVP ships CPU tools only; GPU detectors are a declared, cost-gated extension.
+All tool runs are bounded, queued CPU jobs (§6 isolation); tools are invoked by descriptor with
+fixed argument templates (no shell), consistent with `scenario_spec.PRIVILEGED_DENYLIST`.
 
 ---
 
-## 5. Cyber AI scenario catalog & independently validated ground truth (review item 5)
+## 6. Isolation of all media and model processing
 
-New `spec_type`s on the existing registry (gated until approved):
-
-- `media-forensics-investigation` → payload validator against the `media-forensics` inventory.
-- `llm-redteam-exercise` → payload validator against the `llm-redteam` inventory.
-
-Ground-truth model — the crux of a *defensible* media track:
-
-| Case class | Ground truth | How established (independent of candidate & of any model) | Graded on |
-|---|---|---|---|
-| Genuine | authentic | documented capture source + unbroken provenance (C2PA / original files / licensed) | correctly finding no manipulation; not over-calling |
-| Consent-based manipulated | manipulated, with a **known recorded manipulation** | the team itself produced it from licensed source under consent; the edit is logged as hidden truth | identifying manipulation + reproducible supporting observations |
-| Ambiguous | **indeterminate** (truth = "cannot be established") | adjudicated: evidence genuinely insufficient | calibrated uncertainty + correct non-conclusion; over-confidence penalized |
-
-"Independently validated" = truth is set by provenance/consent records held **outside** any
-detector model and outside the candidate's view (evaluator-only, same discipline as
-`scenario_spec` evaluator_only layer and SOC hidden truth). A learned detector's score is **never**
-the ground truth — it is at most one advisory observation the candidate may weigh.
-
-Media sourcing gate: only **genuine licensed** media and **consent-based** manipulations the team
-creates from licensed source. No scraping, no non-licensed acquisition (hard gate). Ambiguous cases
-are built from the same licensed pool.
+Every ingest and job runs under: magic-byte file-type validation (not extension; container/codec
+allowlist); decode limits (max resolution/duration/frames/pixels/output size; decompression-bomb
+defense); malware scanning (ClamAV) on uploads before decode; hard per-job wall-clock timeouts;
+and **no privileged execution** — unprivileged sandbox, dropped capabilities, seccomp, read-only
+root FS, no network egress for CPU jobs, per-job CPU/memory cgroup caps, ephemeral scratch wiped
+after each job. Untrusted artifacts (uploaded media, model artifacts) each live in their own empty
+directory and are passed to tools by path; no interpreter or build tool runs from inside such a
+directory. Model-artifact analysis (D4) treats deserialization as hostile (sandboxed, no
+auto-execution).
 
 ---
 
-## 6. Cyber AI assessment framework (review item 6) — *separately approved blueprint*
+## 7. PARALLAX assessment (summary; full blueprint linked)
 
-Four scored dimensions; the mix and pass rule are a **QualificationPolicy** that must be approved
-on its own (this document proposes it; it does **not** assign cyber-ops' 95% bar to Cyber AI):
-
-1. **Reproducible technical observations** — machine-verifiable: did the candidate extract the
-   correct hash, metadata field, C2PA claim, codec/container fact, spliced audio segment? Verified
-   deterministically against the media-evidence store (re-run the transform, compare hashes/values),
-   exactly as `verify_evidence` checks SOC citations. This is the authoritative, auto-gradable core.
-2. **Reasoning** — the chain from observations to conclusion (rubric-scored).
-3. **Uncertainty calibration** — confidence appropriate to evidence; ambiguous cases reward correct
-   non-conclusion and penalize over-confidence (rubric + scoring function).
-4. **Defensible security recommendations** — e.g. a verification protocol and a fraud-response
-   control; judged for soundness and defensibility (rubric).
-
-Submission reuses `Case` / `CaseSubmission`; the result is a signed `UnitResult` (§1). Dimension 1
-is independently verifiable the way SOC evidence is; dimensions 2–4 use a published rubric with
-human (and optionally AI-Orchestration-advisory, Z1, never authoritative) review. **Proposed MVP
-pass policy for approval:** a minimum on Dimension 1 (verifiable observations) *and* a rubric
-threshold on 2–4, with no single numeric bar carried over from cyber-ops. Exact numbers are
-deferred to your separately-approved Cyber AI assessment blueprint.
+Scored dimensions (detailed, with the proposed qualification policy, in
+`siem/RANGER_PARALLAX_BLUEPRINT.md`): reproducible technical observations (machine-verifiable
+against the evidence store, like `verify_evidence`); investigative reasoning; secure-design and
+remediation quality (does the fix actually hold — re-verified); uncertainty calibration (ambiguous
+cases reward correct non-conclusion, penalize overconfidence); defensible recommendations and
+alternatives. Submission reuses `Case`/`CaseSubmission`; result is a signed `UnitResult`.
+**No STRATA 95% bar is applied**; the PARALLAX policy is approved separately.
 
 ---
 
-## 7. Isolation of all media processing (review item 7)
+## 8. Day-one assessed labs (genuine candidate actions + independent verification)
 
-Every ingest and every job runs under:
+Two labs are proposed as the day-one PARALLAX minimum. "Documented" is **not** "production-ready":
+a lab is production-ready only after it is built, its ground truth is independently established,
+its reproducible evidence checks pass end-to-end, and a signed submission verifies — demonstrated,
+not described.
 
-- **File-type validation** by magic bytes / container probe, **not** extension; allowlist of
-  containers/codecs; reject on mismatch.
-- **Decoding limits** — max resolution, duration, frame count, pixel count, and output size;
-  decompression-bomb and pixel-flood defenses; frame budget enforced in `ffmpeg` invocation.
-- **Malware scanning** where appropriate (ClamAV) on every upload before any decode.
-- **Timeouts** — hard wall-clock per job; killed on breach, custody event raised.
-- **No privileged execution** — unprivileged sandbox: dropped Linux capabilities, seccomp profile,
-  read-only root FS, no network egress for CPU forensic jobs, per-job cgroup CPU/memory caps,
-  ephemeral scratch wiped after the job. Tools are invoked by descriptor with fixed argument
-  templates — never an interpreted command string (no shell, consistent with
-  `scenario_spec.PRIVILEGED_DENYLIST`).
+### Lab A — Agent/RAG security challenge (D1 + D2, integrated)
+- Environment: the Valyria support assistant + RAG over a tenant-partitioned store + a tool-using
+  agent with a scoped "payments" sandbox and a planted cross-tenant/authorization weakness.
+- Genuine candidate actions: probe and characterize the trust boundary; demonstrate an authorized
+  exploit (e.g. indirect prompt injection via a retrieved document that induces a cross-tenant read
+  or an out-of-scope tool call) against a declared canary; then propose and **implement** a
+  mitigation (retrieval authorization / tool-scope fix) and show it holds.
+- Independent verification: the canary-access oracle and the `model_trace` evidence are re-checked
+  server-side (did the exploit reach the canary before, and fail after the fix); reproducible,
+  signed `UnitResult`. CPU + metered inference only.
 
-Untrusted-input handling matches the platform rule: each uploaded/derived file lives in its own
-empty directory and is passed to tools by path as an argument; no interpreter or build tool runs
-from inside a media directory.
+### Lab B — Synthetic-media forensic investigation (D5; the executive-deepfake fraud case)
+- Environment: a finance officer receives a video clip + voicemail + follow-up email purporting to
+  authorize an urgent wire (licensed/consent-based media; truth may be genuine, manipulated, or
+  ambiguous).
+- Genuine candidate actions: authorized evidence access (signed custody); bounded CPU forensic
+  tools (container/codec & encoder tags, C2PA/Content-Credentials verify, EXIF/XMP, ELA + double-JPEG,
+  audio spectral splice/F0, cross-modal lip-sync, sha256 of each artifact); an authenticity
+  determination with calibrated confidence; and defensible recommendations (out-of-band wire
+  verification protocol + fraud response).
+- Independent verification: Dimension-1 observations recomputed server-side against the
+  media-evidence store (hashes/metadata/C2PA); rubric for reasoning/uncertainty/recommendations;
+  signed `UnitResult` + exported signed chain of custody. CPU-only to pass; any learned detector is
+  advisory and tagged.
 
 ---
 
-## 8. Pilot workload & cost projection (review item 8) — under $300/month preserved
+## 9. Infrastructure & cost (under $300/month preserved)
 
-Cyber-ops baseline (from `federated-pondering-clock.md` §A.3): ~$70–110/mo. Cyber AI MVP adds:
+STRATA baseline (from `federated-pondering-clock.md` §A.3): ~$70–110/mo. PARALLAX day-one adds:
 
-| Component | Host / mode | Est. $/mo |
+| Component | Mode | Est. $/mo |
 |---|---|---|
-| Object storage (media, GB-scale pilot) | Railway bucket / S3-compatible | $3–10 |
-| CPU forensic worker (bounded, can share the control-plane node or a small burst node) | Railway / small always-on | $5–15 |
-| Metered GPU detector inference (optional, capped) | HF Inference Providers pass-through | $0–30 (cap) |
-| LLM red-team sandbox (small local CPU model or metered) | reuse metered allowance | within AI $15–30 cap |
-| **Cyber AI MVP subtotal** | | **~$10–55/mo** |
-| **Both tracks combined** | | **~$80–165/mo** |
+| Object store (model artifacts + media, pilot) | content-addressed bucket | $3–10 |
+| Sandboxed AI apps + CPU job workers (Valyria apps, forensic + oracle jobs) | small always-on / burst CPU | $5–20 |
+| OpenSearch telemetry (D6) | **reuses** the existing STRATA cluster (separate indices/tenant) | $0 incremental |
+| Metered hosted inference (target model + optional detectors) | HF Inference Providers pass-through, capped | $0–30 (cap) |
+| **PARALLAX day-one subtotal** | | **~$10–60/mo** |
+| **Both pathways combined** | | **~$80–170/mo** |
 
-Comfortably under $300/mo. No dedicated/always-on GPU, no Proxmox, no Ludus for Cyber AI. Pilot
-sized to one cohort and a handful of curated cases. The dominant variable cost remains the
-cyber-ops GOAD host (boards 5–6, future); a second GOAD host is the most likely overage trigger and
-is surfaced for approval before being added — Cyber AI does not touch that lever.
+Under $300/mo. No dedicated/always-on GPU, no Proxmox, no Ludus for PARALLAX. The dominant variable
+cost stays STRATA's future GOAD host; PARALLAX does not touch that lever.
 
 ---
 
-## 9. Day-one milestones for both tracks (review item 9) — production-ready vs future
+## 10. Reuse map (shared foundation, no second control plane)
 
-**Cyber Operations (unchanged plan):** M4.3.1 deterministic foundation (implemented, pending
-lock) → M4.3.2… cohort provisioning/orchestration, real SOC team ops, rotation (per M4.3 §16).
-Boards 5–6 Ludus/GOAD remain future and infra-gated.
-
-**Cyber AI — day-one MVP (production-ready scope):**
-
-- **CA-1 (foundation, free, no media processing):** common Track/CurriculumDefinition/AssessmentUnit
-  + `UnitResult` seam; register `media-forensics`/`llm-redteam` inventories and the two new
-  `spec_type` validators; `MediaAsset`/`CustodyEvent`/`EvidenceBundle` models + BlobRef wiring; all
-  behind the existing gates. Regression tests mirroring `test_scenario_catalog.py`.
-- **CA-2 (media-evidence + workbench, CPU-only, licensed sample):** object store, ingest+hash,
-  signed custody, scoped signed-URL serving, bounded CPU tool runners (§4/§7), derived-artifact DAG.
-- **CA-3 (catalog + assessment MVP):** a small curated case set across the three ground-truth
-  classes (§5), Dimension-1 auto-verification + rubric for 2–4, signed `UnitResult`.
-- **CA-4 (end-to-end pilot):** review item 10, below.
-
-**Future (explicitly not day-one):** learned deepfake-detector GPU pipeline at scale, full LLM/agent
-red-team lab, large case library, any always-on GPU. Declared, cost-gated, not implemented.
-
----
-
-## 10. End-to-end pilot — executive deepfake impersonation & multimodal fraud (review item 10)
-
-Narrative: a finance officer receives a video call clip + a voicemail + a follow-up email
-purporting to be the CEO authorizing an urgent wire. Candidate must investigate authenticity and
-recommend a response.
-
-1. **Authorized evidence access.** Candidate opens the assigned case; portal authz grants
-   short-TTL signed URLs to the video, audio, and email artifacts (licensed/consent-based source).
-   Custody event logged + signed on each access.
-2. **Workbench observations (reproducible).** Candidate runs bounded CPU jobs: container/codec &
-   encoder tags (`ffprobe`), C2PA/Content-Credentials manifest verify, EXIF/XMP metadata, ELA +
-   double-JPEG on key frames, audio spectral splice detection + F0 continuity, cross-modal
-   lip-sync alignment, sha256 of each artifact. Each produces a hashed derived artifact in the
-   provenance DAG.
-3. **Reasoning + calibrated uncertainty.** Candidate synthesizes observations into an authenticity
-   determination with explicit confidence; if the curated truth is "ambiguous," a calibrated
-   non-conclusion scores well and over-confidence is penalized.
-4. **Defensible recommendations.** e.g. an out-of-band verification protocol for executive wire
-   authorizations and an immediate financial-control response to the attempted fraud.
-5. **Independently verified, signed submission.** `CaseSubmission` captured; Dimension-1
-   observations re-verified server-side against the media-evidence store (hashes/metadata/C2PA
-   recomputed); rubric applied to 2–4; a signed `UnitResult` + exported signed chain-of-custody is
-   produced. Any learned-detector score present is shown as advisory, tagged, and excluded from
-   ground truth.
-
-This exercises the whole stack — authz, media evidence, workbench isolation, provenance, assessment,
-signing — on genuine licensed media, with no GPU dependency required for a pass.
-
----
-
-## 11. Reuse map (explicit — review requirement)
-
-| Existing infrastructure | Reused by Cyber AI as |
+| Existing infrastructure | Reused by PARALLAX as |
 |---|---|
-| Authentication (GitHub OAuth, the only auth) | unchanged; same sign-in for both tracks |
-| Cohort orchestration & lifecycle (M4.3 §15) | `Cohort.pathway` selects the track; provisioning idempotency/validation/isolation reused; Cyber AI provisioning = tenant + object-store prefix + case set (no VM) |
-| `Case` / `CaseSubmission` | the submission vehicle for Cyber AI investigations |
-| Provenance & evidence verification (`case_contract.verify_evidence`) | the model for Dimension-1 auto-verification against the media-evidence store |
-| Ed25519 signing (`signing`) | signs `UnitResult` and every `CustodyEvent`; no new crypto |
-| ScenarioSpec envelope + registry (`scenario_spec`) | carries the two new `spec_type`s; `evaluator_only` carries hidden media truth |
-| Capability-inventory dispatch (`capability_inventory`) | hosts the two new environment builders |
-| AI Orchestration Layer (Z0/Z1/Z2) | may *assist staff* authoring Cyber AI scenarios; holds no authority; distinct from the pathway |
-
-No second control plane, no second auth, no second signing authority, no forked platform.
-
----
-
-## 12. Minimum viable qualification scope (for approval)
-
-The smallest Cyber AI that is a **genuine, defensible qualification** (not a landing page):
-
-- One `media-forensics` cohort, one `CurriculumDefinition` (cyber-ai-v1), a handful of
-  `case-investigation` units across genuine / consent-manipulated / ambiguous classes.
-- CPU-only workbench (the §4 tool catalog), media-evidence subsystem with signed custody, candidate
-  access control, retention.
-- Assessment: Dimension-1 auto-verified + rubric for 2–4, signed `UnitResult`, under a
-  **separately approved QualificationPolicy** (no inherited 95% bar).
-- The §10 pilot as the acceptance case.
-- Stays within the <$300/mo combined target; no GPU required to qualify.
-
-LLM/agent red-team (`llm-redteam`) ships its inventory + spec_type seam in CA-1 but its full lab is
-a fast-follow after the media MVP, to keep the first qualification tight and reviewable.
+| Authentication (GitHub OAuth, only auth) | unchanged; one sign-in for both pathways |
+| Cohort orchestration & lifecycle (M4.3 §15) | `Cohort.pathway=parallax` selects the pathway; idempotent provisioning/validation/isolation reused; PARALLAX provisioning = tenant + object-store prefix + OpenSearch indices + case set (no VM) |
+| `Case` / `CaseSubmission` | the submission vehicle for PARALLAX challenges |
+| Evidence verification (`case_contract.verify_evidence`) | the model for Dimension-1 auto-verification across model_trace/media/telemetry |
+| Ed25519 signing (`signing`) | signs `UnitResult` + every `CustodyEvent`; no new crypto |
+| ScenarioSpec envelope + registry (`scenario_spec`) | carries PARALLAX `spec_type`s; `evaluator_only` holds hidden truth |
+| Capability-inventory dispatch (`capability_inventory`) | hosts the PARALLAX environment builders |
+| OpenSearch + Security Analytics | the D6 telemetry/detection surface |
+| AI Orchestration Layer | staff-side authoring/stress-test/review only; no authority, no candidate coaching |
 
 ---
 
-## 13. Minimal foundational changes to admit both tracks now
+## 11. Minimal foundational changes to admit both pathways now
 
-Already in code (M4.3.1): pathway enums, `Cohort.pathway`/`curriculum_version`, per-environment
-inventory dispatch, typed spec registry, polymorphic evidence kinds + `BLOB_REF_CONTRACT`,
-pathway-aware `ScenarioCatalogEntry`.
+Already in code (M4.3.1, preserved): `pathways.py` (stable ids + legacy normalization + display
+branding), `Cohort.pathway/curriculum_version`, per-environment inventory dispatch, typed spec
+registry + pathway validation, polymorphic evidence kinds + `BLOB_REF_CONTRACT`, pathway-aware
+`ScenarioCatalogEntry`.
 
-Proposed additive changes (schema/interface only; **for approval**, implemented post-review, each
-idempotent `ensure_schema` ALTER, no existing row reshaped):
+Proposed additive changes (schema/interface only; **for approval**, implemented post-review,
+idempotent `ensure_schema` ALTERs, no existing row reshaped): models `CurriculumDefinition`,
+`AssessmentUnit`, `UnitResult`, `MediaAsset`, `CustodyEvent`, `EvidenceBundle`, `ForensicJob`,
+`ModelArtifact`; PARALLAX environment builders behind the existing dispatch (lifts the two
+`NotImplementedError`s); PARALLAX `spec_type` validators; move `model_trace`/`media_asset` into
+`IMPLEMENTED_EVIDENCE_KINDS` as each lands. `BoardResult`, `score_board2`, `PASS_BAR`, STRATA
+inventory and grading: **no change**.
 
-- Models: `CurriculumDefinition`, `AssessmentUnit`, `UnitResult`, `MediaAsset`, `CustodyEvent`,
-  `EvidenceBundle`, `ForensicJob`.
-- `capability_inventory`: implement `_build_media_forensics_inventory` + `_build_llm_redteam_inventory`
-  behind the existing dispatch (lifts the two `NotImplementedError`s).
-- `scenario_spec`: register `media-forensics-investigation` + `llm-redteam-exercise` validators; move
-  `media_asset`/`model_trace` into `IMPLEMENTED_EVIDENCE_KINDS` as each lands.
-- `signing`: no change (reused for `UnitResult` + `CustodyEvent`).
-- `BoardResult`, `score_board2`, `PASS_BAR`, SOC inventory, cohort grading: **no change**.
+---
+
+## 12. Backward compatibility & migration (non-destructive)
+
+The interim ids `cyber-ops`/`cyber-ai` from commit `5518796` are normalized to `strata`/`parallax`
+at read time by `pathways.normalize_pathway`, so correctness never depends on rewriting a row.
+Persisted values: the `Cohort.pathway` column was newly added in M4.3.1 with default `strata`; no
+`parallax` cohort exists (PARALLAX is not live), so the only possible legacy value is `cyber-ops`
+on any cohort created against an earlier build of the column — read as `strata` automatically.
+Optional, reversible realignment (not run here, not required): `UPDATE cohorts SET
+pathway='strata' WHERE pathway='cyber-ops'`. No destructive migration.
+
+---
+
+## 13. Website positioning (prepare; do not deploy)
+
+The public Ranger site must present STRATA and PARALLAX as advanced, selective qualification
+pathways — **not** a course, academy, tutorial service, or beginner program. Emphasis: selective
+admission, senior-level technical challenges, independent investigation, verifiable evidence, and
+earned qualification; and an accurate operational-vs-under-development status per pathway. The
+site lives in a separate repo (not attached here); changes are prepared and reviewed, then
+deployed only after content, admission flow, and capability claims are approved. Links already
+distributed make this a priority item in the milestone plan, but deployment stays gated.
 
 ---
 
 ## 14. Invariants & gates (must hold)
 
-- Backward compatibility: existing cohorts are `cyber-ops` by default; no grading, access, truth,
-  signing, or 95%-bar change. Cyber AI additions are purely additive and gated.
-- No paid GPU, no non-licensed media, no Ludus/GOAD/Proxmox, no candidate activation, no always-on
-  GPU — none without explicit approval.
-- Combined infra under $300/mo; overage surfaced before spend.
-- Cyber AI is **not** forced into six boards and inherits **no** cyber-ops qualification standard;
-  its blueprint is approved separately.
-- The AI Orchestration Layer stays an untrusted advisor, distinct from the Cyber AI pathway.
+- STRATA unchanged: six boards, 130 graded days, signed evidence, 95% bar, SOC architecture.
+- PARALLAX: separately approved curriculum + assessment blueprint + qualification policy; no
+  inherited 95% bar; six domains composed into integrated challenges, not forced into six boards.
+- Qualification-first: no candidate coaching, hints, walkthroughs, tutorial-driven completion,
+  adaptive solution-revealing guidance, or instructor-dependent progression anywhere.
+- Governed AI: proposes/analyzes/stress-tests challenges and gives post-submission advisory review
+  only; never live-coaches, reveals truth, grants qualification, alters signed scores, or overrides
+  deterministic verification. Neither the AI layer nor PARALLAX candidates gain uncontrolled
+  infrastructure privilege.
+- Gates: no paid GPU, no non-licensed media, no Ludus/GOAD/Proxmox, no always-on GPU, no candidate
+  activation; combined infra < $300/mo (overage surfaced first).
+- "Documented" ≠ "production-ready": a lab is production-ready only when built, with independently
+  established truth and passing end-to-end reproducible verification + signed submission.
 
 ---
 
 ## Deliverable summary — what needs approval before locking M4.3.1
 
-1. This integrated two-track architecture (§1–§7, §11, §13–§14).
-2. The Cyber AI MVP qualification scope (§12) and its separate **QualificationPolicy/assessment
-   blueprint** (§6).
-3. The pilot & cost projection (§8) within the <$300/mo target.
-4. The day-one milestone split (§9) and the §10 end-to-end pilot as acceptance.
+1. This integrated two-pathway, qualification-first architecture (§0–§7, §10–§14).
+2. The PARALLAX qualification blueprint (`siem/RANGER_PARALLAX_BLUEPRINT.md`): six domains,
+   integrated challenge architecture, curriculum duration/structure/prerequisites, and the
+   separately-approved QualificationPolicy (no inherited 95%).
+3. The two day-one assessed labs (§8) as the PARALLAX minimum qualification scope, with genuine
+   candidate actions and independent evidence verification.
+4. Infrastructure/cost within <$300/mo (§9) and the website positioning plan (§13, prepare-only).
 
-On approval: lift the gates in the sequence CA-1 → CA-2 → CA-3 → CA-4, each committed/tested/
-documented and stopped for review, exactly as cyber-ops milestones run. Until then M4.3.1 stays
-**unlocked**; the cyber-ops deterministic foundation is complete and green and does not depend on
-any Cyber AI work.
+On approval: implement in gated steps (PARALLAX foundation → evidence/workbench → Lab A → Lab B),
+each committed/tested/documented and stopped for review, exactly as STRATA milestones run. Until
+then M4.3.1 stays **unlocked**; the STRATA deterministic foundation is complete, green, and
+independent of any PARALLAX work.

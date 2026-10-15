@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import pathways
 from siem import capability_inventory as capinv
 from siem import scenario_spec as ss
 from siem import scenario_pipeline as sp
@@ -23,8 +24,8 @@ def _spec(spec_id="soc-001", families=None, objective="steal customer PII",
           services=("core-banking",), gaps=("dns-exfil",), decoys=("quarter-close export",),
           difficulty="standard", seed="pkg-seed-1"):
     return {
-        "spec_id": spec_id, "spec_version": 1, "pathway": "cyber-ops",
-        "specialization": None, "curriculum_version": "cyber-ops-v1",
+        "spec_id": spec_id, "spec_version": 1, "pathway": "strata",
+        "specialization": None, "curriculum_version": "strata-v1",
         "environment_type": "soc-opensearch", "spec_type": "soc-investigation",
         "board_compat": [2], "difficulty_profile": difficulty,
         "enterprise_version": "valyria-1", "required_capabilities": [],
@@ -50,10 +51,28 @@ def _spec(spec_id="soc-001", families=None, objective="steal customer PII",
 
 
 def run():
+    # ---- pathway identity (stable ids, legacy normalization, display-only branding) --
+    check("stable pathway ids are strata/parallax (no marketing names in logic)",
+          pathways.PATHWAYS == ("strata", "parallax") and pathways.DEFAULT_PATHWAY == "strata")
+    check("legacy ids normalize non-destructively (cyber-ops->strata, cyber-ai->parallax)",
+          pathways.normalize_pathway("cyber-ops") == "strata"
+          and pathways.normalize_pathway("cyber-ai") == "parallax"
+          and pathways.normalize_pathway("STRATA") == "strata"
+          and pathways.normalize_pathway(None) == "strata")
+    check("is_valid_pathway accepts canonical + legacy, rejects unknown/marketing",
+          pathways.is_valid_pathway("strata") and pathways.is_valid_pathway("parallax")
+          and pathways.is_valid_pathway("cyber-ops")
+          and not pathways.is_valid_pathway("RANGER STRATA")
+          and not pathways.is_valid_pathway("mars"))
+    check("branding is display-only, present for both, and separate from ids",
+          pathways.branding("strata")["name"] == "RANGER STRATA"
+          and pathways.branding("parallax")["name"] == "RANGER PARALLAX"
+          and pathways.branding("cyber-ai")["name"] == "RANGER PARALLAX")
+
     # ---- capability inventory ----------------------------------------------
     inv = capinv.build_inventory()
-    check("inventory builds, pathway cyber-ops, env soc-opensearch",
-          inv["pathway"] == "cyber-ops" and inv["environment_type"] == "soc-opensearch")
+    check("inventory builds, pathway strata, env soc-opensearch",
+          inv["pathway"] == "strata" and inv["environment_type"] == "soc-opensearch")
     check("inventory is grounded in real datasets (observed, not invented)",
           "network.dns" in inv["telemetry"]["observed_datasets"]
           and "windows.security" in inv["telemetry"]["observed_datasets"])
@@ -75,6 +94,14 @@ def run():
     # ---- ScenarioSpec schema + layers --------------------------------------
     good = _spec()
     check("valid spec passes schema", ss.validate_schema(good)["ok"])
+
+    legacy = copy.deepcopy(good); legacy["pathway"] = "cyber-ops"
+    check("legacy pathway 'cyber-ops' still validates (back-compat)",
+          ss.validate_schema(legacy)["ok"])
+
+    badpw = copy.deepcopy(good); badpw["pathway"] = "RANGER STRATA"
+    check("marketing/unknown pathway -> INVALID_PATHWAY",
+          any(e["code"] == "INVALID_PATHWAY" for e in ss.validate_schema(badpw)["errors"]))
 
     missing = copy.deepcopy(good); missing["pathway"] = ""
     check("missing pathway -> MISSING_MANDATORY_FIELD",
@@ -196,9 +223,10 @@ def run():
     check("ScenarioCatalogEntry model present + pathway-aware + immutable version",
           {"spec_id", "spec_version", "pathway", "content_hash", "status"} <= set(cols))
     ccols = models.Cohort.__table__.columns.keys()
-    check("Cohort is pathway-aware (default cyber-ops, backward compatible)",
+    check("Cohort is pathway-aware (default strata, backward compatible)",
           "pathway" in ccols and "curriculum_version" in ccols
-          and models.Cohort.PATHWAYS == ("cyber-ops", "cyber-ai"))
+          and models.Cohort.PATHWAYS == ("strata", "parallax")
+          and models.Cohort.pathway.default.arg == "strata")
     bcols = models.BoardResult.__table__.columns.keys()
     check("BoardResult objective fields untouched",
           {"objective_score", "objective_passed", "objective_sig"} <= set(bcols))
