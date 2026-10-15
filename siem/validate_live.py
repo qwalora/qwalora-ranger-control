@@ -664,14 +664,13 @@ def dataview_check(c):
                               "cluster:admin/opensearch/securityanalytics/*"],
                tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
     c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
-    pc, pb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
-                              "/api/saved_objects/index-pattern/diag-priv",
-                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="__user__")
-    gc, gb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
-                              "/api/saved_objects/index-pattern/diag-glob",
-                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant="")
-    print(f"[diag] private_write code={pc} body={pb[:400]}", flush=True)
-    print(f"[diag] global_write code={gc} body={gb[:400]}", flush=True)
+    atok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
+    ai_code, ai = c._req("GET", "/_plugins/_security/authinfo", bearer=atok)
+    tenants = ai.get("tenants") if isinstance(ai, dict) else None
+    print(f"[diag] authinfo code={ai_code} user={ai.get('user_name') if isinstance(ai,dict) else None} "
+          f"roles={ai.get('roles') if isinstance(ai,dict) else None} tenants={json.dumps(tenants)}", flush=True)
+    tc, tb = c._req("GET", "/_plugins/_security/api/tenants")
+    print(f"[diag] configured_tenants code={tc} names={list(tb.keys()) if isinstance(tb,dict) else tb}", flush=True)
 
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
