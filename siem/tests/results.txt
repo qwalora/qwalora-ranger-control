@@ -1,0 +1,12 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.6.0
+rootdir: <repo>/siem
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1
+collected 15 items
+
+tests/test_siem.py ...............                                       [100%]
+
+============================== 15 passed in 0.04s ==============================
+exit 0
