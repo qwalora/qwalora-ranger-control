@@ -607,6 +607,20 @@ on a synthetic cohort), then 4.3.4 and 4.3.5 (the shared plane + rotation), then
 Continuous shared ingestion stays OFF until its workload+cost plan is separately
 approved.
 
+### AI/LLM architecture (separate linked document)
+
+The AI-assisted scenario engineering, cohort planning, exercise simulation, investigation
+mentoring, assessment review, and the AI platform/security model are specified in
+`siem/BOARD2_M4_AI_ARCHITECTURE.md`. AI is an untrusted advisor that emits declarative
+proposals into this deterministic, human-gated pipeline; it never authorizes or executes
+provisioning, never changes grades or `PASS_BAR = 95.0`, and never holds admin/provisioner
+credentials or hidden truth. The shared `ScenarioSpec` schema (consumed identically by
+human and AI authors) lands in M4.3.1 so the catalog is not rebuilt later; the additive AI
+milestones (A1 platform core, A2 Scenario Architect, A3 Cohort Planner, A4 Mentoring, A5
+Assessment Review) are sequenced and gated in that document. The deterministic
+M4.3.1-M4.3.7 do not depend on AI, and a deterministic no-AI fallback covers all essential
+provisioning and qualification.
+
 ## Deliverable summary
 
 Deliver for final approval: this revised architecture, the scenario-diversity +
