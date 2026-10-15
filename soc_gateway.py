@@ -101,10 +101,20 @@ def register(app, candidate_model, db):
     def _candidate_slug(c):
         return authz._slug(c.github_id or c.handle)
 
+    _DEFCO = os.environ.get("DEFAULT_COHORT", "2026-A")
+
     def _authorize():
-        """Return (kind, subject, cohort) or abort. kind is 'candidate' or 'admin'."""
+        """Return (kind, candidate_or_None, subject, cohort) or abort. An
+        authenticated admin may 'act as' a dedicated test candidate (set via the
+        admin-only /soc/admin/act-as route) so candidate-specific validation uses a
+        real candidate identity, not the admin's."""
         if session.get("admin"):
-            return ("admin", "ranger_soc_admin", os.environ.get("DEFAULT_COHORT", "2026-A"))
+            actas = session.get("soc_act_as")
+            if actas:
+                c = candidate_model.query.get(actas)
+                if c:
+                    return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
+            return ("admin", None, "ranger_soc_admin", _DEFCO)
         c = _current_candidate()
         if not c:
             _log("deny", reason="no-session", path=request.path)
@@ -115,9 +125,9 @@ def register(app, candidate_model, db):
         if int(c.current_board or 0) != SIEM_BOARD:
             _log("deny", reason="board", board=c.current_board, cand=c.id)
             abort(403)
-        return ("candidate", authz.user_name(_candidate_slug(c)), c.cohort or os.environ.get("DEFAULT_COHORT", "2026-A"))
+        return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
 
-    def _provision(kind, subject, cohort):
+    def _provision(kind, cand, subject, cohort):
         """Idempotent: ensure the subject's role, roles-mapping, and (candidates)
         their seeded index exist. Separate from proxy requests."""
         cl = _admin_cluster()
@@ -132,8 +142,7 @@ def register(app, candidate_model, db):
                                              "allowed_actions": ["kibana_all_write"]}])
             cl.put_rolesmapping("ranger_soc_admin", users=[subject])
             return {"role": "ranger_soc_admin"}
-        c = _current_candidate()
-        slug = _candidate_slug(c)
+        slug = _candidate_slug(cand)
         role = authz.role_name(slug)
         cl.put_role(role, [authz.candidate_index_pattern(cohort, slug)],
                     dls={"ranger.candidate_id": slug},
@@ -153,8 +162,8 @@ def register(app, candidate_model, db):
 
     @app.get("/soc/launch")
     def soc_launch():
-        kind, subject, cohort = _authorize()
-        info = _provision(kind, subject, cohort)
+        kind, cand, subject, cohort = _authorize()
+        info = _provision(kind, cand, subject, cohort)
         _log("launch", kind=kind, subject=subject, **{k: v for k, v in info.items() if k != "index"})
         return redirect(BASE + "/app/home")
 
@@ -163,10 +172,38 @@ def register(app, candidate_model, db):
         _authorize()
         return redirect(BASE + "/app/home")
 
+    @app.get("/soc/admin/act-as")
+    def soc_act_as():
+        # Admin-only (real GitHub admin auth required): drive a candidate-scoped SOC
+        # session as a dedicated Board 2 test candidate. Not a bypass; audited.
+        if not session.get("admin"):
+            abort(403)
+        handle = request.args.get("handle", "board2-test")
+        c = candidate_model.query.filter_by(handle=handle).first()
+        if not c:
+            c = candidate_model(handle=handle, github_id="soctest-" + handle,
+                                status="active", current_board=SIEM_BOARD, cohort=_DEFCO)
+            db.session.add(c)
+            db.session.commit()
+        else:
+            c.status, c.current_board = "active", SIEM_BOARD
+            db.session.commit()
+        session["soc_act_as"] = c.id
+        _log("admin_act_as", admin=session.get("admin_login"), cand=c.id, handle=handle)
+        return redirect(BASE + "/launch")
+
+    @app.get("/soc/admin/act-as-clear")
+    def soc_act_as_clear():
+        if not session.get("admin"):
+            abort(403)
+        session.pop("soc_act_as", None)
+        _log("admin_act_as_clear", admin=session.get("admin_login"))
+        return redirect(BASE + "/launch")
+
     @app.route("/soc/<path:subpath>",
                methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     def soc_proxy(subpath):
-        kind, subject, cohort = _authorize()
+        kind, cand, subject, cohort = _authorize()
         if not _rate_ok(subject):
             _log("rate_limited", subject=subject)
             abort(429)
