@@ -2,6 +2,56 @@
 
 Date: 2026-10-15. Candidate access remains DISABLED.
 
+## Per-tenant data views: root cause, fix, and validation (2026-10-15)
+
+Problem: a freshly authenticated SOC admin reached Discover with no data view, and
+creating one (admin or candidate, programmatic or browser) failed with 403.
+
+Root cause (confirmed): `siem/opensearch/opensearch.yml` listed `.kibana*` in
+`plugins.security.system_indices.indices`. With `.kibana*` a protected system index,
+`SystemIndexAccessEvaluator` denied every saved-object write by a non-superadmin
+before multitenancy could route it to the per-tenant index; the write hit the global
+`.kibana_1` and was refused (`indices:data/write/index for '.kibana_1' index is not
+allowed for a regular user`). Verified identical for basic-auth and JWT, private and
+named tenants, and a narrowly scoped provisioning identity. The documented OpenSearch
+default system-index list does not include `.kibana`; it is managed by `kibanaserver`
+and isolated by multitenancy.
+
+Fix (operator-authorized): removed the single `- ".kibana*"` entry. Kept
+`system_indices.enabled: true` and `.opendistro_security`, `.opensearch-sap*`,
+`.opendistro-alerting*`, `.opensearch-observability` protected.
+
+Effective index permissions (unchanged by the fix):
+- Candidate `cand_<slug>`: read-only on own `ranger-<cohort>-<slug>-b*` + DLS; no
+  `.kibana*` index permission; `kibana_all_write` on own private tenant only.
+- SOC admin `ranger_soc_admin`: read-only on `ranger-*`/alerting/SAP; no `.kibana*`
+  index permission; `kibana_all_write` on own private tenant only.
+- `kibanaserver` (Dashboards service account): `indices_all` on `.kibana*` (standard,
+  server-side only, never exposed to the browser).
+- Provisioning: the gateway writes each subject's data view using that subject's own
+  short-lived JWT into that subject's own private tenant; no separate broad identity.
+
+Live validation (inside Railway, against the deployed cluster):
+- OpenSearch started on the corrected config; Dashboards served the saved-object API.
+- Admin `ranger-*` data view created and read (200); candidate data view scoped to the
+  candidate's own pattern (200).
+- Cross-tenant isolation: candidate cannot read admin's or another candidate's data
+  view (404); admin cannot read a candidate's private data view (404); a forged
+  `securitytenant` header does not expose another tenant's object (404).
+- Candidate and admin JWTs denied direct `.kibana*` read/write/delete (403).
+- Multitenancy routes writes to the per-tenant index (candidate write 200; a broad
+  `ranger-*` data view a candidate creates still exposes nothing: cross=403, own=200).
+- No regression: jwt suite PASS (own-access, cross-candidate denied, expired/tampered/
+  wrong-key/issuer/audience rejected, role-spoof ineffective, escalation blocked,
+  revocation enforced, admin least-privilege).
+
+Rollback: re-add `- ".kibana*"` to `plugins.security.system_indices.indices` in
+`siem/opensearch/opensearch.yml`, commit, and redeploy the OpenSearch service. The
+setting is read at node start; data on the volume is unaffected.
+
+Pending: operator browser confirmation that Discover renders real telemetry on the
+`ranger-*` data view through the `/soc` gateway.
+
 ## Implemented and deployed (portal, existing service)
 
 `soc_gateway.py`, registered on the portal, live at `https://portal.qwalora.com/soc`:
