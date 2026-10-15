@@ -33,6 +33,16 @@ PROXY_TIMEOUT = int(os.environ.get("SOC_PROXY_TIMEOUT", "30"))
 MAX_RESP = int(os.environ.get("SOC_MAX_RESP_BYTES", str(40 * 1024 * 1024)))
 SIEM_BOARD = 2
 
+# --- Admin "act-as" (candidate simulation) hard constraints -------------------
+# act-as exists ONLY to let an authenticated Super Admin drive the real candidate
+# SOC experience with a dedicated, non-real test identity during validation. It is
+# never a path to impersonate a real candidate and is off unless explicitly enabled.
+_ACTAS_HANDLE = "board2-test"               # the ONLY handle act-as may target
+_ACTAS_MARKER = "soctest-board2-test"       # synthetic github_id marking the test candidate
+_ACTAS_TTL = int(os.environ.get("RANGER_SOC_ACTAS_TTL", "1800"))  # session lifetime, seconds
+_ACTAS_ENABLED = os.environ.get("RANGER_SOC_ACTAS_ENABLED", "").strip().lower() in (
+    "1", "true", "yes", "on")
+
 # Hop-by-hop headers never forwarded in either direction.
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailers", "transfer-encoding", "upgrade", "content-length", "host"}
@@ -103,17 +113,39 @@ def register(app, candidate_model, db):
 
     _DEFCO = os.environ.get("DEFAULT_COHORT", "2026-A")
 
+    def _actas_candidate():
+        """Return the live act-as candidate for this admin session, or None.
+        Enforces the short lifetime and the non-real-identity invariant; clears a
+        stale or invalid impersonation so it cannot linger."""
+        actas = session.get("soc_act_as")
+        if not actas:
+            return None
+        if time.time() >= session.get("soc_act_as_exp", 0):
+            _log("actas_expired", admin=session.get("soc_act_as_admin"), cand=actas)
+            session.pop("soc_act_as", None)
+            session.pop("soc_act_as_exp", None)
+            session.pop("soc_act_as_admin", None)
+            return None
+        c = candidate_model.query.get(actas)
+        # Defensive: the target must still be the dedicated synthetic test candidate.
+        if not c or c.handle != _ACTAS_HANDLE or c.github_id != _ACTAS_MARKER:
+            _log("actas_invalid_target", admin=session.get("soc_act_as_admin"), cand=actas)
+            session.pop("soc_act_as", None)
+            session.pop("soc_act_as_exp", None)
+            session.pop("soc_act_as_admin", None)
+            return None
+        return c
+
     def _authorize():
         """Return (kind, candidate_or_None, subject, cohort) or abort. An
-        authenticated admin may 'act as' a dedicated test candidate (set via the
-        admin-only /soc/admin/act-as route) so candidate-specific validation uses a
-        real candidate identity, not the admin's."""
+        authenticated admin may 'act as' the dedicated board2-test candidate (set via
+        the admin-only /soc/admin/act-as route) so candidate-specific validation uses
+        a real candidate identity, not the admin's. act-as never targets a real
+        candidate and expires automatically."""
         if session.get("admin"):
-            actas = session.get("soc_act_as")
-            if actas:
-                c = candidate_model.query.get(actas)
-                if c:
-                    return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
+            c = _actas_candidate()
+            if c:
+                return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
             return ("admin", None, "ranger_soc_admin", _DEFCO)
         c = _current_candidate()
         if not c:
@@ -160,11 +192,37 @@ def register(app, candidate_model, db):
             cl.refresh(idx)
         return {"role": role, "index": idx}
 
+    @app.before_request
+    def _actas_write_guard():
+        """While an admin is impersonating the test candidate, the session may touch
+        ONLY the candidate SOC experience (/soc/*) and the act-as controls. Every
+        other portal route is refused, so the impersonated session can never modify
+        candidate submissions, grading records, admission status, or qualification
+        outcomes. SOC itself is candidate-scoped (per-candidate role + DLS + private
+        tenant) and reaches none of those records."""
+        if not session.get("soc_act_as"):
+            return None
+        # An expired impersonation imposes no further restriction; drop it so the
+        # admin regains normal portal access.
+        if time.time() >= session.get("soc_act_as_exp", 0):
+            session.pop("soc_act_as", None)
+            session.pop("soc_act_as_exp", None)
+            session.pop("soc_act_as_admin", None)
+            return None
+        p = request.path
+        if p == "/soc/admin/act-as-clear" or p == "/soc" or p.startswith("/soc/"):
+            return None
+        _log("actas_blocked_route", admin=session.get("soc_act_as_admin"),
+             method=request.method, path=p)
+        abort(403)
+
     @app.get("/soc/launch")
     def soc_launch():
         kind, cand, subject, cohort = _authorize()
         info = _provision(kind, cand, subject, cohort)
-        _log("launch", kind=kind, subject=subject, **{k: v for k, v in info.items() if k != "index"})
+        _log("launch", kind=kind, subject=subject,
+             actas_admin=session.get("soc_act_as_admin") if session.get("soc_act_as") else None,
+             **{k: v for k, v in info.items() if k != "index"})
         return redirect(BASE + "/app/home")
 
     @app.route("/soc", methods=["GET"])
@@ -174,31 +232,51 @@ def register(app, candidate_model, db):
 
     @app.get("/soc/admin/act-as")
     def soc_act_as():
-        # Admin-only (real GitHub admin auth required): drive a candidate-scoped SOC
-        # session as a dedicated Board 2 test candidate. Not a bypass; audited.
+        # Admin-only (real GitHub Super Admin auth required): drive a candidate-scoped
+        # SOC session as the dedicated, non-real Board 2 test candidate. Not a bypass;
+        # short-lived, audited, write-guarded, and off unless explicitly enabled.
         if not session.get("admin"):
             abort(403)
-        handle = request.args.get("handle", "board2-test")
+        # (7) Disabled unless explicitly enabled for this validation.
+        if not _ACTAS_ENABLED:
+            _log("actas_disabled", admin=session.get("admin_login"))
+            abort(404)
+        # (2) Explicit per-use authorization, on top of the authenticated admin session.
+        if request.args.get("authorize") != "yes":
+            _log("actas_unauthorized", admin=session.get("admin_login"))
+            abort(400)
+        # (1)(5) Target is hardcoded to the dedicated synthetic test candidate; any
+        # client-supplied handle is ignored, and a real account is never touched.
+        handle = _ACTAS_HANDLE
         c = candidate_model.query.filter_by(handle=handle).first()
+        if c and c.github_id != _ACTAS_MARKER:
+            _log("actas_refused_real_account", admin=session.get("admin_login"), cand=c.id)
+            abort(409)
         if not c:
-            c = candidate_model(handle=handle, github_id="soctest-" + handle,
+            c = candidate_model(handle=handle, github_id=_ACTAS_MARKER,
                                 status="active", current_board=SIEM_BOARD, cohort=_DEFCO)
             db.session.add(c)
             db.session.commit()
         else:
             c.status, c.current_board = "active", SIEM_BOARD
             db.session.commit()
+        # (3) Short-lived. (6) Admin identity recorded for the whole impersonation.
         session["soc_act_as"] = c.id
-        _log("admin_act_as", admin=session.get("admin_login"), cand=c.id, handle=handle)
+        session["soc_act_as_exp"] = time.time() + _ACTAS_TTL
+        session["soc_act_as_admin"] = session.get("admin_login") or str(session.get("admin"))
+        _log("admin_act_as", admin=session["soc_act_as_admin"], cand=c.id,
+             handle=handle, ttl=_ACTAS_TTL)
         return redirect(BASE + "/launch")
 
     @app.get("/soc/admin/act-as-clear")
     def soc_act_as_clear():
         if not session.get("admin"):
             abort(403)
+        _log("admin_act_as_clear", admin=session.get("soc_act_as_admin"))
         session.pop("soc_act_as", None)
-        _log("admin_act_as_clear", admin=session.get("admin_login"))
-        return redirect(BASE + "/launch")
+        session.pop("soc_act_as_exp", None)
+        session.pop("soc_act_as_admin", None)
+        return redirect("/admin")
 
     @app.route("/soc/<path:subpath>",
                methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
@@ -274,4 +352,5 @@ def register(app, candidate_model, db):
             _log("test_login", cand=c.id, handle=handle)
             return redirect("/soc/launch")
 
-    _log("gateway_registered", dashboards=DASH, base=BASE, test_mode=bool(test_key))
+    _log("gateway_registered", dashboards=DASH, base=BASE, test_mode=bool(test_key),
+         actas_enabled=_ACTAS_ENABLED, actas_ttl=_ACTAS_TTL)
