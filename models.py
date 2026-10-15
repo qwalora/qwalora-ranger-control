@@ -469,3 +469,78 @@ class CohortScenarioPlan(db.Model):
     __table_args__ = (db.UniqueConstraint("cohort", "board", name="uq_plan_per_cohort_board"),)
 
     DIFFICULTIES = ("intro", "standard", "advanced")
+
+
+class Case(db.Model):
+    """A SOC investigation assignment for a candidate (Board 2 enterprise SIEM).
+
+    A Case binds a candidate to a specific data plane + index + seed + versioned
+    scenario, and carries the investigation lifecycle. The hidden scenario truth is
+    NEVER stored here; it is recomputed from `seed` server-side at grade time. Three
+    workflows share this model (see siem/case_contract.py): practice (ungraded),
+    assigned (formative, reviewer feedback), qualification (the graded exam).
+    """
+    __tablename__ = "cases"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    board = db.Column(db.Integer, nullable=False, default=2)
+    cohort = db.Column(db.String(40), nullable=False)
+    # Which data plane this case investigates: "qualification" (deterministic,
+    # graded) or "operational" (continuous, ungraded).
+    plane = db.Column(db.String(20), nullable=False, default="qualification", index=True)
+    # Workflow: "qualification" | "assigned" | "practice".
+    workflow = db.Column(db.String(20), nullable=False, default="qualification", index=True)
+    index_name = db.Column(db.String(200), nullable=False)   # the candidate's authorized index
+    seed = db.Column(db.String(64), nullable=False)          # reproducibility key (truth recomputed from this)
+    scenario_version = db.Column(db.Integer, nullable=False, default=1)
+    rubric_version = db.Column(db.Integer, nullable=False, default=2)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    # Lifecycle state (see case_contract.CASE_STATES / CASE_TRANSITIONS).
+    status = db.Column(db.String(24), nullable=False, default="assigned", index=True)
+    assigned_at = db.Column(db.DateTime(timezone=True), default=_now)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    closed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    submissions = db.relationship("CaseSubmission", backref="case", lazy=True,
+                                  cascade="all, delete-orphan")
+
+    # One live (non-terminal) qualification case per (candidate, board, attempt).
+    __table_args__ = (db.UniqueConstraint("candidate_id", "board", "attempt", "plane",
+                                          name="uq_case_per_attempt"),)
+
+
+class CaseSubmission(db.Model):
+    """One structured incident submission for a Case.
+
+    `payload` is the candidate-authored CaseSubmission JSON (siem/case_contract.py
+    schema). The reviewer-owned fields are never candidate-writable. The enterprise
+    grade (`shadow_score`) is SHADOW ONLY and never drives qualification: it is not
+    written to BoardResult.objective_* and does not affect clearance.
+    """
+    __tablename__ = "case_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    case_id = db.Column(db.Integer, db.ForeignKey("cases.id"), nullable=False, index=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    # draft | submitted | under_review | evaluated | closed
+    submission_status = db.Column(db.String(20), nullable=False, default="draft", index=True)
+    rubric_version = db.Column(db.Integer, nullable=False, default=2)
+    payload = db.Column(db.Text, nullable=True)            # JSON: candidate-authored submission
+    validation = db.Column(db.Text, nullable=True)         # JSON: {errors, warnings}
+    verification = db.Column(db.Text, nullable=True)       # JSON: per-citation verdicts (server-side)
+    evidence_record = db.Column(db.Text, nullable=True)    # JSON: preserved, hashed cited events
+    evidence_sig = db.Column(db.Text, nullable=True)       # Ed25519 over the evidence record (integrity/origin, NOT correctness)
+    # SHADOW enterprise grade: recorded for comparison only; never used for clearance.
+    shadow_score = db.Column(db.Float, nullable=True)
+    shadow_breakdown = db.Column(db.Text, nullable=True)   # JSON: per-component scores
+    review_flags = db.Column(db.Text, nullable=True)       # JSON: human-review triggers raised
+    # Reviewer-owned (never candidate-writable).
+    reviewer_id = db.Column(db.String(64), nullable=True)
+    reviewer_feedback = db.Column(db.Text, nullable=True)
+    reviewed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
