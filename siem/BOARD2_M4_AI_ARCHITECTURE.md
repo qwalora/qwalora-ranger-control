@@ -270,7 +270,157 @@ passes a deterministic/human gate before it affects anything.
 No AI executed infrastructure, authorized provisioning, saw hidden truth in a
 candidate path, or changed a grade at any step.
 
-## 11. Non-negotiable invariants
+## 11. LLM model selection & inference architecture review
+
+Review and recommendation only. No paid inference calls, no GPU provisioning, no
+candidate access, no grading change. Facts are tagged [verified] (checked against a
+current source this session) or [estimate] (to confirm at provisioning). Candidates
+are evaluated, not predetermined; a different model may be adopted if the harness
+(§11.3) shows it materially wins.
+
+### 11.1 Candidate comparison matrix
+
+| Attribute | openai/gpt-oss-20b | Qwen/Qwen3-14B | Qwen/Qwen3-8B |
+|---|---|---|---|
+| License | Apache 2.0 [verified] | Apache 2.0 [verified] | Apache 2.0 [verified] |
+| Params / class | ~20B (MoE) | 14B dense | 8B dense |
+| Context | 131K [verified] | 32K native, 131K via YaRN (experimental) [verified] | 32K native, 131K via YaRN [verified] |
+| Structured output / tools | function calling + structured outputs supported [verified]; per-provider JSON-schema enforcement to confirm | tool/function calling supported [verified]; schema-constrained output via provider guided-decoding [estimate] | same family as 14B [estimate] |
+| Representative price /1M (in/out) | ~$0.018 / ~$0.09 at an aggregator; varies by provider [verified aggregator, confirm at provider] | ~$0.06-0.20 / ~$0.20-0.60 range [estimate] | ~$0.02-0.10 / ~$0.10-0.30 range [estimate] |
+| Fit for our use | strong: native structured output + long context + very low price + reasoning | strong reasoning; 32K native is enough for our prompts; YaRN only if we exceed 32K | cheapest + lowest latency; a floor/fallback |
+| Risk | per-provider structured-output parity varies | YaRN context is experimental; schema enforcement provider-dependent | smaller model may under-perform on complex adversary reasoning |
+
+Our prompts (topology + objective + schema + few-shot) are expected well under 32K
+tokens, so 32K native is sufficient; 131K is headroom, not a requirement. All three
+are Apache 2.0, which is clean for our use. A fourth candidate (for example a larger
+Qwen3 MoE such as Qwen3-30B-A3B, or a reasoning-tuned variant) is admissible if the
+harness shows a material win on cybersecurity reasoning or validated-scenario yield.
+
+### 11.2 Hosting strategy
+
+- **Metered hosted inference, no dedicated GPU.** Prefer Hugging Face Inference
+  Providers: pass-through provider pricing with no HF markup, small monthly credits,
+  bring-your-own-provider-key supported, and Team/Enterprise admins can set spending
+  limits and disable providers [verified]. An alternative metered provider
+  (OpenRouter, Groq, Fireworks, Together, DeepInfra, etc.) is acceptable behind the
+  same interface.
+- **Provider-neutral `LLMClient` (from §2) is the seam.** Model/provider is a
+  configuration (`AiModelProfile`), so swapping models or providers never touches the
+  scenario catalog, cohort orchestration, or assessment. This is what lets us pick a
+  winner later without rework.
+- No always-on inference server; calls are author/plan-time and on-demand.
+
+### 11.3 Model evaluation harness
+
+Identical, versioned test inputs across every candidate model; deterministic scoring
+where possible, rubric scoring (human + a fixed reference) where not. Metrics and
+weights (sum to 100; weights are the point of review):
+
+| Metric | How measured | Weight |
+|---|---|---|
+| JSON / schema compliance | output validates against the `ScenarioSpec` JSON Schema first try; retries counted | 15 |
+| Cybersecurity reasoning quality | rubric vs a reference set (kill-chain coherence, realistic tradecraft) | 15 |
+| Technical feasibility vs real topology | references only the §11.4 capability inventory (assets/identities/services/data sources that exist) | 15 |
+| Meaningful scenario diversity | diversity-axis vector distance from prior scenarios (§2) | 10 |
+| Detection & telemetry compatibility | proposed gaps/events map to real `schema` fields + Security Analytics behaviour | 10 |
+| Hallucinated infra/fields/APIs/paths | count of references to non-existent capability (lower is better) | 10 |
+| Scenario reproducibility | compiled spec regenerates an identical world from its seed | 5 |
+| Difficulty calibration accuracy | predicted difficulty vs the §2 calibrated vector | 5 |
+| Latency & reliability | p50/p95 latency, error/timeout rate | 5 |
+| Privacy & prompt-injection resilience | negative tests (below) pass; no data-exfil / instruction-following from injected data | 5 |
+| Cost per successfully VALIDATED scenario | provider spend / scenarios that pass §11.4 tier "technically validated" | 5 |
+
+Negative tests (must handle gracefully, never fabricate): request an unsupported data
+source (e.g., a firewall vendor Ranger does not generate), an unsupported detector
+capability (e.g., the custom-rule path that returns 500 on this build), a nonexistent
+asset/identity, and an injected instruction inside pasted "telemetry" telling the
+model to ignore the schema or reveal truth. A good model declines or flags the
+unsupported request rather than inventing it; hallucination is penalized.
+
+### 11.4 Scenario execution compatibility (capability inventory)
+
+An explicit `CapabilityInventory`, derived from Ranger's ACTUAL implementation, is the
+authority an AI proposal is checked against. No narrative plausibility and no LLM
+self-assessment can substitute for this check.
+
+- Generators: `enterprise.py` incident families + topology (identities, service
+  accounts, tiered admins, hosts, 5 business apps, 5 segments); `telemetry_stream.py`
+  profiles.
+- Telemetry schema: `schema.INDEX_MAPPING` ECS fields actually emitted (incl. the
+  keyword `winlog.event_data.*` fields M4.2 required).
+- Security Analytics: pre-packaged windows rules that work; the custom-rule `500`
+  limitation on this build; detector/finding/alert behaviour proven in M4.2.
+- Lab adapters: the future Ludus/GOAD `EnvironmentProvisioner` contract (boards 5-6),
+  declared but not executable now.
+
+Scenario classification pipeline (ties to §3):
+
+| Tier | Gate | Authority |
+|---|---|---|
+| Proposed | AI emitted a `ScenarioSpecProposal` | AI (Z1), no trust |
+| Technically validated | schema valid + every referenced capability exists in `CapabilityInventory` + deterministic compile | Z0 deterministic |
+| Executable and tested | simulation: world generates, incidents materialize, intended detectors fire / gaps are genuinely un-alerted, truth derivable, solvable | Z0 deterministic |
+| Approved for catalog promotion | difficulty calibrated in band + administrator sign-off | human |
+
+Only "Approved" enters the catalog as auto-selectable (§15.3 of the M4.3 doc).
+
+### 11.5 AI cost governance
+
+- **Testing allowance: $15-30/month** inside the under-$300/month infra target, for
+  the evaluation + author-time generation only [policy].
+- **Controls**: per-job token cap (input + output) and a per-job hard timeout; monthly
+  per-component quota (`AiJob.quota_bucket`); provider-side spending limit where
+  supported (HF Team admin limit) [verified capability]; usage accounting on every
+  `AiJob` (tokens + cost); and a hard application-level cutoff that disables AI calls
+  when the monthly ceiling is reached, falling back to the deterministic no-AI path
+  (§8). 
+- **Representative cost math [estimate]**: a scenario-architect generation is roughly
+  6-10K input + 2-4K output tokens. At gpt-oss-20b aggregator rates that is well under
+  $0.01 per generation; even hundreds of evaluation + authoring runs across three
+  models stay within the $15-30 testing allowance. Mentoring is the only higher-volume
+  path and stays off by default and rate-limited. We do not assume this allowance
+  covers production demand; production volume is benchmarked before any raise.
+
+### 11.6 Deployment options and recommendation
+
+| Option | Pros | Cons |
+|---|---|---|
+| HF Inference Providers (metered) | no GPU, pass-through pricing, admin spend caps, many models behind one key, easy model swap | per-provider feature parity (schema enforcement) varies |
+| Direct metered provider (Groq/Fireworks/Together/OpenRouter) | sometimes lower latency/price for a specific model | another account + key; less uniform |
+| Dedicated GPU | predictable latency at high volume | capital/opex, idle cost, ops burden - rejected for our volume and budget |
+
+Provisional recommendation (to be confirmed by the §11.3 harness, not asserted):
+start evaluation with **gpt-oss-20b as the primary candidate** (Apache 2.0, native
+structured output, 131K context, lowest representative price) and **Qwen3-14B as the
+reasoning challenger**, with **Qwen3-8B as the low-cost/low-latency fallback**, all
+behind the provider-neutral `LLMClient` via HF Inference Providers with a bring-your-
+own-key option and a Team spending limit. The harness picks the production default;
+the loser models stay configured as fallbacks. Per-provider per-token prices and
+JSON-schema enforcement are confirmed at provisioning before any paid call.
+
+### 11.7 What is verified vs estimated
+
+- [verified] Apache 2.0 licensing for all three; gpt-oss-20b 131K context + structured
+  output; Qwen3 32K native / 131K YaRN; HF Inference Providers pass-through pricing,
+  monthly credits, admin spend limits, bring-your-own-key; a representative
+  gpt-oss-20b aggregator price.
+- [estimate / to confirm at provisioning] exact per-provider per-token prices for each
+  model on the chosen provider; per-provider JSON-schema enforcement parity; real
+  latency/reliability; cost per validated scenario (produced by the harness). No paid
+  call is made to obtain these until the evaluation design is approved.
+
+### 11.8 Gate to implementation
+
+Once this evaluation design (matrix, datasets, weights, deployment options, cost
+scenarios, recommendation) is approved, we may begin the deterministic **M4.3.1**
+(catalog + shared `ScenarioSpec` schema) and the **A1 AI platform core with a MOCK
+model** (the `LLMClient` interface, registries, `AiJob`/`AiArtifact`, trust zones,
+output-schema validation, quotas/audit) - all without enabling production inference.
+The model-evaluation harness (§11.3) runs against candidate models only when a
+flagged, budgeted paid-inference step is separately approved; until then A1/A2 run
+against the mock provider. Production inference stays off.
+
+## 12. Non-negotiable invariants
 
 - AI never holds OpenSearch admin, provisioner credentials, the signing key, or
   production infrastructure access; it is never a trusted authority.
