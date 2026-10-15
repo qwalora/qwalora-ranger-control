@@ -1,369 +1,468 @@
-# Board 2 SOC candidate experience and assessment contract (design for approval)
+# Board 2 SOC candidate experience and assessment contract (revised design for approval)
 
-Status: DESIGN ONLY. No scoring behavior implemented, no candidate access enabled.
-Preserves: per-candidate isolation (index + DLS + private tenant), hidden scenario
-truth, `program.PASS_BAR = 95.0`, the existing graders, and the signed-evidence
-mechanism (`signing.py`, Ed25519). Any new rubric ships in shadow mode.
-
-This contract defines the missing piece: a candidate-submission grader and
-operational experience for the ENTERPRISE SIEM telemetry (`siem/enterprise.py` →
-per-candidate OpenSearch index via `soc_gateway.py`). It does not change the live
-`scenarios.py::score_board2` hunt grader, which keeps running unchanged.
-
----
-
-## 0. Grounding in current code (what exists today)
-
-- Dataset: `enterprise.generate(candidate_id, board, seed, profile="B")` → `(events, truth)`,
-  a PURE function of the seed. Events are indexed with NO labels (`_malicious` stripped);
-  every event carries `ranger.event_uid` (sha256-derived) plus ECS fields and
-  `@timestamp` / `event.ingested` (out-of-order simulation). Board 2 uses profile B
-  (8000 benign, 3 incidents, 14-day window).
-- Hidden truth (never indexed, recomputable from the seed server-side):
-  `{"profile", "incidents": [{"family","event_uids","techniques","verdict","actor_ip","primary_identity"}], "counts": {...}}`.
-  `SCENARIO_FAMILIES = [privileged-identity-compromise, data-exfiltration,
-  compromised-service-identity, endpoint-lateral-movement, detection-failure]`.
-  `verdict ∈ {true_positive, true_positive_missed_by_detector}`.
-- Detectors: `siem/detection.run_rules(events)` + `correlate(findings)` are deterministic.
-  The `dns-c2-known-domain` rule is deliberately narrow (matches only `cdn-metrics.ru`),
-  which is the intended gap behind the `detection-failure` incident.
-- Grade channel: `models.BoardResult` (one row per candidate+board) holds
-  `objective_score`, `objective_passed`, `objective_sig`, `signature`. There is no
-  separate Submission/Attempt table; a hunt submission is graded transiently in
-  `/grade/submit` and only the result persists.
-- Threshold: `program.PASS_BAR = 95.0`, applied in `_record_objective` and the gate
-  `_evaluate_gate` (objective_passed AND report approved).
-- Signing: `signing.py` — `canonical(payload)`, `sign(payload)`, `verify(payload, sig, pub?)`,
-  `public_key_b64()`. Ed25519 over canonical JSON of arbitrary claims. `validate_live.py`
-  F9 already signs a case snapshot `{candidate, board, index, findings, ts}` and proves
-  tamper-detection — the pattern this contract productionizes.
-- Isolation: `authz.index_name` = `ranger-<cohort>-<slug>-b<board>`, per-candidate role
-  `cand_<slug>` read-only with DLS on `ranger.candidate_id`, private Dashboards tenant.
-- Org/topology: `enterprise.ORG = "valyria-financial"` with departments, service
-  accounts, admins, hosts, benign and suspicious externals.
+Status: DESIGN ONLY. No grader, endpoint, model, UI, or scoring behavior implemented.
+Candidate access and act-as remain DISABLED. Revised per review: adds the two data
+planes, three workflows, detailed rubric anchors, the full submission contract, and a
+strengthened evidence contract. Preserves per-candidate isolation (index + DLS +
+private tenant), hidden scenario truth, `program.PASS_BAR = 95.0`, the live
+`scenarios.py::score_board2` grader, current `BoardResult` behavior, and existing
+qualification rules. The enterprise rubric stays versioned and in shadow mode until
+independently reviewed and approved.
 
 ---
 
-## 1. Metric provenance
+## 0. Grounding in current code
 
-Principle: every SOC metric is COMPUTED from a real authoritative source and never
-fabricated. Two source classes only: (a) the candidate's own OpenSearch index (the
-fixed scenario snapshot), and (b) the Ranger control plane (Postgres) recording the
-candidate's own real actions and results. No invented organizational activity, no
-synthetic "team performance," no made-up live feed.
-
-| Metric | Authoritative source | Calculation | Collection interval | Freshness indicator | Permissions | Missing-data behavior |
-|---|---|---|---|---|---|---|
-| Events in scope | OpenSearch `ranger-<cohort>-<slug>-b2` | `_count` | On page load / manual refresh | `dataset_generated_at` (seed provisioning time) + `last_queried_at`; dataset is a fixed snapshot, labeled "scenario snapshot (not live)" | Candidate: own index via JWT+DLS. SOC admin: ranger-* read | "Dataset not provisioned" state; never a zero fabricated as activity |
-| Time coverage | OpenSearch min/max `@timestamp` agg | min/max | On load | Static window (e.g. 2026-03-01..03-14) shown explicitly | same | "No events" banner |
-| Detector findings (alerts) | `siem/detection.run_rules(events)` over the candidate's own dataset | deterministic rule pass | On load (recomputed from the same seed, so reproducible) | derived from seed; stable | Candidate: own. SOC admin: oversight | "No detector findings" (legitimate for a quiet window) |
-| Correlated clusters | `siem/detection.correlate(findings)` | group_by user.name, 120-min window | On load | derived from seed | same | empty set |
-| Open/assigned cases | Ranger Postgres `Case` (new) | count by status for this candidate | On action | `updated_at` | Candidate: own cases; SOC admin: all | "No case assigned" |
-| Triage progress | Ranger Postgres `CaseAnnotation` (candidate's own real triage actions) | reviewed / flagged counts | On action | `updated_at` | Candidate: own | zero = genuinely none done |
-| Time on case | Ranger Postgres `Case.started_at` → now/submitted_at | elapsed | On action | live clock | Candidate: own | n/a before start |
-| Submission status / score | Ranger Postgres `CaseSubmission` + `BoardResult` | stored values | On submit | `submitted_at`, `graded_at` | Candidate: own; SOC admin: oversight | "Not submitted" |
-
-"Continuously changing" values are limited to class (b): the candidate's OWN activity
-counters (events reviewed, queries run, time on case) and recomputed detector views.
-The graded dataset itself does NOT change (it is the fixed snapshot), which is the
-fairness anchor (section 6). Any dashboard tile that looks live is a view over the
-fixed window and/or the candidate's real actions, and is labeled as such. Absent data
-is always rendered as an explicit empty/unprovisioned state, never a fabricated number.
-
----
-
-## 2. Candidate responsibilities (Board 2 = threat-hunter)
-
-Mapped to the five scenario families actually generated.
-
-- Monitoring: establish the environment baseline (valyria-financial: departments,
-  service accounts, admins, normal external endpoints) from the SIEM surface, and
-  recognize deviations. Deliverable signal: a stated baseline and the anomalies noticed.
-- Triage: for each surfaced detector finding and each self-found anomaly, assign a
-  disposition, severity, and calibrated confidence. Omission = treated as benign.
-- Incident investigation: reconstruct each real incident chain end to end by
-  `event_uid`, identify the `primary_identity`, `actor_ip`, affected assets (hosts),
-  and the ATT&CK techniques, and rebuild the timeline despite out-of-order ingestion
-  (`event.ingested` ≠ `@timestamp`).
-- Threat hunting: proactively find the incident that NO detector surfaced
-  (`detection-failure` family: DNS C2 to a domain the narrow rule misses). This is the
-  component that separates a hunter from an alert-triager.
-- Detection engineering (assessment, not board-3 authoring): name the specific
-  detection gap (which rule/telemetry failed and why) and propose a concrete,
-  testable improvement. Full rule authoring/evaluation stays a Board 3 concern; here it
-  is assessed as a written detection recommendation tied to real events.
-
-A complete Board 2 attempt must address all three real incidents in the profile-B
-dataset, including the detector-missed one, with cited evidence.
+- Dataset generator: `enterprise.generate(candidate_id, board, seed, profile="B")` →
+  `(events, truth)`, PURE in the seed. Events indexed with NO labels (`_malicious`
+  stripped); each carries `ranger.event_uid`, ECS fields, `@timestamp`, and
+  `event.ingested` (out-of-order). Profile B = 8000 benign / 3 incidents / 14 days.
+- Hidden truth (never indexed; recomputable from the seed server-side):
+  `{"profile","incidents":[{"family","event_uids","techniques","verdict","actor_ip","primary_identity"}],"counts":{...}}`.
+  Families: privileged-identity-compromise, data-exfiltration,
+  compromised-service-identity, endpoint-lateral-movement, detection-failure.
+- Detectors: `siem/detection.run_rules(events)` + `correlate(findings)`, deterministic.
+  `dns-c2-known-domain` is deliberately narrow (the gap behind detection-failure).
+- Grade channel: `models.BoardResult` (one row per candidate+board):
+  `objective_score`, `objective_passed`, `objective_sig`, `report_id`, `report_status`,
+  `cleared`, `signature`. No separate Submission/Attempt table today.
+- Threshold + gate: `program.PASS_BAR = 95.0`; `_record_objective` sets
+  `objective_passed = score >= PASS_BAR`; `_evaluate_gate` clears only if
+  `objective_passed AND report_status == "approved"`.
+- Signing: `signing.py` Ed25519 — `canonical`, `sign`, `verify`, `public_key_b64`.
+  Proves INTEGRITY and ORIGIN of a recorded claim; it is NOT a measure of investigative
+  correctness.
+- Isolation: `authz.index_name` = `ranger-<cohort>-<slug>-b<board>`, role `cand_<slug>`
+  read-only, DLS on `ranger.candidate_id`, private Dashboards tenant. Org =
+  `valyria-financial`.
 
 ---
 
-## 3. Case lifecycle
+## 1. Two data planes
 
-A `Case` represents the candidate's assigned investigation of their board-2 dataset.
-States and who drives each transition:
+Ranger runs two distinct planes. Candidates experience current operational activity
+without that activity touching qualification fairness, because the planes are separate
+indices, separately labeled, and only the qualification plane is graded.
+
+### 1a. Operational SOC plane (continuous, ungraded)
+
+- Purpose: a living SOC to monitor, triage, and hunt in. Supports skill-building and
+  the "assigned investigation" workflow.
+- Data: continuously arriving, clearly labeled synthetic/lab telemetry. Every document
+  carries `data.synthetic: true` and a new `data.plane: "operational"`. Nothing is
+  presented as real production activity.
+- Generation: a bounded, rate-limited stream job appends new events (benign baseline
+  plus occasional seeded incidents) with near-current timestamps to a per-candidate
+  operational index `ranger-ops-<cohort>-<slug>` (proposed name). Built from the same
+  `enterprise` building blocks but as a rolling feed rather than a single batch.
+- Detection: `detection.run_rules` + `correlate` execute on a schedule over newly
+  arrived operational events, producing REAL findings written to an alerts store
+  (`ranger-ops-alerts-<cohort>-<slug>` or Postgres). No fabricated alerts.
+- Metrics: MEASURED from the actual pipeline (section 2), e.g. events ingested per
+  interval, detector findings produced, and detection latency measured as
+  `detector_run_ts − event.ingested`. Not invented.
+- Grading: NONE. The operational plane never contributes to `BoardResult`.
+- Cost note: continuous ingest + scheduled detection adds steady load to the always-on
+  SIEM node and is rate-bounded to stay inside budget. Standing it up needs explicit
+  infrastructure sign-off before build (no new paid service is created by this design).
+
+### 1b. Qualification plane (deterministic, versioned, isolated, graded)
+
+- Purpose: the formal Board 2 assessment surface.
+- Data: the existing deterministic dataset, `enterprise.generate(slug, 2, seed, "B")`,
+  a fixed snapshot over a fixed window, in a per-candidate index
+  `ranger-qual-<cohort>-<slug>-b2` (proposed name; today's `ranger-<cohort>-<slug>-b2`
+  is this plane). Documents carry `data.plane: "qualification"`.
+- Versioning: the plane is pinned to a `scenario_version` and the grading to a
+  `rubric_version`, both recorded on every submission and result, so a candidate is
+  always graded by the exact dataset+rubric they faced.
+- Hidden truth: never indexed; recomputed from the seed at grade time. Grading is
+  server-side only.
+- Isolation: per-candidate index + role + DLS + private tenant, unchanged.
+
+Candidates move between planes in the UI with an unmistakable banner stating which
+plane they are in ("Operational SOC — synthetic, not graded" vs "Qualification case —
+graded"). Qualification work is never mixed with operational data in the same view.
+
+---
+
+## 2. Operational metric provenance
+
+Two source classes, never fabricated: real data in the plane's indices, and the Ranger
+control plane recording real actions/results. Operational metrics are MEASURED from the
+actual generation+detection pipeline; qualification "metrics" are stats of the fixed
+dataset. Every tile names its plane and its freshness.
+
+| Metric | Plane | Authoritative source | Calculation | Interval | Freshness | Permissions | Missing-data |
+|---|---|---|---|---|---|---|---|
+| Events ingested | Operational | `ranger-ops-<cohort>-<slug>` | count over window | measured per stream batch | `last_ingest_ts` | own via DLS; SOC admin oversight | "No recent ingest" |
+| Ingest rate | Operational | stream job telemetry (Postgres) | events / interval, measured | per batch | `last_batch_ts` | own; admin | "Stream idle" |
+| Detector findings | Operational | `detection.run_rules` output store | count by rule/severity, measured | per scheduled run | `last_detector_run_ts` | own; admin | "No findings this window" |
+| Detection latency | Operational | finding.`detected_ts − event.ingested` | measured per finding | per run | derived from real timestamps | own; admin | n/a if no findings |
+| Correlation clusters | Operational | `detection.correlate` output | measured | per run | `last_detector_run_ts` | own; admin | empty |
+| Scenario window | Qualification | `ranger-qual-…-b2` min/max `@timestamp` | min/max agg | on load | static snapshot, labeled | own; admin | "No events" |
+| Events in case | Qualification | `ranger-qual-…-b2` | `_count` | on load | `dataset_generated_at` | own; admin | "Not provisioned" |
+| Case/triage progress | Both | Postgres `Case`/`CaseAnnotation` | counts of real actions | on action | `updated_at` | own; admin | genuine zero |
+| Submission status/score | Qualification | Postgres `CaseSubmission`/`BoardResult` | stored | on submit/grade | `submitted_at`,`graded_at` | own; admin | "Not submitted" |
+
+No tile shows invented org performance (no team MTTR, no synthetic peers, no fake
+"other analysts"). Absent data renders as an explicit empty state.
+
+---
+
+## 3. Three workflows
+
+| Workflow | Plane | Candidate must do | Optional practice | Submitted? | Graded? |
+|---|---|---|---|---|---|
+| A. SOC operations & practice | Operational | Monitor the feed, triage real detector alerts, run queries, practice hunts | All of it is optional practice; self-assessed practice cases available | No (practice cases can be self-checked, not recorded as results) | No |
+| B. Assigned incident investigations | Operational or a dedicated investigation dataset | Complete assigned structured investigations and submit them | Extra self-directed hunts | Yes (to the reviewer channel) | Formative only: reviewer feedback; may inform the subjective `Report`; NOT the objective qualification score |
+| C. Formal Board 2 qualification | Qualification | Investigate the deterministic case and submit the structured incident report | None (this is the exam) | Yes (to `CaseSubmission`) | Yes: objective via `score_board2_enterprise` (shadow until approved) + subjective `Report` approval; 95% gate |
+
+Mandatory to qualify: complete workflow C (objective pass at 95% AND report approved).
+Workflow A is always optional. Workflow B is required practice where a cohort plan
+assigns it, but it feeds readiness/feedback, not the objective gate.
+
+---
+
+## 4. Case lifecycle
+
+`Case` (new Postgres model) represents a workflow-B or workflow-C assignment.
 
 | State | Trigger | Automatic or reviewer |
 |---|---|---|
-| assigned | Candidate enters board 2 (`_promote` → current_board=2); seed already in `ScenarioAssignment`; `Case` created referencing the candidate's index + seed | Automatic |
-| authorized | Candidate is `active` and `current_board == 2`; `/soc` gateway grants scoped JWT | Automatic (server-side gate) |
-| investigating | Candidate opens the case; `started_at` stamped | Automatic on first open |
-| evidence_collected | Candidate accumulates cited `event_uid`s + queries (saved to the case) | Automatic as they save |
-| draft | Candidate saves the incident submission form without submitting | Automatic |
-| submitted | Candidate submits; the case locks; evidence snapshotted and signed | Automatic |
-| evaluated | Objective grader runs server-side against the hidden truth; `BoardResult` recorded + signed; v2 computed in shadow | Automatic |
-| feedback | Per-component feedback returned (what was found/missed, without leaking the key) | Automatic; reviewer may add notes |
-| closed | Board cleared (`objective_passed` AND report approved) → promotion; or washed_out after the attempt policy | Automatic for pass; reviewer for wash-out/override |
+| assigned | Entry to board 2 (workflow C) or cohort-plan assignment (workflow B); seed from `ScenarioAssignment`; `Case` created referencing plane + index + seed + `scenario_version` | Automatic |
+| authorized | Candidate `active` and `current_board == 2`; `/soc` gateway grants scoped JWT | Automatic (server-side gate) |
+| investigating | Candidate opens the case; `started_at` stamped | Automatic |
+| evidence_collected | Candidate saves cited `event_uid`s + queries to the case | Automatic |
+| draft | Candidate saves the form without submitting | Automatic |
+| submitted | Candidate submits; case locks; evidence snapshotted + signed | Automatic |
+| under_review | Items flagged for human review (section 8 triggers) await a reviewer | Reviewer |
+| evaluated | Automated objective score computed vs hidden truth; `BoardResult` recorded + signed; v2 in shadow | Automatic |
+| feedback | Per-component feedback returned (no key leak); reviewer may add notes | Automatic + reviewer |
+| closed | Board cleared (objective pass AND report approved) → promotion; or wash-out per attempt policy | Automatic for pass; reviewer for wash-out/override |
 
-Reviewer-only actions: approving the subjective `Report` (`report_status`), reviewing
-shadow v2 vs v1 before any flag flip, manual override / wash-out, and granting any
-re-attempt. Everything else is automatic and server-side.
+Reviewer-only: `Report` approval, resolving `under_review` items, shadow-v2 review,
+wash-out/override, granting re-attempts.
 
 ---
 
-## 4. Submission interface (Ranger-native incident form)
+## 5. Submission contract (Ranger-native)
 
-A Ranger-native form (not a Dashboards saved object) posted to a new authenticated
-endpoint. One submission may contain multiple incidents. Canonical JSON schema
-(`CaseSubmission.payload`):
+A Ranger portal form posting to a new authenticated endpoint; the record is Postgres
+(`CaseSubmission`), never a Dashboards saved object, so grading never depends on tenant
+state. Linear/line-style icons, no AI checkmarks.
+
+### 5a. UI (layout)
+
+- Header: plane banner ("Qualification case — graded"), case id, assessment window,
+  attempt number, autosave/draft status, submit button (disabled until mandatory
+  validation passes).
+- Section Baseline: free text — environment baseline and anomalies noticed.
+- Repeatable Incident block, one per identified incident:
+  - Disposition (select), Severity (select), Confidence (0-100 slider, calibrated).
+  - ATT&CK techniques (multi-select against the ATT&CK catalog).
+  - Affected identities (user.name values) and systems (host.name values).
+  - Timeline builder: ordered rows, each an `event_uid` + time + note; rows are added by
+    pasting a uid copied from Discover.
+  - Evidence table: each row = `event_uid` + the exact OpenSearch DSL query run +
+    time context; inline validation status per row (exists / reproduces / in-scope /
+    supports).
+  - Detection effectiveness: did a detector fire; the gap; a proposed, testable
+    detection.
+  - Containment and remediation recommendations.
+  - Analyst conclusion: narrative reasoning for this incident.
+- Section Analyst conclusions (overall): summary judgment, stated limitations and
+  uncertainty.
+- Reviewer feedback and submission status: read-only to the candidate; shows
+  submission status and, after review, reviewer feedback and per-component results.
+
+### 5b. JSON schema (`CaseSubmission.payload`), with field obligations
 
 ```json
 {
-  "case_id": "string",
-  "rubric_version": 2,
-  "baseline_summary": "string (candidate's environment baseline + anomalies)",
-  "incidents": [
+  "case_id": "string            // mandatory",
+  "plane": "qualification        // mandatory, server-set",
+  "scenario_version": "int       // mandatory, server-set",
+  "rubric_version": "int         // mandatory, server-set",
+  "attempt": "int                // mandatory, server-set",
+  "baseline_summary": "string    // mandatory",
+  "incidents": [                 // mandatory, >=1
     {
-      "label": "candidate's short name for the incident",
-      "disposition": "confirmed_incident | no_incident | inconclusive",
-      "severity": "low | medium | high | critical",
-      "confidence": 0,
-      "attack_techniques": ["T1078", "T1059.001"],
-      "primary_identity": "user.name value",
-      "actor_ip": "source.ip value",
-      "affected_assets": ["host.name", "..."],
-      "timeline": [
-        {"event_uid": "…", "ts": "ISO-8601", "note": "what happened"}
+      "label": "string           // mandatory",
+      "disposition": "confirmed_incident|no_incident|inconclusive  // mandatory",
+      "severity": "low|medium|high|critical                        // mandatory",
+      "confidence": "int 0..100                                    // mandatory",
+      "attack_techniques": ["Txxxx"],                            //  optional but scored
+      "primary_identity": "user.name                               // mandatory if confirmed_incident",
+      "actor_ip": "source.ip                                       // optional",
+      "affected_assets": ["host.name"],                          //  mandatory if confirmed_incident
+      "timeline": [                                              //  optional but scored
+        {"event_uid": "…", "ts": "ISO", "note": "…"}
       ],
-      "cited_evidence": [
-        {
-          "event_uid": "…",
-          "index": "ranger-<cohort>-<slug>-b2",
-          "query": { "…OpenSearch DSL the candidate ran…" },
-          "time_context": {"gte": "ISO", "lte": "ISO"}
-        }
+      "cited_evidence": [                                        //  mandatory if confirmed_incident, >=1
+        {"event_uid": "…", "index": "ranger-qual-…-b2",
+         "query": { }, "time_context": {"gte":"ISO","lte":"ISO"},
+         "supports_claim": "string // what this event proves for THIS incident"}
       ],
-      "detection_assessment": {
-        "detector_should_have_fired": true,
-        "gap": "which rule/telemetry missed it and why",
-        "proposed_detection": "concrete, testable rule idea"
+      "detection_assessment": {                                  //  optional but scored
+        "detector_should_have_fired": "bool",
+        "gap": "string", "proposed_detection": "string"
       },
-      "response_recommendations": ["containment", "eradication", "..."]
+      "response_recommendations": ["string"],                    //  optional but scored
+      "analyst_conclusion": "string                               // mandatory if confirmed_incident"
     }
-  ]
+  ],
+  "overall_conclusion": "string  // mandatory",
+  "stated_limitations": "string  // optional but scored (judgment)"
 }
 ```
 
-Form UX (Ranger portal, not Dashboards): structured fields with pickers for
-disposition/severity/technique (ATT&CK), a confidence slider (calibrated), a timeline
-builder that accepts `event_uid`s pasted from Discover, an evidence table where each
-row requires an `event_uid` and the exact query used, and free-text for baseline,
-detection assessment, and response. Linear/line-style icons, no AI checkmarks. The
-form validates client-side for completeness, but all authority checks are server-side
-(section 5). Draft autosaves to the candidate's own `Case` record (Postgres), not to a
-tenant saved object, so grading never depends on Dashboards state.
+Reviewer-owned fields, stored separately on `CaseSubmission` (never candidate-writable):
+`submission_status`, `reviewer_feedback`, `per_component_result`, `reviewer_id`,
+`reviewed_at`.
+
+### 5c. Validation errors (server-side, surfaced inline)
+
+- `EVIDENCE_UID_NOT_FOUND`: cited `event_uid` not present in the candidate's authorized
+  index.
+- `EVIDENCE_OUT_OF_SCOPE`: index not the candidate's own `ranger-qual-…-b2`.
+- `QUERY_DOES_NOT_REPRODUCE`: the submitted DSL does not return the cited uid in the
+  stated time context.
+- `MISSING_MANDATORY_FIELD`: a mandatory field is empty (lists the path).
+- `CONFIDENCE_OUT_OF_RANGE`, `BAD_TECHNIQUE_ID`, `EMPTY_EVIDENCE_FOR_CONFIRMED`: shape
+  checks.
+A submission with any `EVIDENCE_*` or `MISSING_MANDATORY_FIELD` error cannot be
+submitted (only saved as draft).
+
+### 5d. Drafts, locking, reassessment
+
+- Draft: autosaves to the `Case`; unlimited edits; no grading.
+- Submission locking: on submit, the case transitions to `submitted`, the payload and
+  the evidence snapshot are frozen and signed, and the form becomes read-only.
+- Reassessment: re-attempts are reviewer-granted and policy-bounded (default: limited
+  attempts per board). A re-attempt issues a NEW seed via `ScenarioAssignment` (no
+  scenario repeat), so memorizing one case does not help. Each attempt is its own
+  `CaseSubmission`; `BoardResult` keeps the governing objective score per existing
+  behavior.
 
 ---
 
-## 5. Evidence verification contract
+## 6. Evidence verification contract
 
-Ranger treats candidate prose, screenshots, and claimed event details as UNTRUSTED.
-Authority comes only from the real documents in the candidate's index and the hidden
-truth recomputed from the seed. At submission, server-side:
+Candidate prose, screenshots, and claimed values are UNTRUSTED. Credit flows only from
+reproducible queries against the candidate's authorized index and comparison to the
+hidden truth recomputed from the seed. A valid document reference alone earns NOTHING
+if the event does not support the candidate's conclusion.
 
-1. Existence: each cited `event_uid` MUST exist in the candidate's own index
-   (`ranger-<cohort>-<slug>-b2`), fetched by the broker scoped to that index. A uid not
-   present is rejected (fabricated/foreign citation).
-2. Scope: citations outside the candidate's own index pattern are impossible to
-   satisfy (DLS + index scoping) and are rejected. A uid from another candidate's
-   dataset will not exist in theirs.
-3. Query reproducibility: the submitted DSL `query` is re-executed read-only against
-   the candidate's index; Ranger confirms the cited `event_uid`s are actually returned
-   by that query in that time context. Claimed-but-unreproducible citations are flagged
-   and do not earn evidence credit.
-4. Timestamp integrity: the cited event's `@timestamp` (and `event.ingested`) are read
-   from the index, not from the candidate; any candidate-provided time is ignored for
-   scoring and only compared for the candidate's timeline-reconstruction credit.
-5. Preservation + integrity: at submission Ranger snapshots each cited event as
-   `{event_uid, sha256(canonical(_source))}`, assembles a case evidence record
-   `{candidate, board, cohort, seed, case_id, index, cited: [...], submitted_at}`, and
-   signs it with `signing.sign(...)` (Ed25519). Re-verification later recomputes the
-   hashes and `signing.verify(...)` the record, proving the graded evidence was not
-   altered. This reuses the exact pattern already demonstrated in `validate_live.py` F9.
-6. Truth comparison: incident membership is checked by intersecting cited `event_uid`s
-   with `truth["incidents"][i]["event_uids"]`; techniques against `truth…["techniques"]`;
-   attribution against `primary_identity` / `actor_ip`. The truth is recomputed
-   server-side from the seed (`enterprise.generate` is pure) and never sent to the
-   browser or stored in the index.
+### 6a. Independent automated checks (server-side, at submission/grade)
 
-No step trusts a screenshot or a candidate-stated field value as authoritative.
+1. Existence: each cited `event_uid` exists in the candidate's own
+   `ranger-qual-<cohort>-<slug>-b2`.
+2. Scope: citation index equals the candidate's own index; out-of-scope is rejected
+   (DLS makes foreign uids non-existent for them anyway).
+3. Reproducibility: the submitted DSL, re-executed read-only in the stated time
+   context, actually returns the cited uid. Non-reproducing citations earn no evidence
+   credit. Reproducibility boundary: queries are run with a bounded timeout, result
+   size, and the candidate's own role/DLS; a query that errors, times out, or exceeds
+   the cap is treated as non-reproducing for that citation (the candidate is told).
+4. Support (the key check): the cited event must actually SUPPORT the stated
+   conclusion. Automated support = (a) the uid is a member of the truth incident the
+   candidate attributes it to (`event_uid ∈ truth.incidents[i].event_uids`), AND (b)
+   the event's own fields are consistent with the claimed technique/disposition (for
+   example, an event cited as T1059.001 evidence must carry the PowerShell
+   execution signal the generator emitted for that step). A cited event that exists and
+   reproduces but is a benign/unrelated document earns no incident credit and reduces
+   precision.
+5. Preservation + integrity: at submit, Ranger snapshots each cited event as
+   `{event_uid, sha256(canonical(_source))}`, builds a case evidence record
+   `{candidate, board, cohort, seed, scenario_version, case_id, index, cited:[…],
+   submitted_at}`, and `signing.sign(...)` it (Ed25519). Re-verification recomputes the
+   hashes and `signing.verify(...)` the record.
+
+### 6b. What signatures do and do not mean
+
+The Ed25519 signature proves INTEGRITY (the recorded submission, evidence snapshot, and
+score were not altered after the fact) and ORIGIN (they came from Ranger). It is NOT
+evidence of investigative correctness. Correctness is established only by the automated
+truth comparison (6a.4) and reviewer judgment (section 8), never by the signature.
+
+### 6c. Human-review triggers
+
+Route a `CaseSubmission` to `under_review` when: a technically justified alternative
+conclusion is plausible (e.g., the candidate groups the chain differently but covers
+the true incident); a citation exists and reproduces but its support is ambiguous; the
+objective score lands in a defined band around the 95% gate; the candidate disputes an
+automated result; or the detection-gap proposal needs quality judgment. Automated
+scoring stands for the unambiguous majority; reviewers adjudicate the flagged minority.
 
 ---
 
-## 6. Assessment fairness
+## 7. Candidate responsibilities (Board 2 = threat-hunter)
 
-Separation of concerns:
+Monitor and baseline the environment; triage detector findings and self-found
+anomalies with disposition/severity/calibrated confidence; investigate and reconstruct
+each real incident by `event_uid` (identity, actor IP, assets, techniques, timeline
+despite out-of-order ingestion); hunt the detector-missed incident; and assess the
+detection gap with a concrete, testable proposal. A complete qualification attempt
+addresses every real incident in the dataset, including the missed one, with supporting
+cited evidence.
 
-- Graded evidence is REPRODUCIBLE and STATIC. The dataset is
-  `enterprise.generate(slug, 2, seed, "B")`, a pure function of the seed over a fixed
-  window. It does not stream or mutate. Any candidate, at any time, investigating seed
-  S sees exactly the same events and the same hidden truth. Grading is server-side
+---
+
+## 8. Grading design (shadow; not activated)
+
+New server-side grader `score_board2_enterprise(truth, verified_submission) ->
+(score_0_100, breakdown, per_incident, review_flags)`. It runs ONLY in shadow
+(computed and stored, not used for promotion) until a reviewed one-cohort comparison
+supports a flag flip. `score_board2`, `BoardResult` behavior, and `PASS_BAR = 95.0` are
+unchanged meanwhile.
+
+### 8a. Components, weights, automated vs reviewer, anchors, partial credit
+
+| # | Component | Wt | Mostly automated or reviewer | Full credit | Partial | Zero |
+|---|---|---|---|---|---|---|
+| 1 | Incident identification | 30 | Automated (precision/recall on incident membership via supported citations) | All true incidents identified with sufficient supporting evidence, no spurious incidents | recall-scaled; each true incident contributes `30/N` × its support ratio; spurious confirmed incidents reduce precision | No true incident supported |
+| 2 | Evidence quality | 20 | Automated (reproducibility + support) | Every cited event exists, reproduces, and supports its claim; incident membership well covered | per-citation average of {reproduces AND supports}; unreproduced or unsupported citations score 0 and drag precision | No supported, reproducible citations |
+| 3 | Attribution | 15 | Automated with reviewer fallback | Correct `primary_identity`, `actor_ip`, and exact techniques for each incident | per-incident: identity/IP exact match; technique exact = full, parent-of-correct (e.g. T1059 for T1059.001) = half, wrong = 0 | None correct |
+| 4 | Detection-gap finding | 15 | Split: automated (missed incident located) + reviewer (proposal quality) | Missed incident's events cited AND the gap correctly named AND a sound proposed detection | locating the missed incident = up to 10 (automated); proposal quality = up to 5 (reviewer) | Missed incident not found |
+| 5 | Timeline & correlation | 10 | Automated | Order matches the true chain; cross-source linkage present | order similarity (rank correlation vs true order) scaled; linkage partial | No coherent ordering |
+| 6 | Judgment under uncertainty | 10 | Reviewer with automated calibration input | Calibrated confidence (high on correct, low on uncertain), explicit limits, no overclaim | automated calibration signal informs a reviewer score; overclaiming a wrong incident at high confidence caps this | Systematic overclaim |
+
+Composite maps to 0..100 exactly like `score_board2`, feeding
+`BoardResult.objective_score` and `objective_passed = score >= 95.0` via the existing
+`_record_objective`. Component 1 at 30 points guarantees that missing a real incident
+cannot reach 95.
+
+### 8b. Evidence sufficiency
+
+An incident earns identification/attribution credit only if backed by a minimum of
+supporting, reproducible citations (proposed: at least two distinct supported
+`event_uid`s spanning at least two stages of the chain). One tangential citation is
+insufficient and yields no incident credit even if the disposition label is correct,
+preventing "guess the label, cite one event" from scoring.
+
+### 8c. Alternative technically justified conclusions
+
+Where a candidate's grouping or technique choice differs from the key but is defensible
+(e.g., citing a correct but broader technique, or splitting one chain into two
+incidents that together cover the true membership), automated scoring awards the
+mechanical partial credit and raises a `review_flag`; a reviewer may restore full
+credit. The truth key is the default; reviewer judgment is the escape valve for
+legitimate alternatives, and every override is recorded.
+
+### 8d. Worked pass/fail examples
+
+Passing (illustrative): finds all 3 incidents including the detector-missed one;
+citations reproduce and support; techniques/attribution exact; timeline ordered;
+calibrated. Component scores 30 + 19 + 15 + 14 + 9 + 9 = 96 → `objective_passed` true.
+
+Failing by missing the hunt (illustrative): finds the 2 alerted incidents well, misses
+the detector-missed one. Component 1 caps near `30 × 2/3 = 20`; component 4 scores 0
+(missed incident not found); even with strong 2/3/5 elsewhere the ceiling is roughly
+20 + 20 + 10 + 0 + 7 + 7 = 64 → fails 95. This is the intended property: an
+alert-triager who does not hunt cannot qualify.
+
+Failing by unsupported evidence (illustrative): correct labels but citations are
+benign/unrelated or do not reproduce. Component 2 → ~0, component 1 loses the support
+ratio, so the composite falls well below 95 despite "right-looking" answers.
+
+---
+
+## 9. Assessment fairness
+
+- Qualification evidence is static and reproducible: `enterprise.generate(slug,2,seed,
+  "B")` is pure over a fixed window, versioned by `scenario_version`. Any candidate, any
+  time, on seed S sees the same events and the same hidden truth; grading is server-side
   against that truth.
-- Live-looking telemetry is PRESENTATION only. Dashboards/metrics render views over
-  the fixed snapshot plus the candidate's own real actions; they never alter the graded
-  dataset or the truth. "Live" tiles are computed over the scenario window, explicitly
-  labeled as a snapshot, so no candidate is advantaged by wall-clock timing.
-- Consistency across candidates: identical rubric and weights; identical difficulty
-  profile (B: 8000 benign / 3 incidents / 14 days / same five-family structure); seeds
-  never repeat across people or cohorts (`ScenarioAssignment` unique on
-  `(github_id, board, seed)`), so answers cannot be shared and every candidate faces an
-  equivalent-difficulty, non-identical scenario. Time-of-day and session length do not
-  affect the available evidence because the data is fixed.
+- Operational activity never affects qualification: it lives in a separate plane and
+  index, is never graded, and is clearly labeled. Candidates practice freely without
+  advantage or jeopardy to their exam.
+- Consistency: identical rubric and weights; identical difficulty profile B; seeds
+  never repeat (`ScenarioAssignment` unique on `(github_id, board, seed)`); outcome is
+  independent of wall-clock time and session length because the graded data is fixed.
 
 ---
 
-## 7. Grading integration (preserve 95%, shadow the new rubric)
+## 10. SOC operational model (real pipeline, no invented activity)
 
-New server-side grader, additive and shadowed, analogous to `score_board2`:
-
-```
-score_board2_enterprise(truth, submission) -> (score_0_100, breakdown, per_incident)
-```
-
-- Inputs: the recomputed hidden `truth` for the candidate's seed, and the verified
-  `CaseSubmission` (only reproducible, existing, in-scope citations count).
-- v2 composite (from `BOARD2_RUBRIC_V2.md`, weights sum to 100): incident
-  identification 30, evidence quality 20, attribution 15, detection-gap finding 15,
-  timeline & correlation 10, judgment under uncertainty 10. Component 1 at 30 points
-  means missing a real incident cannot reach 95%, preserving the gate's meaning.
-- Output maps to 0..100 exactly like `score_board2`, so the existing arithmetic is
-  untouched: `BoardResult.objective_score`, `objective_passed = score >= PASS_BAR`
-  (95.0), `objective_sig = signing.sign({"kind":"objective",...})` via the existing
-  `_record_objective`. The gate `_evaluate_gate` (objective_passed AND report approved)
-  is unchanged.
-- Shadow mode (required before any flag flip): for real submissions, compute the v2
-  enterprise score ALONGSIDE the current objective channel, store it with
-  `rubric_version` and the component breakdown, and DO NOT use it for promotion. Compare
-  v1 vs v2 for at least one cohort, reviewer-reviewed, before flipping a single
-  `BOARD2_RUBRIC_V2` flag (default off). The live `scenarios.py` hunt grader and the
-  95% threshold remain the source of truth until then.
-- Signed evidence: the case evidence record (section 5.5) is signed and linked to the
-  `BoardResult`, so a credential can be independently re-verified at `/verify/<handle>`
-  using the existing Ed25519 public key.
-
-No new scoring behavior is activated by this design; it specifies the shadowed path.
+- Shift = a bounded monitoring/hunting session on the operational plane; the feed is a
+  real rate-bounded synthetic stream, not an always-on illusion and not real-org data.
+- Alerts = real `detection.run_rules` findings over the operational stream; the
+  qualification detector-missed incident has no alert by design.
+- Escalation = real `detection.correlate` clusters plus candidate action.
+- Supervisor review = `ranger_soc_admin` (read-only oversight) approves the subjective
+  `Report` and reviews shadow v2. No fabricated supervisor metrics.
+- Measured metrics only (section 2). Explicitly excluded: invented MTTR/MTTD,
+  leaderboards, synthetic peers, or any number not measured from the real pipeline or
+  the candidate's real actions.
 
 ---
 
-## 8. SOC operational model (no invented activity)
+## 11. Security and release gates
 
-- Shift = a bounded investigation session on the assigned case; there is no fake
-  always-on feed. The candidate's queue is their board-2 case (three real incidents in
-  the fixed dataset).
-- Alerts = the deterministic `detection.run_rules` findings over the candidate's own
-  dataset (real, reproducible). The detector-missed incident deliberately has no alert,
-  which the candidate must hunt.
-- Escalation = correlation (`detection.correlate`, group-by user, 120-min window) and
-  the candidate marking an incident critical / submitting. Real, computed, not invented.
-- Supervisor review = the SOC administrator (`ranger_soc_admin`, read-only oversight
-  tenant) approves the subjective `Report` and reviews shadow v2 vs v1. No fabricated
-  supervisor metrics or team performance.
-- Explicitly excluded: invented MTTR/MTTD, team leaderboards, synthetic "other
-  analysts," or any number not computed from the candidate's real actions or the fixed
-  dataset. Operational realism comes from the scenario structure, not from faked org
-  activity.
+- Preserve: JWT authorization through the `/soc` gateway, per-candidate indices, DLS,
+  private tenants, protected (never-indexed, server-recomputed) scenario truth, and
+  `ranger_soc_admin` read-only oversight.
+- Candidate access and act-as stay DISABLED.
+- No implementation and no grading-behavior change until this revised design is
+  approved. The enterprise grader ships versioned and shadow-only even after build,
+  pending a reviewed cohort comparison before any flag flip.
 
 ---
 
-## 9. Security model
+## 12. End-to-end candidate example (candidate-facing; no answer key)
 
-- Candidate isolation: per-candidate index + `cand_<slug>` role (read-only) + DLS on
-  `ranger.candidate_id` + private Dashboards tenant. Unchanged by this design.
-- Private saved objects: the candidate's Discover/saved-search objects live in their
-  own tenant; grading never depends on them (submissions are Ranger Postgres records).
-- Hidden truth: never indexed, never sent to the browser; recomputed server-side from
-  the seed at grade time. The answer key cannot be queried from the SIEM.
-- Administrative oversight: `ranger_soc_admin` has read-only oversight across `ranger-*`
-  and cannot write candidate data or see the hidden truth.
-- Explicit authorization: every investigative action goes through the `/soc` gateway
-  (session + active + board-2 gate + short-lived JWT); submission endpoints require the
-  candidate's own authenticated session; act-as stays admin-only and disabled by
-  default. Signed evidence prevents post-hoc tampering of graded citations.
+Board 2 qualification case for candidate A in cohort 2026-A, seed S. The candidate
+never sees how many incidents exist, which families, or any truth field.
 
----
-
-## End-to-end walkthrough: one financial-sector incident
-
-Scenario family: `privileged-identity-compromise` in valyria-financial
-(techniques T1078 → T1098 → T1059.001 → T1213). Seed S, profile B.
-
-1. Access: candidate signs in with GitHub, is `active` on board 2, opens
-   `/soc/launch`; the gateway provisions their index + data view and proxies them into
-   Discover scoped to `ranger-<cohort>-<slug>-b2` over the scenario window. A `Case` is
-   in state `assigned` → `investigating`.
-2. Monitoring/baseline: the candidate reviews ~8000 benign events across 14 days and
-   states the baseline (normal admins, service accounts, external endpoints).
-3. Triage: a detector finding flags an anomalous privileged logon (T1078) from an
-   unusual `source.ip`. The candidate dispositions it `confirmed_incident`, severity
-   `high`, confidence 70.
-4. Investigation: pivoting on the identity and IP, the candidate reconstructs the
-   chain by `event_uid`: account manipulation (T1098), PowerShell execution
-   (T1059.001), access to an information repository (T1213). They rebuild the timeline
-   using `@timestamp` while noting an out-of-order `event.ingested`, and record the
-   `primary_identity` (the admin account) and affected hosts.
-5. Hunt: the candidate separately finds the `detection-failure` incident (DNS C2 to a
-   domain the narrow `dns-c2-known-domain` rule does not match), which produced no
-   alert.
-6. Detection assessment: they name the gap (rule only matches `cdn-metrics.ru`; the
-   real beacon domain differs) and propose a broader, testable detection.
-7. Submission: they complete the Ranger incident form (disposition, severity,
-   confidence, timeline of `event_uid`s, affected assets, cited evidence with the exact
-   DSL queries, detection assessment, response recommendations) and submit. The case
-   locks.
-
-Exact expected deliverables (per the section 4 schema): a `baseline_summary`; for the
-privileged-identity incident, `disposition=confirmed_incident`, `severity=high`,
-calibrated `confidence`, `attack_techniques=[T1078,T1098,T1059.001,T1213]`,
-`primary_identity` and `actor_ip` matching truth, `affected_assets`, a `timeline` of
-the real `event_uid`s in correct order, `cited_evidence` with reproducible queries, a
-correct `detection_assessment` for the C2 gap on the hunt incident, and
-`response_recommendations`; and a separate incident entry for the detector-missed C2.
-
-What the evaluator independently verifies (server-side, against hidden truth and the
-real index):
-
-- Each cited `event_uid` exists in the candidate's index and the submitted query
-  reproduces it (sections 5.1-5.3).
-- Cited uids intersect `truth["incidents"][i]["event_uids"]` → incident identification
-  and evidence-quality credit; non-member citations reduce precision.
-- `attack_techniques` match `truth…["techniques"]`; `primary_identity` and `actor_ip`
-  match truth → attribution credit.
-- The `detection-failure` incident was found and the gap correctly named → detection-
-  gap credit (impossible to earn from alerts alone).
-- Timeline order and cross-source linkage are scored against the true chain.
-- The evidence record is hashed and Ed25519-signed; the score is written to
-  `BoardResult` with a signed objective attestation; v2 is recorded in shadow; the 95%
-  gate and report-approval gate decide clearance.
-
-No screenshot, claimed count, or prose assertion is trusted; only reproducible queries
-against the candidate's real index and comparison to the recomputed hidden truth.
+- Entering the SOC: A opens `/soc/launch`, lands on the Operational SOC with a banner
+  "Operational SOC — synthetic, not graded," and a continuous feed with live detector
+  findings and measured tiles (events ingested, findings, detection latency). A can
+  practice here freely.
+- Starting the exam: A opens the Board 2 qualification case. The banner switches to
+  "Qualification case — graded." Discover is scoped to `ranger-qual-2026-A-<slug>-b2`
+  over the fixed assessment window.
+- Available telemetry: the full profile-B dataset (benign baseline plus the embedded
+  incidents) and whatever the deterministic detectors surface for this seed. Some
+  malicious activity is NOT alerted and must be hunted. No labels are present.
+- Ranger instructions (verbatim intent, no key): "Investigate activity in
+  valyria-financial across the assessment window. Identify and document any security
+  incidents. For each, provide disposition, severity, calibrated confidence, affected
+  identities and systems, ATT&CK techniques, a reconstructed timeline, and cited
+  evidence (event_uid plus the exact query). Assess detection coverage and name any
+  gaps with a proposed detection. Submit when complete."
+- What A must discover independently: which events are malicious; how many distinct
+  incidents there are; the chain, identity, actor IP, assets, and techniques of each;
+  the timeline despite out-of-order ingestion; and the activity no detector surfaced.
+- What A submits in Ranger: the structured form of section 5 — baseline, one incident
+  block per identified incident (disposition, severity, confidence, techniques,
+  identities, assets, timeline, cited evidence with queries, detection assessment,
+  response, analyst conclusion), overall conclusion, and stated limitations.
+- What OpenSearch evidence must be cited: for each incident, supporting `event_uid`s
+  from A's own `ranger-qual-…-b2`, each with the exact DSL query and time context that
+  reproduces it; citations must support the stated conclusion, not merely exist.
+- What the evaluator checks (server-side): each cited uid exists, is in scope,
+  reproduces, and supports its claim (member of the attributed truth incident with
+  consistent fields); incident precision/recall; technique and attribution matches;
+  whether the detector-missed incident was found and the gap correctly named; timeline
+  order; calibration; then signs the evidence record and writes the objective score
+  (shadow) and signed attestation; the 95% gate and report approval decide clearance.
+- Outcome bands:
+  - Incomplete: mandatory fields missing, or confirmed incidents without supported
+    reproducible evidence; blocked at submission or scored near zero on evidence.
+  - Incorrect: labels or attributions that do not match truth and are not defensible on
+    review; low incident/attribution credit.
+  - Qualified: all real incidents (including the detector-missed one) identified with
+    supported evidence, correct attribution, coherent timeline, and calibrated
+    judgment, reaching the 95% objective bar with an approved report.
 
 ---
 
-## What this design intentionally does NOT do yet
+## 13. What this design intentionally does NOT do yet
 
-- No grader code, endpoints, models, or UI are implemented.
-- No `BOARD2_RUBRIC_V2` flag is flipped; the enterprise v2 score would run in shadow.
+- No grader, endpoints, models, UI, stream job, or detector scheduler are built.
+- No `BOARD2_RUBRIC_V2` flag is flipped; the enterprise score would run shadow-only.
 - No candidate access or act-as is enabled.
-- The live `scenarios.py::score_board2` grader and `program.PASS_BAR = 95.0` are
-  unchanged and remain authoritative until a reviewed shadow comparison supports a flip.
+- The operational plane is not stood up (needs infra sign-off).
+- `scenarios.py::score_board2`, `BoardResult` behavior, and `PASS_BAR = 95.0` are
+  unchanged and authoritative until a reviewed shadow comparison supports a change.
