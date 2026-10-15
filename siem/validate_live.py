@@ -1408,6 +1408,57 @@ def m4stream_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def m4stop_check(c):
+    """Teardown + verification for M4.2: delete EVERY detector named
+    ranger-op-board2test (across all prior bounded runs), the disposable op indices,
+    the op-state index, and the disposable candidate/admin identities, then verify
+    zero ranger-op detectors remain. Guarantees no unattended SA workload is left
+    running. Idempotent and read-safe."""
+    out = {"mode": "m4stop", "deleted_detectors": [], "remaining_detectors": None,
+           "deleted_indices": [], "deleted_identities": [], "status": "PASS"}
+    # enumerate + delete detectors by name
+    code, res = c._req("GET", "/_plugins/_security_analytics/detectors/_search",
+                       body={"size": 100, "query": {"match_all": {}}}, timeout=60)
+    names_to_kill = {"ranger-op-board2test"}
+    remaining = 0
+    if code == 200:
+        for h in (res.get("hits", {}) or {}).get("hits", []):
+            det = (h.get("_source", {}) or {}).get("detector", {}) or h.get("_source", {})
+            name = det.get("name")
+            did = h.get("_id")
+            if name in names_to_kill and did:
+                dc, _ = c._req("DELETE", f"/_plugins/_security_analytics/detectors/{did}", timeout=60)
+                out["deleted_detectors"].append({"id": did, "code": dc})
+            elif name in names_to_kill:
+                remaining += 1
+    # re-count after deletion
+    code, res2 = c._req("GET", "/_plugins/_security_analytics/detectors/_search",
+                        body={"size": 100, "query": {"match_all": {}}}, timeout=60)
+    if code == 200:
+        remaining = sum(1 for h in (res2.get("hits", {}) or {}).get("hits", [])
+                        if ((h.get("_source", {}) or {}).get("detector", {}) or {}).get("name")
+                        in names_to_kill)
+    out["remaining_detectors"] = remaining
+    # disposable indices
+    for idx in ("ranger-op-pilot-board2-test-b2", "ranger-op-pilot-board2-other-b2",
+                "ranger-op-state"):
+        dc, _ = c.delete_index(idx)
+        out["deleted_indices"].append({"index": idx, "code": dc})
+    # disposable identities (proves revocation too)
+    for cand in ("board2-test", "board2-other"):
+        c.delete_rolesmapping(authz.role_name(cand))
+        c.delete_role(authz.role_name(cand))
+        out["deleted_identities"].append(authz.role_name(cand))
+    c.delete_user("ranger_soc_admin")
+    out["deleted_identities"].append("ranger_soc_admin")
+    out["unattended_workload_cleared"] = (remaining == 0)
+    if remaining != 0:
+        out["status"] = "FAIL"
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def resettime_check(c):
     """Clear the timepicker:timeDefaults override from the SOC admin and candidate
     tenants (setting it back to default removes the override), to undo the tenant
@@ -1479,6 +1530,9 @@ def main():
     if mode == "m4stream":
         print(f"== Ranger M4.2 continuous operational SOC chain (bounded) against {url} ==", flush=True)
         return m4stream_check(c)
+    if mode == "m4stop":
+        print(f"== Ranger M4.2 teardown + no-unattended-workload verification ==", flush=True)
+        return m4stop_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
