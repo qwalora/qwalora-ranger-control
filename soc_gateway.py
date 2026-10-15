@@ -128,13 +128,16 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     The data view is only a saved query definition: it grants no data access beyond
     the subject's OpenSearch role, so a candidate's view can never expose another
     candidate's indices."""
+    # Address the subject's PRIVATE tenant by its identifier, which the Security
+    # plugin keys by username (authinfo tenants map), not the literal "__user__".
     code, body = _dash_as_user(subject, cohort, "POST",
                                "/api/saved_objects/index-pattern/" + dv_id,
-                               {"attributes": {"title": title, "timeFieldName": TS_FIELD}})
+                               {"attributes": {"title": title, "timeFieldName": TS_FIELD}},
+                               tenant=subject)
     created = code in (200, 201, 409)  # 409 = already exists -> idempotent
     # Best-effort: set it as the tenant default so Discover lands on it.
     _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
-                  {"index_pattern_id": dv_id, "force": True})
+                  {"index_pattern_id": dv_id, "force": True}, tenant=subject)
     _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code,
          err=("" if created else body[:200]))
     return created
@@ -359,7 +362,10 @@ def register(app, candidate_model, db):
                 continue
             headers[k] = v
         headers["Authorization"] = "Bearer " + token
-        headers["securitytenant"] = "__user__"  # force the candidate's private tenant
+        # Force the subject's own PRIVATE tenant, addressed by its identifier (the
+        # username, as the Security plugin keys it), so saved objects are isolated
+        # per subject and a client cannot select another tenant.
+        headers["securitytenant"] = subject
         headers["Accept-Encoding"] = "identity"
 
         data = request.get_data() if request.method in ("POST", "PUT", "PATCH", "DELETE") else None
