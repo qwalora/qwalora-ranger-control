@@ -125,6 +125,40 @@ def ensure_schema(db):
         except Exception:
             db.session.rollback()
 
+    # Non-destructive pathway normalization. Python read-time normalization
+    # (pathways.normalize_pathway) is NOT sufficient once any SQL predicate filters by
+    # pathway (cohort selection, catalog assignment, reporting): a legacy 'cyber-ops'
+    # row would be missed by `WHERE pathway='strata'`. This idempotent value remap keeps
+    # persisted values canonical so SQL predicates are always correct. It drops nothing
+    # and is reversible; a genuine 'strata'/'parallax' row is untouched. Safe per boot.
+    normalize_persisted_pathways(db, existing_tables)
+
+
+def normalize_persisted_pathways(db, existing_tables=None):
+    """Remap legacy interim pathway ids ('cyber-ops'->'strata', 'cyber-ai'->'parallax')
+    to canonical ids in every table that persists a `pathway` column. Idempotent and
+    non-destructive (UPDATE of values only; no DROP/ALTER of structure). Returns a dict
+    {table: rows_updated}. Swallows per-table errors so boot never crash-loops."""
+    from sqlalchemy import inspect as _inspect
+    if existing_tables is None:
+        existing_tables = set(_inspect(db.engine).get_table_names())
+    counts = {}
+    for table in ("cohorts", "scenario_catalog_entries"):
+        if table not in existing_tables:
+            continue
+        updated = 0
+        for legacy, canonical in pathways.LEGACY_PATHWAY_ALIASES.items():
+            try:
+                res = db.session.execute(
+                    db.text(f"UPDATE {table} SET pathway = :canon WHERE pathway = :legacy"),
+                    {"canon": canonical, "legacy": legacy})
+                db.session.commit()
+                updated += (res.rowcount or 0)
+            except Exception:
+                db.session.rollback()
+        counts[table] = updated
+    return counts
+
 
 class Candidate(db.Model):
     __tablename__ = "candidates"
