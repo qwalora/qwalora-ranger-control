@@ -186,3 +186,16 @@ class LiveCluster:
 
     def sa_get_detector(self, detector_id):
         return self._req("GET", f"/_plugins/_security_analytics/detectors/{detector_id}")
+
+    # --- snapshot / restore (P1.7 backup) --------------------------------
+    def snapshot_register(self, repo, location):
+        return self._req("PUT", f"/_snapshot/{repo}",
+                         body={"type": "fs", "settings": {"location": location}})
+
+    def snapshot_create(self, repo, name, indices):
+        return self._req("PUT", f"/_snapshot/{repo}/{name}?wait_for_completion=true",
+                         body={"indices": indices, "include_global_state": False})
+
+    def snapshot_restore(self, repo, name, indices):
+        return self._req("POST", f"/_snapshot/{repo}/{name}/_restore?wait_for_completion=true",
+                         body={"indices": indices, "include_global_state": False})

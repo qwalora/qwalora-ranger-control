@@ -120,6 +120,45 @@ def harden(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def backup_check(c):
+    """P1.7: register a filesystem snapshot repo on the volume, snapshot a probe
+    index, DELETE it, restore from the snapshot, and confirm the data returns.
+    This is true backup/restore, distinct from restart persistence."""
+    out = {"mode": "backup", "steps": {}, "status": "PASS"}
+    repo, snap = "ranger_fs", "snap-probe"
+    idx = f"ranger-{COHORT}-backup-probe".lower()
+    code, body = c.snapshot_register(repo, "/usr/share/opensearch/data/snapshots")
+    out["steps"]["register"] = code
+    c.delete_index(idx)
+    c.create_index(idx, schema.INDEX_MAPPING)
+    ev, _ = enterprise.generate("backup", 2, "pilot-backup", "A")
+    c.bulk_index(idx, ev)
+    c.refresh(idx)
+    before = c.count(idx)
+    code_s, _ = c.snapshot_create(repo, snap, idx)
+    out["steps"]["snapshot"] = code_s
+    c.delete_index(idx)
+    deleted = not c.index_exists(idx)
+    code_r, _ = c.snapshot_restore(repo, snap, idx)
+    out["steps"]["restore"] = code_r
+    import time as _t
+    for _ in range(10):
+        try:
+            after = c.count(idx)
+            break
+        except Exception:  # noqa: BLE001
+            after = -1
+            _t.sleep(2)
+    out["before"] = before
+    out["deleted_before_restore"] = deleted
+    out["after_restore"] = after
+    if not (before > 0 and deleted and after == before):
+        out["status"] = "FAIL"
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -140,6 +179,9 @@ def main():
     if mode == "harden":
         print(f"== Ranger SIEM credential hardening against {url} ==", flush=True)
         return harden(c)
+    if mode == "backup":
+        print(f"== Ranger SIEM snapshot backup/restore against {url} ==", flush=True)
+        return backup_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
