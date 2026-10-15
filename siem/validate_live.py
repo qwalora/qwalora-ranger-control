@@ -701,6 +701,26 @@ def dataview_check(c):
     rec("candidate_cannot_see_admin_dv", get_dv(a_sub, "ranger-all-events")[0] == 404)
     rec("candidate_cannot_see_other_candidate_dv", get_dv(a_sub, b_dv)[0] == 404)
     rec("admin_cannot_see_candidate_dv", get_dv("ranger_soc_admin", a_dv)[0] == 404)
+    # Modified tenant header: candidate A forges B's tenant in securitytenant.
+    # A has no kibana permission on B's tenant, so the read must not return B's object.
+    fc, fb = gw._dash_as_user(a_sub, COHORT, "GET",
+                              "/api/saved_objects/index-pattern/" + b_dv, tenant=b_sub)
+    rec("forged_tenant_header_denied", fc in (403, 404) and '"ranger-pilot-cand-b' not in fb, code=fc)
+    # Direct .kibana* operations by a candidate JWT (bypassing Dashboards) must fail:
+    # the candidate role grants no .kibana* index permission.
+    atok_a = ranger_jwt.mint(a_sub, priv, board=2, cohort=COHORT)
+    kread = c._req("GET", "/.kibana/_search", bearer=atok_a)[0]
+    kwrite = c._req("POST", "/.kibana/_doc", body={"x": 1}, bearer=atok_a)[0]
+    kdelete = c._req("DELETE", "/.kibana_1", bearer=atok_a)[0]
+    rec("candidate_no_direct_kibana_ops",
+        kread in (401, 403) and kwrite in (401, 403) and kdelete in (401, 403),
+        read=kread, write=kwrite, delete=kdelete)
+    # Same for the SOC admin JWT: no direct .kibana* access either.
+    atok_adm = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
+    aread = c._req("GET", "/.kibana/_search", bearer=atok_adm)[0]
+    awrite = c._req("POST", "/.kibana/_doc", body={"x": 1}, bearer=atok_adm)[0]
+    rec("admin_no_direct_kibana_ops", aread in (401, 403) and awrite in (401, 403),
+        read=aread, write=awrite)
     # 6. A broad data view a candidate creates exposes NO other candidate's data:
     #    creation is allowed in their own tenant, but the role + DLS still bind access.
     gw._ensure_dataview(a_sub, COHORT, "evil-broad", "ranger-*")
