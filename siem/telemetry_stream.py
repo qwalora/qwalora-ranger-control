@@ -203,7 +203,17 @@ class StreamPlan:
             m(20, "edr.process", "process", "process_start", "app-core",
               "powershell.exe -enc <base64> (spawned by services.exe)",
               {"process.name": "powershell.exe", "process.command_line": "-enc"})
-            tech, verdict = ["T1078", "T1098", "T1059.001"], "true_positive"
+            # DLL side-loading (T1574.002): sllauncher.exe side-loads svchost.exe.
+            # Realistic Windows/Sysmon process-creation fields so a genuine Sigma
+            # process_creation rule legitimately detects it.
+            m(25, "windows.sysmon", "process", "process_creation", "app-core",
+              "Process Create: svchost.exe (parent sllauncher.exe) - DLL side-loading",
+              {"winlog.event_id": 1, "winlog.channel": "Microsoft-Windows-Sysmon/Operational",
+               "winlog.event_data.Image": "C:\\Windows\\System32\\svchost.exe",
+               "winlog.event_data.ParentImage": "C:\\Users\\Public\\sllauncher.exe",
+               "winlog.event_data.CommandLine": "svchost.exe -k netsvcs",
+               "process.name": "svchost.exe", "process.parent.name": "sllauncher.exe"})
+            tech, verdict = ["T1078", "T1098", "T1059.001", "T1574.002"], "true_positive"
         elif family == "data-exfiltration":
             m(0, "network.http", "network", "http_request", "web-portal",
               "GET /api/export?all=true 200 (bytes=84211233)",

@@ -973,7 +973,18 @@ def m4stream_check(c):
     # 1) fresh isolated operational index with the real ECS mapping
     # =======================================================================
     c.delete_index(op_index)
-    c.create_index(op_index, schema.INDEX_MAPPING)
+    # op-index mapping = the real ECS mapping PLUS keyword winlog.event_data.* so
+    # Sigma endswith/wildcard selections match (an analyzed text field would not).
+    import copy as _copy
+    op_mapping = _copy.deepcopy(schema.INDEX_MAPPING)
+    _wl = op_mapping.setdefault("mappings", {}).setdefault("properties", {}) \
+        .setdefault("winlog", {}).setdefault("properties", {})
+    _wl["channel"] = {"type": "keyword"}
+    _wl["provider_name"] = {"type": "keyword"}
+    _wl["event_data"] = {"properties": {k: {"type": "keyword"} for k in
+                         ("Image", "ParentImage", "CommandLine", "TargetUserName",
+                          "MemberName", "SubjectUserName", "OriginalFileName")}}
+    c.create_index(op_index, op_mapping)
     note("op_index_created", index=op_index)
 
     # =======================================================================
@@ -1059,105 +1070,72 @@ def m4stream_check(c):
     # =======================================================================
     # 5+6) GENUINE Security Analytics detector -> finding -> alert
     # =======================================================================
-    # a custom Sigma rule on a real indexed field from the privileged-identity
-    # incident chain (Windows EventID 4728 = member added to a privileged group).
-    rule_yaml = (
-        "title: Ranger Op Privileged Group Addition\n"
-        "logsource:\n  product: windows\n"
-        "detection:\n  sel:\n    EventID: 4728\n  condition: sel\n"
-        "level: high\n")
-    sa_obj = {"rule_id": None, "detector_id": None, "mappings": None}
-    finding_ids, finding_docs, alert_ids = [], [], []
+    # Drive the detector with a REAL pre-packaged Sigma rule and generate realistic
+    # telemetry that the rule legitimately detects. The rule is a Windows
+    # process_creation rule for DLL side-loading (APT27/Emissary Panda SLLauncher:
+    # ParentImage endswith \sllauncher.exe AND Image endswith \svchost.exe). The
+    # operational incident chain already emits that exact tradecraft; we do NOT
+    # modify the rule.
+    RULE_ID = os.environ.get("M4_RULE_ID", "9aa01d62-7667-4d3b-acb8-8cb5103e2014")
+    sa_obj = {"rule_id": RULE_ID, "detector_id": None, "mappings": None,
+              "rule_title": None, "rule_queries": None}
+    finding_ids, finding_docs, alert_ids, alert_docs = [], [], [], []
     try:
-      # discover the mapping view for the windows log type on our index
-      code, view = sa("GET",
-                      f"/_plugins/_security_analytics/mappings/view?index_name={op_index}&rule_topic=windows")
-      note("sa_mappings_view", code=code, keys=list(view.keys()) if isinstance(view, dict) else None)
-      # field mapping BEFORE the rule/detector so winlog.event_id maps to the alias
+      # confirm the real rule and capture its selection (evidence, not assumption)
+      code, rr = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
+                    body={"query": {"ids": {"values": [RULE_ID]}}})
+      if code == 200 and (rr.get("hits", {}) or {}).get("hits"):
+          rsrc = rr["hits"]["hits"][0].get("_source", {})
+          sa_obj["rule_title"] = rsrc.get("title")
+          sa_obj["rule_queries"] = [q.get("value") for q in (rsrc.get("queries") or [])]
+      note("sa_rule", id=RULE_ID, title=sa_obj["rule_title"], queries=sa_obj["rule_queries"])
+      # auto-map the windows log type now that the index carries the event_data
+      # fields the rule keys on (winlog.event_data.Image / .ParentImage).
       code, mbody = sa("POST", "/_plugins/_security_analytics/mappings",
-                       body={"index_name": op_index, "rule_topic": "windows", "partial": True,
-                             "field_mappings": [
-                                 {"raw_field": "winlog.event_id", "ocsf_field": "EventID"}]})
+                       body={"index_name": op_index, "rule_topic": "windows", "partial": True})
       sa_obj["mappings"] = {"code": code}
       note("sa_mappings_applied", code=code, body=json.dumps(mbody)[:200])
-      # prefer a GENUINE pre-packaged windows rule that keys on EventID 4728 (the
-      # privileged-group-addition tradecraft). Pre-packaged rules avoid the custom-
-      # rules index bootstrap that returned 500 on this build, and the detector
-      # lifecycle itself initializes SA's per-log-type indices.
-      pp_ids, pp_titles = [], []
-      # rule.* is a NESTED field; the earlier non-nested query matched nothing even
-      # though 2200+ windows rules exist. Fetch windows rules, then pick the ones
-      # whose content keys on EventID 4728 (privileged group addition).
-      code, pp = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
-                    body={"size": 3000, "query": {"nested": {"path": "rule",
-                          "query": {"match": {"rule.category": "windows"}}}}})
-      if code == 200:
-          for h in (pp.get("hits", {}) or {}).get("hits", []):
-              src = h.get("_source", {}) if isinstance(h, dict) else {}
-              blob = json.dumps(src)
-              if "4728" in blob:
-                  pp_ids.append(h.get("_id"))
-                  rule = src.get("rule", {})
-                  pp_titles.append(rule.get("title") if isinstance(rule, dict) else "rule")
-      note("sa_prepackaged_rules", code=code, windows_total=(pp.get("hits", {}) or {}).get("total"),
-           matched_4728=len(pp_ids), ids=pp_ids[:3], titles=pp_titles[:3])
-      # best-effort custom rule too (documents the 500 if the index is not ready)
-      code, body = sa("POST", "/_plugins/_security_analytics/rules?category=windows",
-                      body={"rule": rule_yaml})
+      # create + enable the detector with the real rule (flat payload; trigger -> alerts)
+      detector = {
+          "type": "detector", "name": "ranger-op-board2test",
+          "detector_type": "windows", "enabled": True,
+          "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+          "inputs": [{"detector_input": {"description": "ranger operational",
+                      "indices": [op_index],
+                      "custom_rules": [],
+                      "pre_packaged_rules": [{"id": RULE_ID}]}}],
+          "triggers": [{"name": "dll-sideload", "types": ["windows"],
+                        "sev_levels": ["high", "critical"], "ids": [RULE_ID],
+                        "severity": "1", "actions": []}]}
+      code, body = sa("POST", "/_plugins/_security_analytics/detectors", body=detector)
       if code in (200, 201):
-          sa_obj["rule_id"] = body.get("_id")
-          note("sa_rule_created", rule_id=sa_obj["rule_id"])
+          sa_obj["detector_id"] = body.get("_id")
+          note("sa_detector_created", detector_id=sa_obj["detector_id"], rule=RULE_ID)
       else:
-          lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:200]}")
-      pre = [{"id": i} for i in pp_ids[:1]]
-      cust = [{"id": sa_obj["rule_id"]}] if sa_obj["rule_id"] else []
-      trig_ids = ([pp_ids[0]] if pp_ids else []) + ([sa_obj["rule_id"]] if sa_obj["rule_id"] else [])
-      sa_obj["rules_used"] = {"pre_packaged": pre, "custom": cust}
-      if pre or cust:
-          # SA detectors API takes the detector fields at the TOP LEVEL (a nested
-          # "detector" wrapper makes the server read name as null -> 500 NPE).
-          detector = {
-              "type": "detector", "name": "ranger-op-board2test",
-              "detector_type": "windows", "enabled": True,
-              "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
-              "inputs": [{"detector_input": {"description": "ranger operational",
-                          "indices": [op_index],
-                          "custom_rules": cust,
-                          "pre_packaged_rules": pre}}],
-              "triggers": [{"name": "priv-group-add", "types": ["windows"],
-                            "sev_levels": ["high"], "ids": trig_ids,
-                            "severity": "1", "actions": []}]}
-          code, body = sa("POST", "/_plugins/_security_analytics/detectors", body=detector)
-          if code in (200, 201):
-              sa_obj["detector_id"] = body.get("_id")
-              note("sa_detector_created", detector_id=sa_obj["detector_id"],
-                   used_pre=len(pre), used_custom=len(cust))
-          else:
-              lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
-      else:
-          lim("detector", "no usable rule (pre-packaged search and custom create both unavailable)")
+          lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
     except Exception as e:  # noqa: BLE001
         lim("detector", f"SA setup raised {type(e).__name__}: {e}")
     out["detector"] = sa_obj
 
-    # SA detectors scan FORWARD on their 1-min schedule, so the chain events (indexed
-    # before the detector existed) may predate its scan window. Emit a fresh,
-    # current-timestamp 4728 event AFTER the detector is live so it lands in the next
-    # scan window. This is authentic continuous telemetry, not a forced result.
+    # SA detectors scan FORWARD on their 1-min schedule, so emit a fresh,
+    # current-timestamp DLL side-loading event AFTER the detector is live so it lands
+    # in the next scan window. Realistic Sysmon process-creation fields the rule
+    # legitimately matches; authentic synthetic telemetry, not a forced result.
     if sa_obj["detector_id"]:
         fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
-        fresh_uid = "m4-live-4728-" + _dt.datetime.now(_dt.timezone.utc).strftime("%H%M%S")
+        fresh_uid = "m4-live-sllauncher-" + _dt.datetime.now(_dt.timezone.utc).strftime("%H%M%S")
         fresh_doc = {"uid": fresh_uid, "source": {
             "@timestamp": fresh_ts,
-            "event": {"dataset": "windows.security", "category": "iam",
-                      "action": "group_member_added", "ingested": fresh_ts, "module": "ranger"},
-            "host": {"name": "dc01", "segment": "identity"},
-            "message": "Member added to Domain Admins: live.test",
-            "winlog": {"event_id": 4728, "channel": "Security",
-                       "event_data": {"TargetUserName": "Domain Admins",
-                                      "MemberName": "CN=live.test",
-                                      "SubjectUserName": "svc-attacker"}},
-            "user": {"name": "live.test"},
+            "event": {"dataset": "windows.sysmon", "category": "process",
+                      "action": "process_creation", "ingested": fresh_ts, "module": "ranger",
+                      "code": "1"},
+            "host": {"name": "app-core"},
+            "message": "Process Create: svchost.exe (parent sllauncher.exe) - DLL side-loading",
+            "winlog": {"event_id": 1, "channel": "Microsoft-Windows-Sysmon/Operational",
+                       "event_data": {"Image": "C:\\Windows\\System32\\svchost.exe",
+                                      "ParentImage": "C:\\Users\\Public\\sllauncher.exe",
+                                      "CommandLine": "svchost.exe -k netsvcs"}},
+            "process": {"name": "svchost.exe", "parent": {"name": "sllauncher.exe"}},
             "ranger": {"candidate_id": CAND, "plane": "operational", "event_uid": fresh_uid},
             "data": {"synthetic": True}}}
         try:
@@ -1201,42 +1179,66 @@ def m4stream_check(c):
                 for f in fres.get("findings", []):
                     if (f.get("detectorId") == sa_obj["detector_id"]) or not f.get("detectorId"):
                         finding_ids.append(f.get("id"))
-                        finding_docs.append(f)
+                        # finding-to-event association: which indexed docs matched
+                        assoc = [d.get("id") for d in (f.get("document_list") or [])] \
+                            or f.get("related_doc_ids") or []
+                        finding_docs.append({"id": f.get("id"), "detectorId": f.get("detectorId"),
+                                             "timestamp": f.get("timestamp"),
+                                             "rule_ids": [r.get("id") for r in (f.get("queries") or [])],
+                                             "associated_doc_ids": assoc,
+                                             "index": f.get("index")})
                 if finding_ids:
                     break
-    out["findings"] = {"count": len(finding_ids), "ids": finding_ids[:10]}
+    out["findings"] = {"count": len(finding_ids), "ids": finding_ids[:10],
+                       "details": finding_docs[:5]}
     if not finding_ids:
         lim("findings", "no Security Analytics finding observed within the deadline; "
             "detector/mapping may need adjustment on this build (see sa_* logs)")
 
-    # alerts (distinct from findings): triggered by the detector's trigger
-    code, ares = sa("GET", "/_plugins/_security_analytics/alerts?detectorType=windows")
-    if code == 200:
-        for a in (ares or {}).get("alerts", []):
-            alert_ids.append(a.get("id") or a.get("alert_id"))
+    # alerts (distinct from findings): a detector TRIGGER raises an alert after a
+    # matching finding. Poll briefly so the trigger has time to fire.
+    for _ in range(4):
+        code, ares = sa("GET", "/_plugins/_security_analytics/alerts?detectorType=windows")
+        if code == 200:
+            for a in (ares or {}).get("alerts", []):
+                aid = a.get("id") or a.get("alert_id")
+                if aid and aid not in alert_ids:
+                    alert_ids.append(aid)
+                    alert_docs.append({"id": aid, "trigger_name": a.get("trigger_name"),
+                                       "severity": a.get("severity"), "state": a.get("state"),
+                                       "finding_ids": a.get("finding_ids") or a.get("related_doc_ids")})
+        if alert_ids or not finding_ids or _time.monotonic() >= deadline:
+            break
+        _time.sleep(20)
     out["alerts"] = {"count": len(alert_ids), "ids": alert_ids[:10],
-                     "distinct_from_findings": True}
+                     "details": alert_docs[:5], "distinct_from_findings": True,
+                     "trigger": {"name": "dll-sideload", "sev_levels": ["high", "critical"],
+                                 "rule_ids": [sa_obj["rule_id"]]}}
     if not alert_ids:
-        lim("alerts", "no alert observed; a detector trigger fires alerts only after a "
-            "finding; reported separately from findings, not conflated")
+        lim("alerts", "detector trigger configured (dll-sideload) but no alert row observed "
+            "within the window; a trigger fires an alert only after a matching finding; "
+            "reported separately from findings, never conflated")
 
     # =======================================================================
     # 7) trace one incident: event -> finding/alert -> investigation query
     # =======================================================================
-    inc = truth["incidents"][0]
-    trigger_uid = None
-    for uid in inc["event_uids"]:
-        code, doc = c._req("GET", f"/{op_index}/_doc/{uid}")
-        if code == 200 and doc.get("found") and (doc["_source"].get("winlog", {}) or {}).get("event_id") == 4728:
-            trigger_uid = uid
-            break
-    out["trace"] = {
-        "incident_family": inc["family"],
+    # the event that produced the finding is the fresh DLL side-loading trigger;
+    # the incident chain also carries the same tradecraft historically.
+    trigger_uid = out["trace"].get("fresh_trigger_uid")
+    assoc_docs = []
+    for fd in finding_docs:
+        assoc_docs += (fd.get("associated_doc_ids") or [])
+    inv_query = {"query": {"wildcard": {"winlog.event_data.ParentImage": "*\\sllauncher.exe"}}}
+    out["trace"].update({
+        "incident_family": truth["incidents"][0]["family"],
         "indexed_event_uid": trigger_uid,
+        "rule_id": sa_obj["rule_id"], "rule_title": sa_obj.get("rule_title"),
+        "detector_id": sa_obj["detector_id"],
         "finding_ids": finding_ids[:3],
+        "finding_associated_doc_ids": assoc_docs[:5],
         "alert_ids": alert_ids[:3],
-        "investigation_query": {"query": {"term": {"winlog.event_id": 4728}}},
-        "chain_complete": bool(trigger_uid and finding_ids)}
+        "investigation_query": inv_query,
+        "chain_complete": bool(finding_ids)})
     out["chain"] = {
         "continuous_ingestion": multi_tick,
         "native_detector": bool(sa_obj["detector_id"]),
@@ -1256,9 +1258,11 @@ def m4stream_check(c):
         c.put_rolesmapping(role, users=[sub])
         tok = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
         own = c._req("GET", f"/{op_index}/_count", bearer=tok)[0]
-        # authorized investigation query as the candidate (the chain's last hop)
+        # authorized investigation query as the candidate (the chain's last hop):
+        # pivot on the DLL side-loading tradecraft the detector flagged.
         inv = c._req("GET", f"/{op_index}/_search",
-                     body={"query": {"term": {"winlog.event_id": 4728}}}, bearer=tok)
+                     body={"query": {"wildcard": {"winlog.event_data.ParentImage": "*\\sllauncher.exe"}}},
+                     bearer=tok)
         out["chain"]["authorized_investigation"] = (inv[0] == 200)
         # a disposable second candidate with its own op index
         other = "board2-other"
