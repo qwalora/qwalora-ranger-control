@@ -49,8 +49,20 @@ Rollback: re-add `- ".kibana*"` to `plugins.security.system_indices.indices` in
 `siem/opensearch/opensearch.yml`, commit, and redeploy the OpenSearch service. The
 setting is read at node start; data on the volume is unaffected.
 
+Empty Discover results (2026-10-15): diagnosed with the admin JWT against the live
+cluster. `ranger-*` holds 9321 docs; `@timestamp` min/max = 2026-03-01T00:00:36Z /
+2026-03-14T23:54:03Z; 0 docs in the last 90 days, 9321 in Mar-May 2026. The data
+view (`ranger-*`, `@timestamp`) and authorization are correct. Cause: the dataset is
+anchored to a fixed scenario period (enterprise.generate start 2026-03-01), which the
+default/recent time picker never overlaps. Correction (smallest, supported, no data or
+permission change): set the tenant default Discover time range
+(`timepicker:timeDefaults`) to the scenario window via the Dashboards advanced-settings
+API during provisioning; verified post=200/get=200/stored. Window overridable via
+`RANGER_SIEM_TIME_FROM` / `RANGER_SIEM_TIME_TO`.
+
 Pending: operator browser confirmation that Discover renders real telemetry on the
-`ranger-*` data view through the `/soc` gateway.
+`ranger-*` data view through the `/soc` gateway (set the time range to the scenario
+window, or re-open /soc/launch for the new default).
 
 ## Implemented and deployed (portal, existing service)
 
