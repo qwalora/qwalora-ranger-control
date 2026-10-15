@@ -1080,33 +1080,51 @@ def m4stream_check(c):
                                  {"raw_field": "winlog.event_id", "ocsf_field": "EventID"}]})
       sa_obj["mappings"] = {"code": code}
       note("sa_mappings_applied", code=code, body=json.dumps(mbody)[:200])
-      # create the custom rule (first SA write can be slow on a cold heap)
+      # prefer a GENUINE pre-packaged windows rule that keys on EventID 4728 (the
+      # privileged-group-addition tradecraft). Pre-packaged rules avoid the custom-
+      # rules index bootstrap that returned 500 on this build, and the detector
+      # lifecycle itself initializes SA's per-log-type indices.
+      pp_ids = []
+      code, pp = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
+                    body={"size": 10, "query": {"bool": {"must": [
+                        {"match": {"rule.category": "windows"}},
+                        {"query_string": {"query": "4728"}}]}}})
+      if code == 200:
+          for h in (pp.get("hits", {}) or {}).get("hits", []):
+              pp_ids.append(h.get("_id"))
+      note("sa_prepackaged_rules", code=code, found=len(pp_ids), ids=pp_ids[:3])
+      # best-effort custom rule too (documents the 500 if the index is not ready)
       code, body = sa("POST", "/_plugins/_security_analytics/rules?category=windows",
                       body={"rule": rule_yaml})
       if code in (200, 201):
           sa_obj["rule_id"] = body.get("_id")
           note("sa_rule_created", rule_id=sa_obj["rule_id"])
       else:
-          lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:300]}")
-      # create + enable the detector with a trigger (trigger -> alerts)
-      if sa_obj["rule_id"]:
+          lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:200]}")
+      pre = [{"id": i} for i in pp_ids[:1]]
+      cust = [{"id": sa_obj["rule_id"]}] if sa_obj["rule_id"] else []
+      trig_ids = ([pp_ids[0]] if pp_ids else []) + ([sa_obj["rule_id"]] if sa_obj["rule_id"] else [])
+      sa_obj["rules_used"] = {"pre_packaged": pre, "custom": cust}
+      if pre or cust:
           detector = {"type": "detector", "detector": {
               "name": "ranger-op-board2test", "detector_type": "windows", "enabled": True,
               "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
               "inputs": [{"detector_input": {"description": "ranger operational",
                           "indices": [op_index],
-                          "custom_rules": [{"id": sa_obj["rule_id"]}],
-                          "pre_packaged_rules": []}}],
+                          "custom_rules": cust,
+                          "pre_packaged_rules": pre}}],
               "triggers": [{"name": "priv-group-add", "types": ["windows"],
-                            "sev_levels": ["high"], "ids": [sa_obj["rule_id"]],
+                            "sev_levels": ["high"], "ids": trig_ids,
                             "severity": "1", "actions": []}]}}
           code, body = sa("POST", "/_plugins/_security_analytics/detectors", body=detector)
           if code in (200, 201):
               sa_obj["detector_id"] = body.get("_id")
               note("sa_detector_created", detector_id=sa_obj["detector_id"],
-                   detector_status=body.get("detector", {}).get("enabled"))
+                   used_pre=len(pre), used_custom=len(cust))
           else:
               lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
+      else:
+          lim("detector", "no usable rule (pre-packaged search and custom create both unavailable)")
     except Exception as e:  # noqa: BLE001
         lim("detector", f"SA setup raised {type(e).__name__}: {e}")
     out["detector"] = sa_obj
