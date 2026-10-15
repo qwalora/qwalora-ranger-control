@@ -130,7 +130,7 @@ unpublished solution. Those are not public and are not part of the knowledge bas
         "pub_id": "QR-DOC-002",
         "slug": "ranger-technical-prerequisites",
         "title": "Ranger Technical Prerequisites",
-        "track": "cohort-docs", "collection": "Core Technical Prerequisites",
+        "track": "cohort-docs", "collection": "Ranger Cohort & Qualification Documentation",
         "category": "linux-sysadmin", "rtype": "technical-documentation", "level": "foundational",
         "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
         "publisher": PUBLISHER, "topic": "Prerequisites, Linux, Networking, Automation, Windows",
@@ -589,6 +589,887 @@ the exact actions taken, the telemetry and detection results, and a reproducible
 Qwalora's research publications apply the same discipline to detection validation, with
 signed, run-bound evidence.
 
+""",
+    },
+    # ---- Ranger Cohort & Qualification Documentation (remaining) -----------
+    {
+        "pub_id": "QR-DOC-003",
+        "slug": "board-progression-and-qualification-standards",
+        "title": "Board Progression and Qualification Standards",
+        "track": "cohort-docs", "collection": "Ranger Cohort & Qualification Documentation",
+        "category": "frameworks", "rtype": "technical-documentation", "level": "foundational",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Boards, Qualification, Clearance, Progression",
+        "source_attribution": PUBLISHER, "related": "QR-DOC-001,QR-DOC-004",
+        "refs": [
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+            {"label": "NIST SP 800-181r1: Workforce Framework for Cybersecurity",
+             "url": "https://csrc.nist.gov/pubs/sp/800/181/r1/final"},
+        ],
+        "verification": _mv(),
+        "summary": "What each Ranger board measures and how a candidate clears it. This reference "
+        "describes the discipline, role, and clearance criteria of the six boards, the two-channel grading "
+        "model, the cohort time window, and the outcomes (cleared, graduated, withdrawn, washed out). It "
+        "states standards, not solutions: no qualification test content, answer key, or grading threshold "
+        "that would compromise assessment integrity is disclosed.",
+        "body": r"""## How progression works
+
+A candidate advances by clearing boards in sequence, not by elapsed time. Each board
+has a discipline, a role, and a clearance that is earned on two independent channels.
+A cohort runs for a fixed window; a candidate who does not clear within it is washed
+out, and one who clears all six graduates with a signed certificate.
+
+## The six boards
+
+- **Board 1, Sentinel - security operations.** Triage security signals, separate true
+  from false positives, and escalate with a defensible rationale.
+- **Board 2, Tracker - threat hunting.** Form and test hypotheses against telemetry to
+  find activity that no alert fired on.
+- **Board 3, Warden - detection engineering.** Turn adversary behavior into reliable,
+  low-false-positive detections and justify them.
+- **Board 4, Reclaimer - incident response.** Reconstruct an incident from evidence,
+  establish a timeline, and recommend containment and eradication.
+- **Board 5, Raider - offensive operations.** Conduct authorized adversary emulation
+  against an isolated environment and document findings.
+- **Board 6, Vanguard - capstone.** Integrate the prior disciplines on a single
+  end-to-end engagement.
+
+## Two-channel grading
+
+Every board is graded on an objective channel and a subjective channel. The objective
+channel re-measures the candidate's technical outcome in a reproducible, answer-free
+way, so there is no stored answer to leak or memorize. The subjective channel is a
+human review of the candidate's written reasoning and work product. A board clears
+only when both are satisfied; a strong write-up does not compensate for a failed
+objective result, and vice versa.
+
+## Outcomes
+
+A candidate is active while progressing, graduated on clearing Board 6, withdrawn if
+they leave, and washed out if the cohort window closes before they clear. Each
+clearance and the final certificate are Ed25519-signed and independently verifiable.
+
+## What this does not contain
+
+This document states the qualification standard. It does not contain the confidential
+qualification tests, the grading logic or thresholds, candidate data, or any
+unpublished solution. Those remain internal to preserve the integrity of the
+assessment.
+""",
+    },
+    {
+        "pub_id": "QR-DOC-004",
+        "slug": "technical-deliverables-and-signed-evidence",
+        "title": "Technical Deliverables and Signed Evidence",
+        "track": "cohort-docs", "collection": "Ranger Cohort & Qualification Documentation",
+        "category": "frameworks", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Deliverables, Evidence, Ed25519, Verifiable credentials",
+        "source_attribution": PUBLISHER, "related": "QR-DOC-003,QR-RES-002",
+        "refs": [
+            {"label": "RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519)",
+             "url": "https://www.rfc-editor.org/rfc/rfc8032"},
+            {"label": "NIST SP 800-61r3: Incident Response Recommendations",
+             "url": "https://csrc.nist.gov/pubs/sp/800/61/r3/final"},
+        ],
+        "verification": _mv(),
+        "summary": "What a Ranger candidate produces and how it is turned into tamper-evident, verifiable "
+        "proof. This reference describes the technical deliverables each board expects, the answer-free "
+        "objective grading model (the program re-measures rather than compares to a stored key), and the "
+        "Ed25519 signing that makes every clearance and the final certificate independently verifiable in "
+        "the browser against a published public key.",
+        "body": r"""## Deliverables are work product
+
+A Ranger candidate produces the artifacts a working practitioner produces: triage
+decisions with rationale, hunt hypotheses and findings, detection logic with its
+justification, reconstructed incident timelines, and operational narratives. The
+deliverable is assessed to the standard a practitioner is held to, not graded against
+a memorizable key.
+
+## Answer-free objective grading
+
+The objective channel does not compare a submission to a stored answer. Instead the
+program re-measures the candidate's result: it reconstructs the technical outcome from
+the candidate's own work and checks whether it meets the requirement. Because there is
+no answer key in the system, there is nothing to leak, and two candidates working
+different valid approaches are both assessable on the property that matters rather than
+on matching a reference solution.
+
+## Signed, verifiable evidence
+
+When a board clears, Ranger mints a clearance and signs it with Ed25519; at graduation
+it mints a certificate with a public, human-typeable credential id. Anyone can verify a
+credential in the browser against the published public key: the signature proves the
+claim, so a rank cannot be self-reported or forged. Certificates carry an issue date
+and a validity window derived from the signed claim, so expiry is always correct
+without a background job.
+
+## Why this matters
+
+The same evidence discipline underlies Qwalora's security research: observations are
+signed and bound to the run that produced them, and anyone can re-verify them. A
+Ranger credential is therefore not a participation marker; it is a cryptographically
+verifiable statement that a specific standard was met.
+""",
+    },
+    # ---- Core Technical Prerequisites (4 detailed references) --------------
+    {
+        "pub_id": "QR-KB-001",
+        "slug": "linux-administration-and-troubleshooting",
+        "title": "Linux Administration and Troubleshooting",
+        "track": "knowledge-base", "collection": "Core Technical Prerequisites",
+        "category": "linux-sysadmin", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Linux, systemd, Permissions, Troubleshooting",
+        "source_attribution": PUBLISHER, "related": "QR-DOC-002,QR-KB-002",
+        "refs": [
+            {"label": "Linux man-pages project", "url": "https://man7.org/linux/man-pages/"},
+            {"label": "The Linux Command Line (William Shotts)", "url": "https://linuxcommand.org/tlcl.php"},
+        ],
+        "verification": _mv(),
+        "summary": "The Linux administration competency Ranger assumes: the filesystem, process and "
+        "permission models, systemd service management, log analysis with journald, storage, and "
+        "systematic troubleshooting, with the diagnostic commands a practitioner reaches for and a "
+        "self-assessment. A competency reference for an engineer who already works in Linux, not a "
+        "beginner course.",
+        "body": r"""## Required competency
+
+Administer a headless Linux host end to end: manage identities and permissions, control
+services, read logs, inspect the running system, and resolve failures from first
+principles. Ranger assumes this on day one.
+
+## Architecture to understand
+
+The filesystem hierarchy and mount model; the process model (PID tree, signals, exit
+codes); the discretionary permission model (user/group/other, setuid/setgid/sticky,
+and the difference between file and directory permissions); systemd units, targets, and
+dependencies; journald and the traditional log files; and package and storage
+management.
+
+## Representative diagnostics
+
+```
+systemctl status <svc>; journalctl -u <svc> -e
+ss -tlnp                      # listening sockets and owning processes
+ps auxf; pstree -p            # process tree
+lsof -p <pid>; lsof -i :443   # open files and sockets
+find / -perm -4000 -type f 2>/dev/null   # setuid binaries
+stat <file>; namei -l <path>  # resolve permissions along a path
+dmesg -T | tail; df -h; du -xsh *; lsblk
+```
+
+## A troubleshooting method
+
+Reproduce the failure; locate the layer (application, service manager, kernel, network,
+storage); read the evidence (logs, exit codes, system state) before changing anything;
+form one hypothesis and test it; and confirm the fix restored the expected behavior.
+The discipline matters more than any single command.
+
+## Self-assessment
+
+Given a service that fails to start on boot, can you determine the cause from unit state
+and logs alone, explain it precisely, and fix it, in minutes? Can you find which process
+holds a port, which file a process cannot write, and why a permission is denied along a
+path? If any of these is unfamiliar, close the gap before applying.
+""",
+    },
+    {
+        "pub_id": "QR-KB-002",
+        "slug": "networking-dns-tcpip-and-network-analysis",
+        "title": "Networking, DNS, TCP/IP and Network Analysis",
+        "track": "knowledge-base", "collection": "Core Technical Prerequisites",
+        "category": "networking", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "TCP/IP, DNS, Routing, Packet analysis",
+        "source_attribution": PUBLISHER, "related": "QR-KB-001,QR-KB-014",
+        "refs": [
+            {"label": "RFC 9293: Transmission Control Protocol", "url": "https://www.rfc-editor.org/rfc/rfc9293"},
+            {"label": "Wireshark User's Guide", "url": "https://www.wireshark.org/docs/wsug_html_chunked/"},
+        ],
+        "verification": _mv(),
+        "summary": "The networking competency Ranger assumes: the TCP/IP layers, addressing and "
+        "subnetting, routing, DNS resolution, TLS handshake basics, and reading traffic at the packet "
+        "level. It gives the architecture, representative commands and display filters, and a "
+        "self-assessment built around narrating a capture. Network fluency is what makes detection and "
+        "intrusion analysis possible.",
+        "body": r"""## Required competency
+
+Reason about network traffic at the protocol and packet level and diagnose connectivity
+and name resolution without guessing. Much of security operations is reading what
+actually crossed the wire.
+
+## Architecture to understand
+
+The TCP/IP layers and how a request flows through them; IPv4/IPv6 addressing, subnetting
+and CIDR; the routing decision and the default gateway; the DNS resolution path
+(recursive and authoritative, record types, SRV records used by Active Directory); the
+TCP three-way handshake, flags, and teardown; and the TLS handshake at a high level.
+
+## Representative commands and filters
+
+```
+ip addr; ip route; ip neigh
+ss -tanp                          # connections and owners
+dig +trace example.com; dig _ldap._tcp.dc._msdcs.<domain> SRV
+tcpdump -ni any 'tcp port 443 and tcp[tcpflags] & tcp-syn != 0'
+```
+
+Wireshark display filters: `tcp.flags.syn==1 && tcp.flags.ack==0` (connection starts),
+`dns`, `tls.handshake.type==1` (client hello), `ip.addr==10.0.0.5 && tcp.port==445`.
+
+## Network analysis
+
+Given a capture, identify the conversations, narrate a TCP handshake and a DNS lookup,
+spot a reset or retransmission storm, and locate where a failure or anomaly occurred.
+This is the same skill that underpins intrusion analysis on the blue boards.
+
+## Self-assessment
+
+Can you subnet by hand, predict the routing decision for a destination, trace a DNS
+resolution including the SRV lookups a domain-joined host performs, and read a short
+pcap to explain exactly what happened and where it broke?
+""",
+    },
+    {
+        "pub_id": "QR-KB-003",
+        "slug": "bash-python-git-and-engineering-automation",
+        "title": "Bash, Python, Git and Engineering Automation",
+        "track": "knowledge-base", "collection": "Core Technical Prerequisites",
+        "category": "engineering", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Bash, Python, Git, Automation, CI",
+        "source_attribution": PUBLISHER, "related": "QR-KB-001,QR-RES-001",
+        "refs": [
+            {"label": "Pro Git (git-scm.com)", "url": "https://git-scm.com/book/en/v2"},
+            {"label": "Python 3 documentation", "url": "https://docs.python.org/3/"},
+            {"label": "GitHub Actions documentation", "url": "https://docs.github.com/en/actions"},
+        ],
+        "verification": _mv(),
+        "summary": "The automation competency Ranger assumes: robust Bash, practical Python, real Git, "
+        "and the habit of turning manual work into reproducible, version-controlled automation. It covers "
+        "the shell execution model, Python for files, processes and JSON, Git branching and history, and "
+        "where CI fits, with representative patterns and a self-assessment. Ranger's own grading runs as "
+        "automated, answer-free checks, so this fluency is load-bearing.",
+        "body": r"""## Required competency
+
+Automate work reliably and manage it under version control. A Ranger candidate writes a
+robust Bash script, a small Python program, and a clean Git history as a matter of
+course, because the program's objective grading runs as automated checks and the work
+product is tracked in repositories.
+
+## Bash
+
+Understand the execution and quoting model, exit codes, and pipelines. Write defensively:
+
+```
+set -euo pipefail
+trap 'echo "failed at line $LINENO" >&2' ERR
+while IFS= read -r line; do process "$line"; done < input.txt
+```
+
+Use `grep`, `sed`, `awk`, and `jq` to transform text and JSON rather than parsing by hand.
+
+## Python
+
+Use the standard library with intent: `pathlib` and `open` for files, `subprocess` for
+external commands (prefer argument lists over shell strings), `json` for structured data,
+`argparse` for interfaces, and `pytest` for tests. Write small, testable functions.
+
+## Git
+
+Branch, rebase, and read history fluently: `git log --oneline --graph`, `git rebase -i`,
+`git bisect` to isolate a regression, and a clean, reviewable commit series. Treat
+history as communication.
+
+## Automation and CI
+
+Know where continuous integration fits: a push triggers checks that build, test, and
+report, producing a reproducible result rather than a local, unrepeatable one. Ranger's
+answer-free objective grading is exactly this pattern.
+
+## Self-assessment
+
+Can you turn a manual, multi-step task into a reproducible script with error handling,
+cover it with a test, and track it in Git with a history a reviewer can follow?
+""",
+    },
+    {
+        "pub_id": "QR-KB-004",
+        "slug": "windows-administration-and-core-active-directory",
+        "title": "Windows Administration and Core Active Directory",
+        "track": "knowledge-base", "collection": "Core Technical Prerequisites",
+        "category": "offensive", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Windows, PowerShell, Active Directory, Entra ID",
+        "source_attribution": PUBLISHER, "related": "QR-KB-010,QR-KB-014",
+        "refs": [
+            {"label": "Microsoft Learn: PowerShell documentation",
+             "url": "https://learn.microsoft.com/en-us/powershell/"},
+            {"label": "Microsoft Learn: Windows Server documentation",
+             "url": "https://learn.microsoft.com/en-us/windows-server/"},
+        ],
+        "verification": _mv(),
+        "summary": "The Windows competency Ranger assumes before the advanced boards: operating Windows "
+        "from PowerShell, the Windows security model (SIDs, tokens, privileges), the event log, and the "
+        "fundamentals of Active Directory Domain Services, with the distinction between AD DS, Microsoft "
+        "Entra ID, and Entra Domain Services made explicit. Representative commands and a self-assessment "
+        "are included.",
+        "body": r"""## Required competency
+
+Operate Windows from PowerShell and understand the identity and security model the
+advanced boards build on. A candidate should be comfortable querying the system and
+reading the Security log before encountering Active Directory attack paths.
+
+## Windows administration
+
+PowerShell and the object pipeline; services and scheduled tasks; the Windows security
+model (security identifiers, access tokens, privileges, and the difference between a
+privilege and a permission); and the event log.
+
+```
+Get-Service | Where-Object Status -eq 'Running'
+whoami /all                                   # SIDs, groups, privileges
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} -MaxEvents 20
+Get-LocalUser; Get-LocalGroupMember Administrators
+```
+
+## Core Active Directory Domain Services
+
+Understand domains, forests, organizational units, domain controllers, and Group Policy
+at a conceptual level (the architecture is developed in the Active Directory Security
+Engineering collection). On a domain-joined host:
+
+```
+Get-ADDomain; Get-ADUser -Filter * -Properties LastLogonDate
+Get-ADGroup -Filter * | Select-Object Name
+```
+
+## A necessary distinction
+
+**AD DS** is the on-premises directory using Kerberos and LDAP. **Microsoft Entra ID**
+(formerly Azure AD) is a cloud identity service using OAuth 2.0, OpenID Connect, and SAML;
+it is not a domain controller in the cloud. **Microsoft Entra Domain Services** is a
+managed domain in Azure that provides AD DS-compatible services. They are related but
+distinct; Ranger's advanced boards operate against AD DS.
+
+## Self-assessment
+
+Can you query the Security log for sign-in events and explain what a logon type indicates,
+enumerate local privileges from your token, and describe what a domain controller is
+responsible for and how AD DS differs from Entra ID?
+""",
+    },
+    # ---- Active Directory Security Engineering (remaining) ------------------
+    {
+        "pub_id": "QR-KB-012",
+        "slug": "ldap-queries-and-directory-enumeration",
+        "title": "LDAP Queries and Directory Enumeration",
+        "track": "knowledge-base", "collection": "Active Directory Security Engineering",
+        "category": "offensive", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "LDAP, Enumeration, Directory, Detection",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-010,QR-KB-013",
+        "refs": [
+            {"label": "Microsoft Learn: Lightweight Directory Access Protocol",
+             "url": "https://learn.microsoft.com/en-us/windows/win32/ad/about-the-lightweight-directory-access-protocol"},
+            {"label": "MITRE ATT&CK: Account Discovery (T1087)", "url": "https://attack.mitre.org/techniques/T1087/"},
+            {"label": "MITRE ATT&CK: Domain Trust Discovery (T1482)", "url": "https://attack.mitre.org/techniques/T1482/"},
+        ],
+        "verification": _mv(),
+        "summary": "How LDAP is used to query Active Directory and how directory enumeration looks from "
+        "both sides. It covers distinguished names, search bases and scopes, LDAP filter syntax, and the "
+        "objects an operator or defender enumerates (users, groups, computers, SPNs, GPOs, trusts), with "
+        "representative queries, the security implications, the detection signals, and the controls that "
+        "limit abusive enumeration.",
+        "body": r"""## LDAP in Active Directory
+
+Active Directory exposes its database over the Lightweight Directory Access Protocol.
+Every object has a distinguished name (DN), for example
+`CN=jdoe,OU=Staff,DC=corp,DC=example,DC=com`, and queries specify a search base, a scope
+(base, one-level, or subtree), and a filter.
+
+## Filter syntax
+
+LDAP filters are prefix-notation and composable:
+
+```
+(&(objectClass=user)(objectCategory=person))
+(&(objectClass=user)(servicePrincipalName=*))        # accounts with SPNs
+(userAccountControl:1.2.840.113556.1.4.803:=524288)  # accounts trusted for delegation
+(&(objectClass=group)(adminCount=1))                  # protected / privileged groups
+```
+
+## Representative enumeration
+
+```
+# Linux
+ldapsearch -x -H ldap://dc.corp.example.com -b "DC=corp,DC=example,DC=com" \
+  "(&(objectClass=user)(servicePrincipalName=*))" sAMAccountName servicePrincipalName
+# Windows, built-in
+dsquery user -limit 0
+Get-ADComputer -Filter * -Properties OperatingSystem | Select Name,OperatingSystem
+Get-ADObject -LDAPFilter "(objectClass=trustedDomain)"
+```
+
+These are read-only directory reads illustrative of structure; they are not labeled as
+tested here.
+
+## Security implications
+
+Directory enumeration is the reconnaissance that precedes most Active Directory attacks:
+mapping privileged groups, service accounts with SPNs (for Kerberoasting targeting),
+delegation settings, and trusts (for cross-domain movement). The directory is designed
+to be queryable, so the defensive question is not whether enumeration is possible but
+whether abusive enumeration is visible. Maps to MITRE ATT&CK T1087 and T1482.
+
+## Detection and defensive controls
+
+Directory access is auditable (event 4662 for operations on directory objects, with SACLs
+on sensitive objects). Watch for broad or scripted enumeration, LDAP queries for
+delegation and SPN attributes from unusual hosts, and anonymous or unauthenticated binds.
+Disable anonymous bind, scope SACL auditing to sensitive objects, and monitor for the
+specific high-signal filters above.
+""",
+    },
+    {
+        "pub_id": "QR-KB-013",
+        "slug": "group-policy-acls-privileged-identities-attack-paths",
+        "title": "Group Policy, ACLs, Privileged Identities and Attack Paths",
+        "track": "knowledge-base", "collection": "Active Directory Security Engineering",
+        "category": "offensive", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Group Policy, ACLs, Privileged access, Attack paths",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-012,QR-KB-014",
+        "refs": [
+            {"label": "Microsoft Learn: Group Policy overview",
+             "url": "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh831791(v=ws.11)"},
+            {"label": "Microsoft: Securing Privileged Access / tier model",
+             "url": "https://learn.microsoft.com/en-us/security/privileged-access-workstations/privileged-access-access-model"},
+            {"label": "MITRE ATT&CK: Domain Policy Modification (T1484)", "url": "https://attack.mitre.org/techniques/T1484/"},
+        ],
+        "verification": _mv(),
+        "summary": "How Group Policy, access control lists, and privileged identities create (or close) "
+        "attack paths in Active Directory. It explains the GPO architecture and scoping, the ACL/ACE model "
+        "and the rights that matter for escalation, the protected privileged groups and the tier model, "
+        "and how attack paths are reasoned about and cut, with the relevant detection events and defensive "
+        "controls.",
+        "body": r"""## Group Policy
+
+Group Policy Objects (GPOs) deliver configuration and security settings to users and
+computers. A GPO is linked to a site, domain, or organizational unit, and its settings
+apply by scope and precedence. Because GPOs can configure powerful things (scripts,
+scheduled tasks, local group membership, user rights), control over a GPO linked to
+sensitive objects is itself a privileged position. Unauthorized GPO modification maps to
+MITRE ATT&CK T1484.001.
+
+## The ACL/ACE model
+
+Every directory object has a security descriptor with a discretionary access control
+list (DACL) of access control entries (ACEs). Certain rights are escalation-relevant:
+`GenericAll`, `GenericWrite`, `WriteDacl`, `WriteOwner`, `ForceChangePassword`, and
+`AddMember`. An overbroad or misconfigured ACE on a privileged object or group lets a
+lower-privileged principal take control of a higher-privileged one.
+
+## Privileged identities and the tier model
+
+Protected groups (Domain Admins, Enterprise Admins, and others marked by `adminCount`)
+are the directory's crown jewels. The tier model limits where privileged credentials are
+exposed: Tier 0 (identity infrastructure such as domain controllers) credentials must
+never authenticate to lower tiers, because a single exposure on a workstation can lead to
+domain compromise.
+
+## Attack paths
+
+An attack path is a chain of such relationships, for example: control of a workstation
+leads to a cached credential, which has `WriteDacl` on a group, whose members can reset a
+service account, which is a member of a privileged group. Defenders reason about these
+paths as a graph and cut the shortest ones first. (Graph analysis of ACLs and group
+membership is how tools such as BloodHound model this; the concept, not any one tool, is
+the point.)
+
+## Detection and defensive controls
+
+Audit directory object changes (event 5136), GPO changes (event 5137/5141 and 4670 for
+permission changes), and privileged group membership changes (4728/4732/4756). Minimize
+and monitor protected-group membership, enforce the tier model, remove unnecessary ACEs,
+and treat control of a Tier 0 GPO or object as equivalent to domain compromise.
+""",
+    },
+    {
+        "pub_id": "QR-KB-014",
+        "slug": "windows-event-telemetry-investigation-detection",
+        "title": "Windows Event Telemetry, Investigation and Detection Engineering",
+        "track": "knowledge-base", "collection": "Active Directory Security Engineering",
+        "category": "ir-forensics", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Windows events, Sysmon, Detection, Investigation",
+        "board": 3, "role": "detection-engineer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-011,QR-KB-013",
+        "refs": [
+            {"label": "Microsoft Learn: Advanced security audit policy settings",
+             "url": "https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/advanced-security-audit-policy-settings"},
+            {"label": "Sysmon (Sysinternals)",
+             "url": "https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon"},
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+        ],
+        "verification": _mv(),
+        "summary": "The Windows telemetry a defender relies on, how to investigate with it, and how to "
+        "engineer detections on it. It covers the Security log and Sysmon, the high-value event IDs for "
+        "authentication, process creation, and lateral movement, logon types and their meaning, and a "
+        "detection-engineering method that maps behaviors to ATT&CK and expresses them as portable rules.",
+        "body": r"""## The telemetry
+
+Windows emits rich security telemetry through the Security event log and, with it
+installed, Sysmon. The defender's job is to ensure the right events are generated, collect
+them centrally, and build reliable detections on them.
+
+## High-value event IDs
+
+- **Authentication:** 4624 (logon), 4625 (failed logon), 4648 (explicit credentials),
+  4672 (privileged logon), and the Kerberos events 4768/4769/4771.
+- **Process and lateral movement:** 4688 (process creation, with command line when
+  enabled), 7045 (service installed), 5140/5145 (network share access), 4697 (service
+  installed via SCM).
+- **Sysmon:** Event 1 (process creation with hashes and parent), 3 (network connection),
+  7 (image load), 11 (file create), 8 (remote thread), 22 (DNS query).
+
+## Logon types
+
+Event 4624 carries a logon type that changes its meaning: 2 (interactive), 3 (network,
+for example SMB), 4 (batch), 5 (service), 9 (new credentials, as in runas /netonly), and
+10 (remote interactive, RDP). Type 3 with explicit credentials across many hosts, or type
+9, are classic lateral-movement signals.
+
+## Investigation
+
+Reconstruct activity by correlating these events across hosts and time: a failed-then-
+successful logon sequence, a privileged logon followed by service installation, or an
+unusual parent/child process chain. Preserve the observations (host, timestamp, event
+data) so the reconstruction is reproducible, the same discipline the incident-response
+board grades.
+
+## Detection engineering
+
+Turn a specific behavior into a detection: define the behavior and its ATT&CK technique,
+identify the telemetry that proves it, express the logic in a portable form (for example
+a Sigma rule over the relevant event fields), and tune it against benign baselines to
+control false positives. A detection is only finished when its false-positive and
+false-negative behavior is understood, which is why validation (see the purple-team
+publication) is part of the work, not an afterthought.
+""",
+    },
+    # ---- Ludus & GOAD Lab Architecture (remaining) -------------------------
+    {
+        "pub_id": "QR-KB-021",
+        "slug": "goad-active-directory-adversary-emulation",
+        "title": "GOAD: Active Directory Adversary Emulation",
+        "track": "knowledge-base", "collection": "Ludus & GOAD Lab Architecture",
+        "category": "offensive", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "GOAD, Adversary emulation, Active Directory, Defense",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": "Qwalora LLC. GOAD by Orange Cyberdefense.",
+        "related": "QR-KB-020,QR-KB-011",
+        "refs": [
+            {"label": "GOAD (Game of Active Directory), Orange Cyberdefense",
+             "url": "https://github.com/Orange-Cyberdefense/GOAD"},
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+        ],
+        "verification": _mv(
+            "Reviewed documentation of the GOAD lab and its use for defensive research. GOAD is a "
+            "third-party project by Orange Cyberdefense. Ranger's own GOAD environments are planned, not "
+            "operational; nothing here claims they are deployed, and no private lab solutions or board "
+            "objectives are disclosed."),
+        "summary": "A closer look at GOAD, the intentionally vulnerable multi-domain Active Directory lab, "
+        "and its value for defensive research. It describes the identity attack surface GOAD exposes "
+        "(authentication weaknesses, delegation, ACL and Group Policy misconfigurations, trust abuse), the "
+        "defensive research it enables (telemetry and detection validation), and the ATT&CK techniques it "
+        "exercises. GOAD is an Orange Cyberdefense project; Ranger's own GOAD environments are planned, "
+        "not operational.",
+        "body": r"""## Status and credit
+
+GOAD (Game of Active Directory) is a project of Orange Cyberdefense: an intentionally
+vulnerable, multi-domain Active Directory environment for learning and detecting identity
+attacks. Ranger's own GOAD environments are **planned infrastructure for the advanced
+boards, not a live production capability.** Nothing here asserts they are deployed, and no
+private lab solution or board-specific objective is disclosed.
+
+## Why an intentionally vulnerable lab
+
+Real Active Directory attacks exploit misconfiguration more than software vulnerabilities,
+so a realistic lab is one seeded with the misconfigurations that occur in the field. GOAD
+provides a multi-domain forest with member servers and workstations and a curated set of
+weaknesses, so the same attack paths that appear in production can be studied and, more
+importantly for a defensive program, detected and remediated in a controlled place.
+
+## The identity attack surface
+
+GOAD exercises the attack surface covered in the Active Directory Security Engineering
+collection: Kerberos weaknesses (Kerberoasting, AS-REP roasting, delegation abuse), ACL
+and Group Policy misconfigurations that create escalation paths, credential exposure and
+reuse across tiers, and trust relationships that enable cross-domain movement. Each maps
+to MITRE ATT&CK techniques and, crucially, to specific telemetry.
+
+## Defensive research applications
+
+For Ranger the value is defensive. GOAD is where a detection engineer validates that a
+given attack behavior produces the expected Windows and Sysmon telemetry, that a detection
+fires on it, and that the fix removes the path, exactly the purple-team loop. It is also
+where an incident responder practices reconstructing an identity attack from evidence.
+
+## How Ranger intends to use it
+
+Provisioned on demand through the range platform (see Ludus and GOAD Environment
+Architecture) as an isolated environment per authorized lab start, with the defensive
+boards continuing on their per-candidate datasets. The intent is defensive skill under
+realistic conditions, not a catalog of exploits.
+""",
+    },
+    {
+        "pub_id": "QR-KB-022",
+        "slug": "ranger-advanced-boards-environment-readiness",
+        "title": "Ranger Advanced Boards: Environment Readiness",
+        "track": "cohort-docs", "collection": "Ludus & GOAD Lab Architecture",
+        "category": "offensive", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Readiness, Advanced boards, Active Directory, Lab",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-020,QR-KB-004",
+        "refs": [
+            {"label": "Microsoft Learn: Active Directory Domain Services",
+             "url": "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/active-directory-domain-services"},
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+        ],
+        "verification": _mv(),
+        "summary": "The technical competencies a candidate is expected to hold before using Ranger's "
+        "advanced Windows and Active Directory environments, and a clear statement of what is deployed "
+        "versus planned. It is a readiness reference for the Raider and Vanguard boards: it names the "
+        "prerequisite knowledge, points to the relevant publications, and sets expectations without "
+        "disclosing board objectives.",
+        "body": r"""## Deployed versus planned
+
+The advanced boards (Raider and the Vanguard capstone) are designed to run on isolated,
+virtualized Active Directory environments. Those environments are **planned
+infrastructure, not a live production capability today**; the defensive boards currently
+run on per-candidate datasets. This document states the readiness a candidate needs for
+the advanced boards once that infrastructure is live, and it does not claim the
+environments are operational or disclose board objectives.
+
+## Readiness a candidate must hold
+
+Before the advanced Windows and Active Directory environments, a candidate is expected to:
+
+- Operate Windows from PowerShell and read the Security log (see Windows Administration
+  and Core Active Directory).
+- Understand AD DS architecture: domains, forests, OUs, domain controllers, the global
+  catalog, and DNS/SRV dependence (see Active Directory Domain Services Architecture).
+- Understand Kerberos and NTLM authentication and their abuse at a detection level (see
+  Kerberos Authentication and Detection).
+- Reason about LDAP enumeration, ACLs, Group Policy, privileged identities, and attack
+  paths (see the corresponding publications).
+- Correlate Windows and Sysmon telemetry into an investigation (see Windows Event
+  Telemetry, Investigation and Detection Engineering).
+
+## How the environment is used
+
+Advanced environments are provisioned on demand through the range platform as isolated
+instances per authorized lab start, with network isolation and controlled egress so
+adversary emulation stays inside owned infrastructure. A candidate works authorized,
+scoped objectives and produces evidence to the same standard as every other board.
+
+## What this does not contain
+
+This is a readiness reference. It does not contain board objectives, lab solutions, or any
+unpublished content; those remain internal.
+""",
+    },
+    # ---- Offensive, Defensive, Red, Blue & Purple Team Operations (rest) ---
+    {
+        "pub_id": "QR-KB-031",
+        "slug": "offensive-vs-defensive-security-scope-methods-authorization",
+        "title": "Offensive Security vs Defensive Security: Scope, Methods and Authorization",
+        "track": "knowledge-base", "collection": "Red, Blue & Purple Team Operations",
+        "category": "offensive", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Offensive, Defensive, Authorization, Scope",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-030,QR-KB-032",
+        "refs": [
+            {"label": "NIST SP 800-115: Technical Guide to Information Security Testing",
+             "url": "https://csrc.nist.gov/pubs/sp/800/115/final"},
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+        ],
+        "verification": _mv(),
+        "summary": "What separates offensive from defensive security in scope, method, and above all "
+        "authorization, and how the related activities (vulnerability assessment, penetration testing, red "
+        "teaming, adversary emulation) differ. It sets out rules of engagement and scope as the "
+        "precondition of all offensive work, the methods each discipline uses, and the evidence each must "
+        "produce, so the distinctions are operational rather than semantic.",
+        "body": r"""## Two halves of one discipline
+
+Offensive security tries to defeat controls under authorization to measure how they hold;
+defensive security builds, operates, and improves those controls and the telemetry and
+response around them. Mature programs run them as one loop. Everything offensive below is
+performed only within explicit written authorization against owned or authorized systems;
+without that boundary it is not security work.
+
+## Authorization and scope come first
+
+Before any offensive activity: a written scope (targets, exclusions, time windows), rules
+of engagement (permitted techniques, handling of discovered data, stop conditions and
+contacts), and explicit authorization from an owner who can grant it. These are not
+paperwork; they are what distinguishes a security assessment from an intrusion.
+
+## The related activities, distinguished
+
+- **Vulnerability assessment:** breadth-first identification of known weaknesses, usually
+  via scanning and configuration review. Output: a prioritized findings list.
+- **Penetration testing:** goal-directed exploitation within scope to prove exploitability
+  and impact. Output: validated findings with evidence and remediation.
+- **Red teaming:** objective-driven, adversary-style assessment of people, process, and
+  technology, often stealthy, measuring detection and response as much as prevention.
+- **Adversary emulation:** red teaming that reproduces a specific threat actor's TTPs
+  mapped to MITRE ATT&CK, to test coverage against a realistic opponent.
+
+They answer different questions and produce different evidence; calling a vulnerability
+scan a red team misrepresents both the method and the assurance it provides.
+
+## Defensive methods
+
+Instrumentation, detection engineering, investigation, and response, each producing
+evidence a reviewer can inspect and reproduce. The defensive side is measured on time to
+detect and respond and on coverage against real techniques, not on the absence of alerts.
+
+## Evidence
+
+Every activity, offensive or defensive, should produce: the scope and authorization, the
+exact actions taken, the observations and results, and a reproducible method. This is the
+standard Ranger grades, and the standard Qwalora's research applies with signed evidence.
+""",
+    },
+    {
+        "pub_id": "QR-KB-032",
+        "slug": "red-team-operations-adversary-objectives-emulation-assessment",
+        "title": "Red Team Operations: Adversary Objectives, Emulation and Assessment",
+        "track": "knowledge-base", "collection": "Red, Blue & Purple Team Operations",
+        "category": "offensive", "rtype": "technical-documentation", "level": "advanced",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Red team, Adversary emulation, ATT&CK, Assessment",
+        "board": 5, "role": "red-teamer",
+        "source_attribution": PUBLISHER, "related": "QR-KB-031,QR-KB-033",
+        "refs": [
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+            {"label": "MITRE Engenuity: ATT&CK Evaluations", "url": "https://attackevals.mitre-engenuity.org/"},
+        ],
+        "verification": _mv(),
+        "summary": "How red team operations are planned and run as objective-driven adversary emulation, "
+        "and how they are assessed. It covers defining objectives and threat scenarios, building an "
+        "emulation plan from MITRE ATT&CK, operating with discipline (OPSEC, deconfliction, evidence "
+        "capture), and measuring the engagement by detection and response rather than by whether the "
+        "objective was reached. Techniques are framed for authorized assessment, not as tooling.",
+        "body": r"""## What a red team measures
+
+A red team measures how an organization detects and responds to a realistic adversary, not
+merely whether a system can be broken. The engagement is defined by objectives (for
+example, reach a specific crown-jewel asset or demonstrate a business-impacting action)
+and by the threat it emulates.
+
+## Building an emulation plan
+
+Select a threat scenario and translate it into concrete behaviors using MITRE ATT&CK:
+initial access, execution, persistence, privilege escalation, credential access, discovery,
+lateral movement, collection, command and control, and impact. An emulation plan lists the
+techniques to exercise, the expected observable artifacts, and the success and stop
+criteria. Reproducing a named actor's TTPs is adversary emulation; a generic objective-
+driven assessment is red teaming more broadly.
+
+## Operating with discipline
+
+Red team work under authorization still demands discipline: operational security so the
+assessment itself does not create risk, deconfliction with the defenders' management so a
+real incident is not missed, careful handling of any sensitive data encountered, and
+continuous evidence capture (what was done, when, from where, and what was observed).
+Stop conditions and contacts are agreed before starting.
+
+## Assessment and reporting
+
+The engagement is assessed on the defensive outcome: which behaviors were detected, how
+quickly, how the response unfolded, and where coverage gaps lie, mapped back to ATT&CK.
+The report pairs each emulated technique with whether telemetry existed, whether a
+detection fired, and the recommended improvement. MITRE Engenuity's ATT&CK Evaluations
+are a public example of this behavior-mapped assessment style.
+
+## The role
+
+Offensive operators do this work; its output feeds detection engineers and incident
+responders. It is a role within a program, not a separate Ranger training track, and the
+advanced boards develop it under authorized, scoped conditions.
+""",
+    },
+    {
+        "pub_id": "QR-KB-033",
+        "slug": "blue-team-operations-telemetry-detection-investigation-response",
+        "title": "Blue Team Operations: Telemetry, Detection, Investigation and Response",
+        "track": "knowledge-base", "collection": "Red, Blue & Purple Team Operations",
+        "category": "secops-siem", "rtype": "technical-documentation", "level": "intermediate",
+        "pub_type": "technical-methodology", "version": "1.0.0", "maturity": "technical-review",
+        "publisher": PUBLISHER, "topic": "Blue team, Telemetry, Detection, Incident response",
+        "board": 1, "role": "soc-analyst",
+        "source_attribution": PUBLISHER, "related": "QR-KB-032,QR-KB-014",
+        "refs": [
+            {"label": "NIST SP 800-61r3: Incident Response Recommendations",
+             "url": "https://csrc.nist.gov/pubs/sp/800/61/r3/final"},
+            {"label": "MITRE ATT&CK (Enterprise)", "url": "https://attack.mitre.org/"},
+        ],
+        "verification": _mv(),
+        "summary": "How blue team operations turn telemetry into detection, investigation, and response. "
+        "It covers the telemetry sources that matter, the detection-engineering workflow, alert triage and "
+        "escalation, and the incident-response lifecycle aligned to NIST SP 800-61, with the evidence each "
+        "stage must preserve. It connects directly to the defensive Ranger boards (SOC analysis through "
+        "incident response).",
+        "body": r"""## The blue team's job
+
+The blue team owns the full defensive loop: generate the right telemetry, detect specific
+adversary behaviors, investigate alerts into incidents, respond to contain and eradicate,
+and feed what was learned back into instrumentation and detection.
+
+## Telemetry
+
+Detection is only as good as the data under it. Core sources: endpoint process and
+authentication events (Windows Security log, Sysmon, Linux auditd), network metadata and
+captures (Zeek, firewall and proxy logs), identity events (domain controller logs,
+Kerberos events), and application and cloud audit logs. The first engineering task is
+ensuring the needed events are produced and centralized.
+
+## Detection engineering
+
+Turn a behavior into a reliable detection: define the behavior and its ATT&CK technique,
+identify the proving telemetry, express the logic portably (for example Sigma over
+normalized fields), and tune against benign baselines to control false positives. A
+detection is finished only when its false-positive and false-negative behavior is
+understood.
+
+## Triage and investigation
+
+An analyst separates true from false positives with a defensible rationale, then
+investigates true positives by correlating events across hosts and time into a coherent
+account. Preserve the observations so the reconstruction is reproducible, the standard the
+SOC and incident-response boards grade.
+
+## Incident response
+
+Follow a lifecycle aligned to NIST SP 800-61: preparation, detection and analysis,
+containment, eradication and recovery, and post-incident activity. Each phase produces
+evidence: the detection that fired, the scope established, the actions taken and their
+effect, and the lessons that change instrumentation and detection for next time.
+
+## The roles
+
+SOC analysts, detection engineers, and incident responders are the blue-team roles; they
+consume what offensive operators surface and close the loop with them in purple-team work.
+They are roles within a program, developed across the defensive boards.
 """,
     },
 ]
