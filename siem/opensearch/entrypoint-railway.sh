@@ -35,7 +35,9 @@ fi
 
 # ---- running as uid 1000 ----
 SENTINEL="$DATA/.ranger_security_applied"
-SENTINEL_JWT="$DATA/.ranger_jwt_applied"
+# Bumped to _v2: the config now also enables Security-plugin multitenancy (private
+# tenants), so the dynamic config must be re-applied once on the next boot.
+SENTINEL_JWT="$DATA/.ranger_jwt_applied_v2"
 
 # v2: install the candidate JWT authc domain via securityadmin (config type). The
 # roles claim is intentionally NOT trusted (no roles_key); authz is by username
@@ -81,6 +83,15 @@ config:
         authentication_backend:
           type: internal
     authz: {}
+    kibana:
+      # Enable OpenSearch Dashboards multitenancy at the Security layer so per-user
+      # PRIVATE tenants work (saved-object isolation per candidate and the SOC admin).
+      # Without this block the plugin denies any requestedTenant=__user__.
+      multitenancy_enabled: true
+      private_tenant_enabled: true
+      default_tenant: ""
+      server_username: kibanaserver
+      index: ".kibana"
 EOF
     for i in $(seq 1 60); do
       if "$TOOLS/securityadmin.sh" -t config -f "$CONF/opensearch-security/config.yml" \
