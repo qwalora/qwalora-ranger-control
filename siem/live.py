@@ -48,7 +48,8 @@ class LiveCluster:
             self._ctx = ssl._create_unverified_context()
 
     # --- transport -------------------------------------------------------
-    def _req(self, method, path, body=None, auth=None, ndjson=False, bearer=None):
+    def _req(self, method, path, body=None, auth=None, ndjson=False, bearer=None,
+             timeout=None):
         url = self.base + path
         headers = {}
         data = None
@@ -68,7 +69,8 @@ class LiveCluster:
                 f"{u}:{p}".encode()).decode()
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, context=self._ctx, timeout=self.timeout) as r:
+            with urllib.request.urlopen(req, context=self._ctx,
+                                        timeout=timeout or self.timeout) as r:
                 raw = r.read().decode()
                 return r.status, (json.loads(raw) if raw else {})
         except urllib.error.HTTPError as e:

@@ -925,6 +925,15 @@ def m4stream_check(c):
     def note(tag, **kv):
         print(f"[m4] {tag}: " + json.dumps(kv, default=str)[:500], flush=True)
 
+    def sa(method, path, body=None, timeout=150):
+        """Resilient Security Analytics call: a slow/unreachable SA endpoint becomes
+        a captured (0, error) result, never an unhandled crash of the whole run."""
+        try:
+            return c._req(method, path, body=body, timeout=timeout)
+        except Exception as e:  # noqa: BLE001
+            note("sa_call_error", path=path, error=f"{type(e).__name__}: {e}")
+            return 0, {"error": f"{type(e).__name__}: {e}"}
+
     # --- persistent watermark backed by a cluster state doc -----------------
     class ClusterWatermarks:
         def __init__(self, cluster, index, key):
@@ -973,7 +982,7 @@ def m4stream_check(c):
     start = _dt.datetime.now(_dt.timezone.utc)
     run_window_s = int(os.environ.get("M4_RUN_WINDOW_S", "40"))
     plan = tstream.StreamPlan(CAND, 2, "m4-op-seed", "functional", start, run_window_s,
-                              max_delay_s=10)
+                              max_delay_s=10, incident_span_s=min(25, run_window_s - 10))
     truth = plan.truth()
     wm = ClusterWatermarks(c, state_index, CAND)
     wm.set(CAND, plan.start)  # initialize
@@ -1057,60 +1066,62 @@ def m4stream_check(c):
         "logsource:\n  product: windows\n"
         "detection:\n  sel:\n    EventID: 4728\n  condition: sel\n"
         "level: high\n")
-    sa = {"rule_id": None, "detector_id": None, "mappings": None}
-    # discover the mapping view for the windows log type on our index
-    code, view = c._req("GET",
-                        f"/_plugins/_security_analytics/mappings/view?index_name={op_index}&rule_topic=windows")
-    note("sa_mappings_view", code=code, keys=list(view.keys()) if isinstance(view, dict) else None)
-    # create the custom rule
-    code, body = c._req("POST", "/_plugins/_security_analytics/rules?category=windows",
-                        body={"rule": rule_yaml})
-    if code in (200, 201):
-        sa["rule_id"] = body.get("_id")
-        note("sa_rule_created", rule_id=sa["rule_id"])
-    else:
-        lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:300]}")
-    # map the raw field winlog.event_id -> the windows 'EventID' alias the rule uses
-    code, mbody = c._req("POST", "/_plugins/_security_analytics/mappings",
-                         body={"index_name": op_index, "rule_topic": "windows", "partial": True,
-                               "field_mappings": [
-                                   {"raw_field": "winlog.event_id", "ocsf_field": "EventID"},
-                                   {"raw_field": "winlog.event_id", "ocsf_field": "winlog.event_id"}]})
-    sa["mappings"] = {"code": code}
-    note("sa_mappings_applied", code=code, body=json.dumps(mbody)[:200])
-    # create + enable the detector with a trigger (trigger -> alerts)
-    if sa["rule_id"]:
-        detector = {"type": "detector", "detector": {
-            "name": "ranger-op-board2test", "detector_type": "windows", "enabled": True,
-            "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
-            "inputs": [{"detector_input": {"description": "ranger operational",
-                        "indices": [op_index],
-                        "custom_rules": [{"id": sa["rule_id"]}],
-                        "pre_packaged_rules": []}}],
-            "triggers": [{"name": "priv-group-add", "types": ["windows"],
-                          "sev_levels": ["high"], "ids": [sa["rule_id"]],
-                          "severity": "1", "actions": []}]}}
-        code, body = c._req("POST", "/_plugins/_security_analytics/detectors", body=detector)
-        if code in (200, 201):
-            sa["detector_id"] = body.get("_id")
-            note("sa_detector_created", detector_id=sa["detector_id"],
-                 detector_status=body.get("detector", {}).get("enabled"))
-        else:
-            lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
-    out["detector"] = sa
+    sa_obj = {"rule_id": None, "detector_id": None, "mappings": None}
+    finding_ids, finding_docs, alert_ids = [], [], []
+    try:
+      # discover the mapping view for the windows log type on our index
+      code, view = sa("GET",
+                      f"/_plugins/_security_analytics/mappings/view?index_name={op_index}&rule_topic=windows")
+      note("sa_mappings_view", code=code, keys=list(view.keys()) if isinstance(view, dict) else None)
+      # field mapping BEFORE the rule/detector so winlog.event_id maps to the alias
+      code, mbody = sa("POST", "/_plugins/_security_analytics/mappings",
+                       body={"index_name": op_index, "rule_topic": "windows", "partial": True,
+                             "field_mappings": [
+                                 {"raw_field": "winlog.event_id", "ocsf_field": "EventID"}]})
+      sa_obj["mappings"] = {"code": code}
+      note("sa_mappings_applied", code=code, body=json.dumps(mbody)[:200])
+      # create the custom rule (first SA write can be slow on a cold heap)
+      code, body = sa("POST", "/_plugins/_security_analytics/rules?category=windows",
+                      body={"rule": rule_yaml})
+      if code in (200, 201):
+          sa_obj["rule_id"] = body.get("_id")
+          note("sa_rule_created", rule_id=sa_obj["rule_id"])
+      else:
+          lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:300]}")
+      # create + enable the detector with a trigger (trigger -> alerts)
+      if sa_obj["rule_id"]:
+          detector = {"type": "detector", "detector": {
+              "name": "ranger-op-board2test", "detector_type": "windows", "enabled": True,
+              "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+              "inputs": [{"detector_input": {"description": "ranger operational",
+                          "indices": [op_index],
+                          "custom_rules": [{"id": sa_obj["rule_id"]}],
+                          "pre_packaged_rules": []}}],
+              "triggers": [{"name": "priv-group-add", "types": ["windows"],
+                            "sev_levels": ["high"], "ids": [sa_obj["rule_id"]],
+                            "severity": "1", "actions": []}]}}
+          code, body = sa("POST", "/_plugins/_security_analytics/detectors", body=detector)
+          if code in (200, 201):
+              sa_obj["detector_id"] = body.get("_id")
+              note("sa_detector_created", detector_id=sa_obj["detector_id"],
+                   detector_status=body.get("detector", {}).get("enabled"))
+          else:
+              lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
+    except Exception as e:  # noqa: BLE001
+        lim("detector", f"SA setup raised {type(e).__name__}: {e}")
+    out["detector"] = sa_obj
 
     # poll for a genuine detector execution + findings, up to the deadline
-    finding_ids, finding_docs = [], []
-    if sa["detector_id"]:
+    if sa_obj["detector_id"]:
         while _time.monotonic() < deadline:
             _time.sleep(20)
-            code, fres = c._req("GET",
-                                "/_plugins/_security_analytics/findings/_search?detectorType=windows")
+            code, fres = sa("GET",
+                            "/_plugins/_security_analytics/findings/_search?detectorType=windows")
             total = (fres or {}).get("total_findings", 0)
             note("sa_findings_poll", code=code, total=total)
             if code == 200 and total:
                 for f in fres.get("findings", []):
-                    if f.get("detectorId") == sa["detector_id"] or True:
+                    if (f.get("detectorId") == sa_obj["detector_id"]) or not f.get("detectorId"):
                         finding_ids.append(f.get("id"))
                         finding_docs.append(f)
                 if finding_ids:
@@ -1121,9 +1132,7 @@ def m4stream_check(c):
             "detector/mapping may need adjustment on this build (see sa_* logs)")
 
     # alerts (distinct from findings): triggered by the detector's trigger
-    alert_ids = []
-    code, ares = c._req("GET",
-                        "/_plugins/_security_analytics/alerts?detectorType=windows")
+    code, ares = sa("GET", "/_plugins/_security_analytics/alerts?detectorType=windows")
     if code == 200:
         for a in (ares or {}).get("alerts", []):
             alert_ids.append(a.get("id") or a.get("alert_id"))
@@ -1152,7 +1161,7 @@ def m4stream_check(c):
         "chain_complete": bool(trigger_uid and finding_ids)}
     out["chain"] = {
         "continuous_ingestion": multi_tick,
-        "native_detector": bool(sa["detector_id"]),
+        "native_detector": bool(sa_obj["detector_id"]),
         "finding": bool(finding_ids),
         "alert": bool(alert_ids),
         "authorized_investigation": None}  # filled by isolation step (candidate query)
@@ -1294,8 +1303,8 @@ def m4stream_check(c):
     # =======================================================================
     stop = {"detector_deleted": None, "soc_admin_user_deleted": None,
             "candidate_rolesmapping_deleted": None}
-    if sa["detector_id"]:
-        dc, _ = c._req("DELETE", f"/_plugins/_security_analytics/detectors/{sa['detector_id']}")
+    if sa_obj["detector_id"]:
+        dc, _ = sa("DELETE", f"/_plugins/_security_analytics/detectors/{sa_obj['detector_id']}")
         stop["detector_deleted"] = dc in (200, 204)
     stop["soc_admin_user_deleted"] = c.delete_user("ranger_soc_admin")[0] in (200, 204)
     stop["candidate_rolesmapping_deleted"] = c.delete_rolesmapping(authz.role_name(CAND))[0] in (200, 204)

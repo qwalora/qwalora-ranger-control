@@ -82,7 +82,7 @@ class StreamPlan:
     in `.truth()` for the backend only and is never written to any event body."""
 
     def __init__(self, candidate_id, board, seed, profile, engagement_start, duration_s,
-                 max_delay_s=None):
+                 max_delay_s=None, incident_span_s=None):
         if profile not in STREAM_PROFILES:
             raise ValueError(f"unknown profile {profile!r}")
         self.candidate_id = candidate_id
@@ -94,6 +94,10 @@ class StreamPlan:
         # Cap simulated log-shipping lag so a time-boxed live run can drain all
         # arrivals; default None keeps the full 1..240 min realism for offline use.
         self.max_delay_s = max_delay_s
+        # Compress an incident's chain to fit a short live window: the family step
+        # offsets (minutes) are scaled into [0, incident_span_s]. Default None keeps
+        # the realistic multi-minute spacing for offline/long runs.
+        self.incident_span_s = incident_span_s
         self.end = self.start + _dt.timedelta(seconds=self.duration_s)
         self._eng_iso = self.start.isoformat()
         self._r = _random.Random(f"opstream:{seed}:{profile}:{self._eng_iso}")
@@ -174,7 +178,12 @@ class StreamPlan:
         actor_ip = f"198.51.100.{self._r.randint(2,254)}"   # TEST-NET-2
 
         def m(dmin, dataset, category, action, host, message, extra):
-            uids.append(self._emit(base_off + dmin * 60, dataset, category, action,
+            if self.incident_span_s is not None:
+                # scale the family's minute offsets (max ~30) into the span
+                step = base_off + (dmin / 30.0) * self.incident_span_s
+            else:
+                step = base_off + dmin * 60
+            uids.append(self._emit(step, dataset, category, action,
                                    host, message, extra, malicious=True))
 
         if family == "privileged-identity-compromise":
