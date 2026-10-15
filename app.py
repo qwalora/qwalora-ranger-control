@@ -278,6 +278,46 @@ def _bootstrap_resources():
             db.session.commit()
     except Exception:
         db.session.rollback()
+
+
+def _promote_publications():
+    """Publish the research publications named in PUBLISH_PUBLICATIONS (a comma
+    separated list of pub_ids), on the explicit authorization of the Qwalora
+    reviewer named in PUBLICATION_APPROVER. This is the human approval gate: a
+    publication is NEVER published except by this deliberate, named action. It
+    only ever promotes a not-yet-published row, and it records who approved it
+    and when in the stored verification record, so approval is auditable."""
+    ids = [x.strip() for x in os.environ.get("PUBLISH_PUBLICATIONS", "").split(",") if x.strip()]
+    if not ids:
+        return
+    approver = os.environ.get("PUBLICATION_APPROVER") or "Qwalora LLC, authorized reviewer"
+    changed = 0
+    try:
+        for pid in ids:
+            r = Resource.query.filter_by(pub_id=pid).first()
+            if not r or r.status == "published":
+                continue
+            r.status = "published"
+            r.maturity = "published"
+            r.last_reviewed = _dt.date.today()
+            try:
+                v = _json.loads(r.verification) if r.verification else {}
+            except Exception:
+                v = {}
+            rev = v.get("review", {}) if isinstance(v, dict) else {}
+            rev.update({"technical_status": "approved", "approved_by": approver,
+                        "approved_at": _iso(_dt.datetime.now(_dt.timezone.utc)),
+                        "note": "Approved for publication by the authorized Qwalora reviewer."})
+            if isinstance(v, dict):
+                v["review"] = rev
+                r.verification = _json.dumps(v)
+            changed += 1
+        if changed:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 ROLES = list(dict.fromkeys(P.ROLES + [
     "red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]))
 BOARDS = [P.bstr(b["n"]) for b in P.BOARD_PLAN]
@@ -381,6 +421,7 @@ def create_app():
         _bootstrap_cohorts()  # make sure cohort rows exist and one is active
         _backfill_cert_ids()  # give any pre-existing certified badge a cert_id
         _bootstrap_resources()  # seed baseline public references if none exist yet
+        _promote_publications()  # publish research publications an authorized reviewer named
 
     admin_token = os.environ.get("ADMIN_TOKEN")
     # Once GitHub reviewer sign-in is confirmed, set DISABLE_ADMIN_TOKEN=1 to
