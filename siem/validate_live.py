@@ -366,7 +366,9 @@ def socgw_check(c):
 
     def mk_opener():
         jar = _cj.CookieJar()
-        return _u.build_opener(_u.HTTPCookieProcessor(jar), _NoRedirect), jar
+        # Follow redirects like a browser (login -> launch -> dashboards home),
+        # preserving session cookies across the chain.
+        return _u.build_opener(_u.HTTPCookieProcessor(jar)), jar, jar
 
     def req(opener, path, method="GET", headers=None, body=None):
         r = _u.Request(portal + path, data=(json.dumps(body).encode() if body is not None else None),
