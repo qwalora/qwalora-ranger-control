@@ -1129,6 +1129,27 @@ def m4stream_check(c):
         lim("detector", f"SA setup raised {type(e).__name__}: {e}")
     out["detector"] = sa_obj
 
+    # SA diagnostics (always captured): distinguish "query too narrow" from
+    # "Security Analytics rules indices not initialized" as the root cause.
+    diag = {}
+    code, ppc = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
+                   body={"size": 0, "query": {"match_all": {}}})
+    diag["pre_packaged_rules_total"] = (ppc.get("hits", {}) or {}).get("total", {}).get("value") \
+        if code == 200 else f"code={code}"
+    code, cc2 = sa("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=false",
+                   body={"size": 0, "query": {"match_all": {}}})
+    diag["custom_rules_total"] = (cc2.get("hits", {}) or {}).get("total", {}).get("value") \
+        if code == 200 else f"code={code}"
+    code, cat = c._req("GET", "/_cat/indices/.opensearch-sap*,.opensearch-pre*,.opendistro*?format=json&h=index,health,status,docs.count")
+    diag["sa_indices"] = cat if code == 200 else f"code={code}"
+    code, pl = c._req("GET", "/_cat/plugins?format=json&h=component")
+    if code == 200 and isinstance(pl, list):
+        comps = sorted({p.get("component") for p in pl})
+        diag["security_analytics_plugin_present"] = any("security-analytics" in (x or "") for x in comps)
+    note("sa_diagnostics", **{k: v for k, v in diag.items() if k != "sa_indices"})
+    note("sa_indices", indices=diag.get("sa_indices"))
+    out["sa_diagnostics"] = diag
+
     # poll for a genuine detector execution + findings, up to the deadline
     if sa_obj["detector_id"]:
         while _time.monotonic() < deadline:
