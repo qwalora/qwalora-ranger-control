@@ -13,48 +13,58 @@
     <div class="res-hero">
       <span class="eyebrow"><span class="d"></span>Resource library</span>
       <h1 class="res-h1">References and technical documentation</h1>
-      <p class="res-lead">Guides, playbooks, and references for the Qwalora Ranger program, across SOC
-        analysis, threat hunting, detection engineering, incident response, and red teaming.</p>
+      <p class="res-lead">Curated technical documentation, standards, tools, threat intelligence and
+        research references across eight disciplines, from Linux and networking fundamentals to
+        detection engineering, incident response and adversary emulation. References, not lab solutions.</p>
       <form method="get" action="/resources" class="res-search">
         <span class="lookup-ic">{{ ic('search','ic ic-sm') }}</span>
         <input class="input" name="q" value="{{ vm.active.q }}" placeholder="Search the library" autocomplete="off">
-        {% for k in ['type','topic','board','role'] %}{% if vm.active[k] %}<input type="hidden" name="{{ k }}" value="{{ vm.active[k] }}">{% endif %}{% endfor %}
+        {% for k in ['category','type','level','topic','board','role'] %}{% if vm.active[k] %}<input type="hidden" name="{{ k }}" value="{{ vm.active[k] }}">{% endif %}{% endfor %}
       </form>
     </div>
 
     <div class="res-body">
       <aside class="res-facets">
+        {% if vm.facets.categories %}
         <div class="res-fgroup">
-          <div class="res-flabel">Type</div>
-          <a class="res-chip {% if not vm.active.type %}on{% endif %}" href="{{ url_for('resources_public', q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">All</a>
-          {% for t in vm.facets.types %}
-          <a class="res-chip {% if vm.active.type==t %}on{% endif %}" href="{{ url_for('resources_public', type=t, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">{{ t }}</a>
+          <div class="res-flabel">Category</div>
+          <a class="res-chip {% if not vm.active.category %}on{% endif %}" href="{{ url_for('resources_public', type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">All</a>
+          {% for c, lbl in vm.facets.categories %}
+          <a class="res-chip {% if vm.active.category==c %}on{% endif %}" href="{{ url_for('resources_public', category=c, type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">{{ lbl }}</a>
           {% endfor %}
         </div>
+        {% endif %}
+        <div class="res-fgroup">
+          <div class="res-flabel">Type</div>
+          <a class="res-chip {% if not vm.active.type %}on{% endif %}" href="{{ url_for('resources_public', category=vm.active.category or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">All</a>
+          {% for t, lbl in vm.facets.types %}
+          <a class="res-chip {% if vm.active.type==t %}on{% endif %}" href="{{ url_for('resources_public', type=t, category=vm.active.category or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">{{ lbl }}</a>
+          {% endfor %}
+        </div>
+        {% if vm.facets.levels %}
+        <div class="res-fgroup">
+          <div class="res-flabel">Technical level</div>
+          <a class="res-chip {% if not vm.active.level %}on{% endif %}" href="{{ url_for('resources_public', category=vm.active.category or None, type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">All</a>
+          {% for l, lbl in vm.facets.levels %}
+          <a class="res-chip {% if vm.active.level==l %}on{% endif %}" href="{{ url_for('resources_public', level=l, category=vm.active.category or None, type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None, role=vm.active.role or None) }}">{{ lbl }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
         {% if vm.facets.boards %}
         <div class="res-fgroup">
           <div class="res-flabel">Board</div>
-          <a class="res-chip {% if not vm.active.board %}on{% endif %}" href="{{ url_for('resources_public', type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, role=vm.active.role or None) }}">All</a>
+          <a class="res-chip {% if not vm.active.board %}on{% endif %}" href="{{ url_for('resources_public', category=vm.active.category or None, type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, role=vm.active.role or None) }}">All</a>
           {% for b in vm.facets.boards %}
-          <a class="res-chip {% if vm.active.board==b|string %}on{% endif %}" href="{{ url_for('resources_public', board=b, type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, role=vm.active.role or None) }}">Board {{ b }}</a>
+          <a class="res-chip {% if vm.active.board==b|string %}on{% endif %}" href="{{ url_for('resources_public', board=b, category=vm.active.category or None, type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, role=vm.active.role or None) }}">Board {{ b }}</a>
           {% endfor %}
         </div>
         {% endif %}
         {% if vm.facets.roles %}
         <div class="res-fgroup">
           <div class="res-flabel">Role</div>
-          <a class="res-chip {% if not vm.active.role %}on{% endif %}" href="{{ url_for('resources_public', type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None) }}">All</a>
+          <a class="res-chip {% if not vm.active.role %}on{% endif %}" href="{{ url_for('resources_public', category=vm.active.category or None, type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None) }}">All</a>
           {% for slug, title in vm.facets.roles %}
-          <a class="res-chip {% if vm.active.role==slug %}on{% endif %}" href="{{ url_for('resources_public', role=slug, type=vm.active.type or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None) }}">{{ title }}</a>
-          {% endfor %}
-        </div>
-        {% endif %}
-        {% if vm.facets.topics %}
-        <div class="res-fgroup">
-          <div class="res-flabel">Topic</div>
-          <a class="res-chip {% if not vm.active.topic %}on{% endif %}" href="{{ url_for('resources_public', type=vm.active.type or None, q=vm.active.q or None, board=vm.active.board or None, role=vm.active.role or None) }}">All</a>
-          {% for tp in vm.facets.topics %}
-          <a class="res-chip {% if vm.active.topic==tp %}on{% endif %}" href="{{ url_for('resources_public', topic=tp, type=vm.active.type or None, q=vm.active.q or None, board=vm.active.board or None, role=vm.active.role or None) }}">{{ tp }}</a>
+          <a class="res-chip {% if vm.active.role==slug %}on{% endif %}" href="{{ url_for('resources_public', role=slug, category=vm.active.category or None, type=vm.active.type or None, level=vm.active.level or None, q=vm.active.q or None, topic=vm.active.topic or None, board=vm.active.board or None) }}">{{ title }}</a>
           {% endfor %}
         </div>
         {% endif %}
@@ -66,14 +76,14 @@
           {% for r in vm.rows %}
           <a class="res-card" {% if r.url %}href="{{ r.url }}" target="_blank" rel="noopener"{% else %}href="#"{% endif %}>
             <div class="res-top">
-              <span class="res-type res-type-{{ r.rtype }}">{{ r.rtype }}</span>
+              <span class="res-type res-type-{{ r.rtype }}">{{ r.type_label or r.rtype }}</span>
               {% if r.board_label %}<span class="res-meta">{{ r.board_label }}</span>{% endif %}
             </div>
             <div class="res-title">{{ r.title }}</div>
             {% if r.summary %}<div class="res-sum">{{ r.summary }}</div>{% endif %}
             <div class="res-foot">
-              {% if r.role_title %}<span class="res-tag">{{ r.role_title }}</span>{% endif %}
-              {% if r.topic %}<span class="res-tag">{{ r.topic }}</span>{% endif %}
+              {% if r.level_label %}<span class="res-tag">{{ r.level_label }}</span>{% endif %}
+              {% if r.publisher %}<span class="res-tag">{{ r.publisher }}</span>{% endif %}
               {% if r.url %}<span class="res-open">{{ ic('ext','ic ic-sm') }} Open</span>{% endif %}
             </div>
           </a>

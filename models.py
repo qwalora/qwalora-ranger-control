@@ -61,6 +61,17 @@ def ensure_schema(db):
             # Human-typeable public lookup key, minted on the certified badge.
             ("cert_id", "VARCHAR(40)"),
         ],
+        "resources": [
+            # Richer catalog metadata added after the first resources deploy.
+            ("slug", "VARCHAR(90)"),
+            ("category", "VARCHAR(40)"),
+            ("level", "VARCHAR(20)"),
+            ("publisher", "VARCHAR(160)"),
+            ("prereqs", "VARCHAR(400)"),
+            ("image", "VARCHAR(300)"),
+            ("source_attribution", "VARCHAR(300)"),
+            ("last_reviewed", "DATE"),
+        ],
     }
     insp = _inspect(db.engine)
     existing_tables = set(insp.get_table_names())
@@ -80,6 +91,18 @@ def ensure_schema(db):
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+    # Widen resources.summary (was VARCHAR(400)) to hold 70-120 word editorial
+    # descriptions. Postgres enforces length; SQLite does not, so this is a
+    # Postgres-only concern and is swallowed where unsupported.
+    if "resources" in existing_tables:
+        try:
+            dialect = db.engine.dialect.name
+            if dialect == "postgresql":
+                db.session.execute(db.text(
+                    'ALTER TABLE resources ALTER COLUMN summary TYPE VARCHAR(900)'))
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 
 class Candidate(db.Model):
@@ -311,32 +334,55 @@ class Resource(db.Model):
     lessons, or step-by-step lab solutions."""
     __tablename__ = "resources"
     id = db.Column(db.Integer, primary_key=True)
+    # Stable, unique identifier for idempotent catalog upserts (no duplicates).
+    slug = db.Column(db.String(90), unique=True, nullable=True, index=True)
     title = db.Column(db.String(200), nullable=False)
-    summary = db.Column(db.String(400), nullable=True)
-    # guide | reference | playbook | dataset-doc | whitepaper | video
-    rtype = db.Column(db.String(40), nullable=False, default="reference", index=True)
-    topic = db.Column(db.String(80), nullable=True, index=True)
+    summary = db.Column(db.String(900), nullable=True)   # 70-120 word editorial description
+    # One of Resource.RTYPES (standardized content type).
+    rtype = db.Column(db.String(40), nullable=False, default="reference-guide", index=True)
+    # Primary category (one of CATEGORIES). Secondary tags live in `topic`.
+    category = db.Column(db.String(40), nullable=True, index=True)
+    topic = db.Column(db.String(200), nullable=True, index=True)  # comma-separated secondary tags
+    level = db.Column(db.String(20), nullable=True, index=True)   # foundational|intermediate|advanced|research
+    publisher = db.Column(db.String(160), nullable=True)          # original publisher or author
+    prereqs = db.Column(db.String(400), nullable=True)            # relevant prerequisite competencies
     board = db.Column(db.Integer, nullable=True, index=True)   # 1..6, or null = general
     role = db.Column(db.String(40), nullable=True)             # role slug, or null = any
     cohort = db.Column(db.String(40), nullable=True)           # a cohort, or null = all
     # public (anyone) | candidate (signed-in rangers) | restricted (staff only)
     visibility = db.Column(db.String(20), nullable=False, default="public", index=True)
     status = db.Column(db.String(20), nullable=False, default="draft", index=True)  # draft | published
-    url = db.Column(db.String(500), nullable=True)   # external or asset link
-    body = db.Column(db.Text, nullable=True)         # inline reference text (markdown)
+    url = db.Column(db.String(500), nullable=True)       # external or asset link
+    body = db.Column(db.Text, nullable=True)             # inline long-form content (markdown)
+    image = db.Column(db.String(300), nullable=True)     # optional real source image (path/url)
+    source_attribution = db.Column(db.String(300), nullable=True)  # credit line for the source
+    last_reviewed = db.Column(db.Date, nullable=True)    # technical review date (never fabricated)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
-    RTYPES = ("guide", "reference", "playbook", "dataset-doc", "whitepaper", "video")
+    # Standardized content types.
+    RTYPES = ("technical-documentation", "research-publication", "technical-standard",
+              "reference-guide", "technical-book", "security-advisory",
+              "threat-intelligence", "open-source-project", "external-course",
+              "practical-exercise")
+    # Primary categories (slug -> display is in RTYPE/CATEGORY label maps in app).
+    CATEGORIES = ("linux-sysadmin", "networking", "secops-siem", "threat-intel",
+                  "ir-forensics", "offensive", "engineering", "frameworks")
+    LEVELS = ("foundational", "intermediate", "advanced", "research")
     VISIBILITIES = ("public", "candidate", "restricted")
     STATUSES = ("draft", "published")
 
     def public_view(self):
         """Safe projection for public/candidate surfaces. Never includes the
         visibility/status control fields or anything staff-only."""
-        return {"id": self.id, "title": self.title, "summary": self.summary,
-                "rtype": self.rtype, "topic": self.topic, "board": self.board,
-                "role": self.role, "url": self.url,
+        return {"id": self.id, "slug": self.slug, "title": self.title,
+                "summary": self.summary, "rtype": self.rtype, "category": self.category,
+                "topic": self.topic, "level": self.level, "publisher": self.publisher,
+                "prereqs": self.prereqs, "board": self.board, "role": self.role,
+                "url": self.url, "image": self.image,
+                "source_attribution": self.source_attribution,
+                "has_article": bool(self.body),
+                "last_reviewed": (self.last_reviewed.isoformat() if self.last_reviewed else None),
                 "updated_at": (self.updated_at or self.created_at)}
 
 

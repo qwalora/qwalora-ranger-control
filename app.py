@@ -29,6 +29,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
 import broker
+import catalog
 import githuboauth
 import program as P
 import scenarios
@@ -192,55 +193,51 @@ def _backfill_cert_ids():
         db.session.rollback()
 
 
-# Baseline public references, seeded ONLY when the resource table is empty, so
-# the public library is populated and backend-driven from day one. Once an admin
-# adds, edits, or removes anything, the table is no longer empty and this never
-# runs again, so it never overrides curated content. Public + published, real
-# authoritative references (not lab solutions).
-_SEED_RESOURCES = [
-    {"title": "MITRE ATT&CK Enterprise matrix", "rtype": "reference", "topic": "MITRE",
-     "summary": "The tactic and technique taxonomy the program maps every board to.",
-     "url": "https://attack.mitre.org/matrices/enterprise/"},
-    {"title": "SOC alert triage, by MITRE", "rtype": "guide", "topic": "Triage", "board": 1,
-     "role": "soc-analyst", "summary": "Scoping, severity and escalation for an alert queue.",
-     "url": "https://www.cisa.gov/resources-tools/resources/incident-response-training"},
-    {"title": "The ThreatHunting Project", "rtype": "guide", "topic": "Hunting", "board": 2,
-     "role": "threat-hunter", "summary": "A library of hunt hypotheses and the data they need.",
-     "url": "https://github.com/ThreatHuntingProject/ThreatHunting"},
-    {"title": "SigmaHQ detection rules", "rtype": "reference", "topic": "Detection", "board": 3,
-     "role": "detection-engineer", "summary": "Portable, vendor-agnostic detection rule format and rule set.",
-     "url": "https://github.com/SigmaHQ/sigma"},
-    {"title": "Atomic Red Team", "rtype": "dataset-doc", "topic": "Detection", "board": 3,
-     "role": "detection-engineer", "summary": "Small, portable tests mapped to ATT&CK, for exercising detections.",
-     "url": "https://github.com/redcanaryco/atomic-red-team"},
-    {"title": "NIST SP 800-61 Computer Security Incident Handling Guide", "rtype": "whitepaper",
-     "topic": "IR", "board": 4, "role": "incident-responder",
-     "summary": "The incident-response lifecycle and evidence handling the IR board follows.",
-     "url": "https://csrc.nist.gov/pubs/sp/800/61/r2/final"},
-    {"title": "GOAD (Game of Active Directory)", "rtype": "reference", "topic": "Active Directory",
-     "board": 5, "role": "red-teamer", "summary": "The vulnerable AD lab the red-team boards are built on.",
-     "url": "https://github.com/Orange-Cyberdefense/GOAD"},
-    {"title": "LOLBAS project", "rtype": "reference", "topic": "Windows", "board": 1, "role": "soc-analyst",
-     "summary": "Living-off-the-land binaries and scripts attackers abuse on Windows.",
-     "url": "https://lolbas-project.github.io/"},
-    {"title": "Windows security auditing reference", "rtype": "reference", "topic": "Windows", "board": 1,
-     "role": "soc-analyst", "summary": "The Windows event IDs that matter for logon, process and persistence analysis.",
-     "url": "https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/"},
-]
+def _parse_date(s):
+    try:
+        return _dt.date.fromisoformat(s) if s else None
+    except Exception:
+        return None
 
 
 def _bootstrap_resources():
-    """Seed baseline public references if the resource library is empty. Only
-    ever runs on a truly empty table, so admin curation is never overridden."""
+    """Idempotent, slug-keyed upsert of the editorial catalog. INSERT-IF-MISSING:
+    an entry whose slug already exists is left untouched, so admin edits are never
+    overwritten and no duplicates are created. External references are published;
+    original Qwalora publications are inserted as drafts, review-gated. Runs on
+    every boot; it only ever adds slugs that are not yet present."""
     try:
-        if Resource.query.count() > 0:
-            return
-        for r in _SEED_RESOURCES:
+        have = {s for (s,) in db.session.query(Resource.slug)
+                .filter(Resource.slug.isnot(None)).all()}
+        added = 0
+        for e in catalog.CATALOG:
+            if e["slug"] in have:
+                continue
             db.session.add(Resource(
-                title=r["title"], summary=r.get("summary"), rtype=r["rtype"],
-                topic=r.get("topic"), board=r.get("board"), role=r.get("role"),
-                url=r.get("url"), visibility="public", status="published"))
-        db.session.commit()
+                slug=e["slug"], title=e["title"], summary=e.get("summary"),
+                rtype=e["rtype"], category=e.get("category"), topic=e.get("topic"),
+                level=e.get("level"), publisher=e.get("publisher"),
+                prereqs=e.get("prereqs"), board=e.get("board"), role=e.get("role"),
+                url=e.get("url"), image=e.get("image"),
+                source_attribution=e.get("source_attribution"),
+                last_reviewed=_parse_date(e.get("last_reviewed") or catalog.REVIEWED),
+                visibility="public", status="published"))
+            added += 1
+        for e in catalog.ORIGINALS:
+            if e["slug"] in have:
+                continue
+            db.session.add(Resource(
+                slug=e["slug"], title=e["title"], summary=e.get("summary"),
+                rtype=e["rtype"], category=e.get("category"), topic=e.get("topic"),
+                level=e.get("level"), publisher=e.get("publisher"),
+                prereqs=e.get("prereqs"), board=e.get("board"), role=e.get("role"),
+                url=e.get("url"), image=e.get("image"), body=e.get("body"),
+                source_attribution=e.get("source_attribution"),
+                last_reviewed=None,  # drafts carry no review date until reviewed
+                visibility="public", status="draft"))  # draft -> not publicly shown
+            added += 1
+        if added:
+            db.session.commit()
     except Exception:
         db.session.rollback()
 ROLES = list(dict.fromkeys(P.ROLES + [
@@ -1663,12 +1660,18 @@ def create_app():
         if eid and eid.isdigit():
             edit = Resource.query.get(int(eid))
         vm = {"rows": [{"id": r.id, "title": r.title, "rtype": r.rtype,
+                        "type_label": catalog.TYPE_LABELS.get(r.rtype, r.rtype),
+                        "category_label": catalog.CATEGORY_LABELS.get(r.category, r.category),
+                        "level": r.level, "publisher": r.publisher,
                         "topic": r.topic, "board": r.board,
                         "role_title": (P.ROLE_TITLES.get(r.role, r.role) if r.role else None),
                         "cohort": r.cohort, "visibility": r.visibility,
                         "status": r.status, "url": r.url} for r in rows],
               "edit": edit,
-              "rtypes": Resource.RTYPES, "visibilities": Resource.VISIBILITIES,
+              "rtypes": [(t, catalog.TYPE_LABELS[t]) for t in Resource.RTYPES],
+              "categories": [(c, catalog.CATEGORY_LABELS[c]) for c in Resource.CATEGORIES],
+              "levels": [(l, catalog.LEVEL_LABELS[l]) for l in Resource.LEVELS],
+              "visibilities": Resource.VISIBILITIES,
               "roles": [(s, P.ROLE_TITLES.get(s, s)) for s in P.ROLES],
               "boards": [(b["n"], P.badge_for(b["n"])[1]) for b in P.BOARD_PLAN],
               "cohorts": [co.name for co in Cohort.query.order_by(Cohort.sequence.desc()).all()]}
@@ -1683,13 +1686,23 @@ def create_app():
             r = Resource()
             db.session.add(r)
         r.title = (request.form.get("title") or "").strip() or "Untitled"
+        slug = (request.form.get("slug") or "").strip() or None
+        if slug:  # keep slugs unique; ignore a slug already used by another row
+            clash = Resource.query.filter(Resource.slug == slug, Resource.id != (r.id or -1)).first()
+            r.slug = r.slug if clash else slug
         r.summary = (request.form.get("summary") or "").strip() or None
-        r.rtype = request.form.get("rtype") if request.form.get("rtype") in Resource.RTYPES else "reference"
+        r.rtype = request.form.get("rtype") if request.form.get("rtype") in Resource.RTYPES else "reference-guide"
+        r.category = request.form.get("category") if request.form.get("category") in Resource.CATEGORIES else None
+        r.level = request.form.get("level") if request.form.get("level") in Resource.LEVELS else None
+        r.publisher = (request.form.get("publisher") or "").strip() or None
+        r.source_attribution = (request.form.get("source_attribution") or "").strip() or None
+        r.image = (request.form.get("image") or "").strip() or None
         r.topic = (request.form.get("topic") or "").strip() or None
         b = (request.form.get("board") or "").strip()
         r.board = int(b) if b.isdigit() else None
         r.role = (request.form.get("role") or "").strip() or None
         r.cohort = (request.form.get("cohort") or "").strip() or None
+        r.last_reviewed = _parse_date((request.form.get("last_reviewed") or "").strip())
         r.visibility = request.form.get("visibility") if request.form.get("visibility") in Resource.VISIBILITIES else "public"
         r.status = "published" if request.form.get("status") == "published" else "draft"
         r.url = (request.form.get("url") or "").strip() or None
@@ -2116,11 +2129,19 @@ def create_app():
         except Exception:
             return "Board %s" % n
 
+    def _topics_of(r):
+        return [t.strip() for t in (r.topic or "").split(",") if t.strip()]
+
     def _resource_row(r):
         """Public-safe row with display labels. Never leaks visibility/status."""
         d = r.public_view()
         d["role_title"] = P.ROLE_TITLES.get(r.role, r.role) if r.role else None
         d["board_label"] = _board_label(r.board)
+        d["category_label"] = catalog.CATEGORY_LABELS.get(r.category, r.category)
+        d["category_short"] = catalog.CATEGORY_SHORT.get(r.category, r.category)
+        d["type_label"] = catalog.TYPE_LABELS.get(r.rtype, r.rtype)
+        d["level_label"] = catalog.LEVEL_LABELS.get(r.level, r.level)
+        d["tags"] = _topics_of(r)
         d["updated"] = _iso(d.pop("updated_at"))
         return d
 
@@ -2128,30 +2149,49 @@ def create_app():
         """Published + public resources, filtered. The ONLY resources a request
         without a candidate/admin session may ever see."""
         q = Resource.query.filter_by(status="published", visibility="public")
-        rt, topic = args.get("type"), args.get("topic")
+        cat, rt = args.get("category"), args.get("type")
+        level, publisher = args.get("level"), args.get("publisher")
+        topic = args.get("topic")
         board, role, search = args.get("board"), args.get("role"), (args.get("q") or "").strip()
+        if cat in Resource.CATEGORIES:
+            q = q.filter_by(category=cat)
         if rt in Resource.RTYPES:
             q = q.filter_by(rtype=rt)
+        if level in Resource.LEVELS:
+            q = q.filter_by(level=level)
+        if publisher:
+            q = q.filter_by(publisher=publisher)
         if topic:
-            q = q.filter_by(topic=topic)
+            q = q.filter(Resource.topic.ilike(f"%{topic}%"))
         if board and board.isdigit():
             q = q.filter_by(board=int(board))
         if role:
             q = q.filter_by(role=role)
         if search:
             like = f"%{search}%"
-            q = q.filter(db.or_(Resource.title.ilike(like), Resource.summary.ilike(like)))
-        return q.order_by(Resource.rtype.asc(), Resource.title.asc()).all()
+            q = q.filter(db.or_(Resource.title.ilike(like), Resource.summary.ilike(like),
+                                Resource.topic.ilike(like), Resource.publisher.ilike(like)))
+        # Category, then title, for a stable grouped order.
+        return q.order_by(Resource.category.asc(), Resource.title.asc()).all()
 
     def _resource_facets():
         """Filter options drawn from all published public resources, so chips
         show every available value regardless of the current filter."""
         allpub = Resource.query.filter_by(status="published", visibility="public").all()
+        cats = {r.category for r in allpub if r.category}
+        types = {r.rtype for r in allpub if r.rtype}
+        levels = {r.level for r in allpub if r.level}
+        topics = set()
+        for r in allpub:
+            topics.update(_topics_of(r))
         return {
-            "types": sorted({r.rtype for r in allpub if r.rtype}),
-            "topics": sorted({r.topic for r in allpub if r.topic}),
+            "categories": [(c, catalog.CATEGORY_LABELS.get(c, c)) for c in Resource.CATEGORIES if c in cats],
+            "types": [(t, catalog.TYPE_LABELS.get(t, t)) for t in Resource.RTYPES if t in types],
+            "levels": [(l, catalog.LEVEL_LABELS.get(l, l)) for l in Resource.LEVELS if l in levels],
+            "topics": sorted(topics),
             "boards": sorted({r.board for r in allpub if r.board}),
             "roles": sorted({(r.role, P.ROLE_TITLES.get(r.role, r.role)) for r in allpub if r.role}),
+            "publishers": sorted({r.publisher for r in allpub if r.publisher}),
             "total": len(allpub),
         }
 
@@ -2161,7 +2201,9 @@ def create_app():
         published only; no auth; no restricted or draft items ever surfaced."""
         rows = [_resource_row(r) for r in _public_resources(request.args)]
         vm = {"rows": rows, "facets": _resource_facets(),
-              "active": {"type": request.args.get("type", ""),
+              "active": {"category": request.args.get("category", ""),
+                         "type": request.args.get("type", ""),
+                         "level": request.args.get("level", ""),
                          "topic": request.args.get("topic", ""),
                          "board": request.args.get("board", ""),
                          "role": request.args.get("role", ""),

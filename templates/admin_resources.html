@@ -11,21 +11,20 @@
       <div class="rg-head">
         <div>
           <div class="ttl">Resource library</div>
-          <div class="rg-sub">One content model drives the public library and the candidate view.
-            Public + published items are world-visible at <span class="mono">/resources</span>; candidate items
-            show only to signed-in rangers on their board/role; restricted items stay staff-only.
-            References and documentation, not lessons or lab solutions.</div>
+          <div class="rg-sub">One content model drives the public library (<span class="mono">/resources</span>) and the
+            candidate view. Public + published items are world-visible; candidate items show only to signed-in rangers;
+            restricted and draft items stay internal. References and documentation, not lessons or lab solutions.</div>
         </div>
         <a class="btn btn-ghost btn-sm" href="/resources" target="_blank" rel="noopener">{{ ic('ext','ic ic-sm') }} View public library</a>
       </div>
 
       <div class="co-list" style="padding-top:16px">
         {% for r in vm.rows %}
-        <div class="co-row" style="grid-template-columns:1.8fr 1fr 1fr auto auto">
-          <div class="co-id"><b>{{ r.title }}</b><span class="mono dim">{{ r.rtype }}{% if r.topic %} · {{ r.topic }}{% endif %}{% if r.url %} · linked{% endif %}</span></div>
+        <div class="co-row" style="grid-template-columns:1.9fr 1.1fr 1fr auto auto">
+          <div class="co-id"><b>{{ r.title }}</b><span class="mono dim">{{ r.type_label }}{% if r.level %} · {{ r.level }}{% endif %}{% if r.publisher %} · {{ r.publisher }}{% endif %}</span></div>
           <div class="co-id">
-            <span class="mono dim">{% if r.board %}Board {{ r.board }}{% else %}general{% endif %}{% if r.role_title %} · {{ r.role_title }}{% endif %}</span>
-            <span class="mono dim">{% if r.cohort %}{{ r.cohort }}{% else %}all cohorts{% endif %}</span>
+            <span class="mono dim">{% if r.category_label %}{{ r.category_label }}{% else %}uncategorized{% endif %}</span>
+            <span class="mono dim">{% if r.board %}Board {{ r.board }}{% endif %}{% if r.role_title %} · {{ r.role_title }}{% endif %}</span>
           </div>
           <div>
             <span class="pill {% if r.visibility=='public' %}pill-ok{% elif r.visibility=='candidate' %}pill-violet{% else %}pill{% endif %}"><span class="dot {% if r.visibility=='public' %}dot-ok{% elif r.visibility=='candidate' %}dot-violet{% else %}dot{% endif %}"></span>{{ r.visibility }}</span>
@@ -48,13 +47,27 @@
           <input type="hidden" name="csrf" value="{{ csrf_token }}">
           {% if vm.edit %}<input type="hidden" name="id" value="{{ vm.edit.id }}">{% endif %}
           <div class="res-frow">
-            <input class="input" name="title" placeholder="Title" required value="{{ vm.edit.title if vm.edit else '' }}" style="flex:2;min-width:220px">
-            <select class="input" name="rtype">
-              {% for t in vm.rtypes %}<option value="{{ t }}" {% if vm.edit and vm.edit.rtype==t %}selected{% endif %}>{{ t }}</option>{% endfor %}
-            </select>
-            <input class="input" name="topic" placeholder="Topic (e.g. Sigma, MITRE)" value="{{ vm.edit.topic or '' if vm.edit else '' }}" style="max-width:200px">
+            <input class="input" name="title" placeholder="Title" required value="{{ vm.edit.title if vm.edit else '' }}" style="flex:2;min-width:240px">
+            <input class="input" name="slug" placeholder="slug (stable id)" value="{{ vm.edit.slug or '' if vm.edit else '' }}" style="max-width:200px">
           </div>
-          <textarea class="input" name="summary" placeholder="One-line summary" style="width:100%;margin-top:8px;min-height:40px">{{ vm.edit.summary or '' if vm.edit else '' }}</textarea>
+          <div class="res-frow" style="margin-top:8px">
+            <select class="input" name="category">
+              <option value="">Category…</option>
+              {% for c, lbl in vm.categories %}<option value="{{ c }}" {% if vm.edit and vm.edit.category==c %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+            <select class="input" name="rtype">
+              {% for t, lbl in vm.rtypes %}<option value="{{ t }}" {% if vm.edit and vm.edit.rtype==t %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+            <select class="input" name="level">
+              <option value="">Level…</option>
+              {% for l, lbl in vm.levels %}<option value="{{ l }}" {% if vm.edit and vm.edit.level==l %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="res-frow" style="margin-top:8px">
+            <input class="input" name="publisher" placeholder="Publisher / author" value="{{ vm.edit.publisher or '' if vm.edit else '' }}" style="flex:1;min-width:200px">
+            <input class="input" name="topic" placeholder="Tags (comma-separated)" value="{{ vm.edit.topic or '' if vm.edit else '' }}" style="flex:1;min-width:200px">
+          </div>
+          <textarea class="input" name="summary" placeholder="Editorial description (70-120 words)" style="width:100%;margin-top:8px;min-height:72px">{{ vm.edit.summary or '' if vm.edit else '' }}</textarea>
           <div class="res-frow" style="margin-top:8px">
             <select class="input" name="board">
               <option value="">General (no board)</option>
@@ -68,6 +81,9 @@
               <option value="">All cohorts</option>
               {% for cn in vm.cohorts %}<option value="{{ cn }}" {% if vm.edit and vm.edit.cohort==cn %}selected{% endif %}>{{ cn }}</option>{% endfor %}
             </select>
+            <input class="input" name="last_reviewed" type="date" value="{{ vm.edit.last_reviewed.isoformat() if vm.edit and vm.edit.last_reviewed else '' }}" title="Last reviewed" style="max-width:160px">
+          </div>
+          <div class="res-frow" style="margin-top:8px">
             <select class="input" name="visibility">
               {% for v in vm.visibilities %}<option value="{{ v }}" {% if vm.edit and vm.edit.visibility==v %}selected{% endif %}>{{ v }}</option>{% endfor %}
             </select>
@@ -76,8 +92,10 @@
               <option value="published" {% if vm.edit and vm.edit.status=='published' %}selected{% endif %}>published</option>
             </select>
           </div>
-          <input class="input" name="url" placeholder="Link (https://…) — optional" value="{{ vm.edit.url or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
-          <textarea class="input" name="body" placeholder="Inline reference text (markdown) — optional" style="width:100%;margin-top:8px;min-height:70px">{{ vm.edit.body or '' if vm.edit else '' }}</textarea>
+          <input class="input" name="source_attribution" placeholder="Source attribution / credit line" value="{{ vm.edit.source_attribution or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
+          <input class="input" name="url" placeholder="Link (https://…) — external resource" value="{{ vm.edit.url or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
+          <input class="input" name="image" placeholder="Image path/URL (optional real source image)" value="{{ vm.edit.image or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
+          <textarea class="input" name="body" placeholder="Long-form article body (markdown) — for internal/original publications" style="width:100%;margin-top:8px;min-height:90px">{{ vm.edit.body or '' if vm.edit else '' }}</textarea>
           <div style="margin-top:10px;display:flex;gap:8px">
             <button class="btn btn-primary btn-sm">{{ ic('plus','ic ic-sm') }} {% if vm.edit %}Save{% else %}Add resource{% endif %}</button>
             {% if vm.edit %}<a class="btn btn-ghost btn-sm" href="/admin/resources">Cancel</a>{% endif %}
