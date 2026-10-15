@@ -81,7 +81,8 @@ class StreamPlan:
     windows are taken over ARRIVAL. Hidden truth (which uids are malicious) is kept
     in `.truth()` for the backend only and is never written to any event body."""
 
-    def __init__(self, candidate_id, board, seed, profile, engagement_start, duration_s):
+    def __init__(self, candidate_id, board, seed, profile, engagement_start, duration_s,
+                 max_delay_s=None):
         if profile not in STREAM_PROFILES:
             raise ValueError(f"unknown profile {profile!r}")
         self.candidate_id = candidate_id
@@ -90,6 +91,9 @@ class StreamPlan:
         self.profile = profile
         self.start = _as_utc(engagement_start)
         self.duration_s = float(duration_s)
+        # Cap simulated log-shipping lag so a time-boxed live run can drain all
+        # arrivals; default None keeps the full 1..240 min realism for offline use.
+        self.max_delay_s = max_delay_s
         self.end = self.start + _dt.timedelta(seconds=self.duration_s)
         self._eng_iso = self.start.isoformat()
         self._r = _random.Random(f"opstream:{seed}:{profile}:{self._eng_iso}")
@@ -103,7 +107,10 @@ class StreamPlan:
               malicious=False):
         ev_ts = self.start + _dt.timedelta(seconds=event_offset_s)
         # arrival delay: most prompt, some delayed (log-shipping lag) -> out-of-order
-        delay = 0 if self._r.random() < 0.9 else self._r.randint(1, 240) * 60
+        if self.max_delay_s is not None:
+            delay = 0 if self._r.random() < 0.9 else self._r.randint(1, int(self.max_delay_s))
+        else:
+            delay = 0 if self._r.random() < 0.9 else self._r.randint(1, 240) * 60
         arr_ts = ev_ts + _dt.timedelta(seconds=delay)
         uid = _uid(self.seed, self.profile, self._eng_iso, self._seq)
         self._seq += 1

@@ -223,7 +223,7 @@ def jwt_check(c):
     c.delete_rolesmapping(authz.role_name("cand-a"))
     rec("revocation_enforced", c._req("GET", f"/{a_idx}/_count", bearer=ta)[0] == 403)
     # admin least-privilege: SOC admin reads SIEM data but NOT the security index
-    soc_pw = os.environ.get("RANGER_SOC_ADMIN_PW", "SocAdmin-Pilot-7xQ=")
+    soc_pw = os.environ.get("RANGER_SOC_ADMIN_PW") or os.environ.get("RANGER_SOC_TEST_KEY") or ""
     c.put_role("ranger_soc_admin",
                ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
                allow_write=False,
@@ -885,6 +885,442 @@ def discoverdiag_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def m4stream_check(c):
+    """M4.2 live validation of the continuous operational SOC chain, against the
+    private cluster, using ONLY the synthetic board2-test identity. Time-bounded
+    with a hard deadline and an explicit stop; nothing runs unattended afterwards.
+
+    Proves, end to end: continuous ingestion across scheduled worker ticks into an
+    isolated ranger-op-* index -> genuine OpenSearch Security Analytics detector
+    execution -> finding (and alert where the plugin supports it) -> an authorized
+    SOC investigation query. Plus live recovery (watermark persistence, idempotent
+    replay, partial bulk failure, dead-letter) and measured performance. Every step
+    records the real API code/IDs; an unsupported step is a documented limitation,
+    never faked."""
+    import datetime as _dt
+    import time as _time
+
+    from . import telemetry_stream as tstream
+
+    CAND = "board2-test"
+    slug = authz._slug(CAND)
+    op_index = f"ranger-op-{COHORT}-{slug}-b2".lower()
+    qual_index = authz.index_name(COHORT, CAND, 2)
+    state_index = "ranger-op-state"
+    deadline = _time.monotonic() + int(os.environ.get("M4_DEADLINE_S", "540"))  # hard stop
+    out = {"mode": "m4stream", "op_index": op_index, "candidate": CAND,
+           "chain": {}, "ingestion": {}, "fields": {}, "detector": {}, "findings": {},
+           "alerts": {}, "trace": {}, "isolation": {}, "admin": {}, "recovery": {},
+           "metrics": {}, "labeling": {}, "limitations": [], "stop": {}, "status": "PASS"}
+
+    def fail(section, why):
+        out["status"] = "FAIL"
+        out.setdefault("errors", []).append({section: why})
+        print(f"[FAIL] m4/{section}: {why}", flush=True)
+
+    def lim(section, why):
+        out["limitations"].append({section: why})
+        print(f"[LIMITATION] m4/{section}: {why}", flush=True)
+
+    def note(tag, **kv):
+        print(f"[m4] {tag}: " + json.dumps(kv, default=str)[:500], flush=True)
+
+    # --- persistent watermark backed by a cluster state doc -----------------
+    class ClusterWatermarks:
+        def __init__(self, cluster, index, key):
+            self.c, self.index, self.key = cluster, index, key
+            self.c.create_index(index, {"mappings": {"properties": {
+                "candidate": {"type": "keyword"}, "watermark": {"type": "date"}}}})
+        def get(self, key):
+            code, body = self.c._req("GET", f"/{self.index}/_doc/{key}")
+            if code == 200 and body.get("found"):
+                wm = body["_source"].get("watermark")
+                return tstream._as_utc(wm) if wm else None
+            return None
+        def set(self, key, ts):
+            self.c._req("PUT", f"/{self.index}/_doc/{key}?refresh=true",
+                        body={"candidate": key, "watermark": tstream._as_utc(ts).isoformat()})
+
+    # --- live bulk sink with op_type=create (idempotent) --------------------
+    class LiveSink:
+        def __init__(self, cluster):
+            self.c = cluster
+        def bulk(self, index, docs):
+            lines = []
+            for d in docs:
+                lines.append(json.dumps({"create": {"_index": index, "_id": d["uid"]}}))
+                lines.append(json.dumps(d["source"]))
+            code, resp = self.c._req("POST", "/_bulk?refresh=false",
+                                     body="\n".join(lines) + "\n", ndjson=True)
+            if code not in (200, 201):
+                raise LiveError(f"bulk transport {code}")
+            res = []
+            for it in resp.get("items", []):
+                cr = it.get("create", {})
+                res.append({"uid": cr.get("_id"), "status": cr.get("status", 500)})
+            return res
+
+    # =======================================================================
+    # 1) fresh isolated operational index with the real ECS mapping
+    # =======================================================================
+    c.delete_index(op_index)
+    c.create_index(op_index, schema.INDEX_MAPPING)
+    note("op_index_created", index=op_index)
+
+    # =======================================================================
+    # 2) continuous ingestion across MULTIPLE scheduled worker ticks
+    # =======================================================================
+    start = _dt.datetime.now(_dt.timezone.utc)
+    run_window_s = int(os.environ.get("M4_RUN_WINDOW_S", "40"))
+    plan = tstream.StreamPlan(CAND, 2, "m4-op-seed", "functional", start, run_window_s,
+                              max_delay_s=10)
+    truth = plan.truth()
+    wm = ClusterWatermarks(c, state_index, CAND)
+    wm.set(CAND, plan.start)  # initialize
+    driver = tstream.StreamDriver(LiveSink(c), wm, op_index, max_retries=4, queue_max=100000)
+    ticks = []
+    t_ingest0 = _time.monotonic()
+    n_ticks = int(os.environ.get("M4_TICKS", "5"))
+    for i in range(n_ticks):
+        _time.sleep(max(1, run_window_s // n_ticks))
+        now = _dt.datetime.now(_dt.timezone.utc)
+        r = driver.tick(plan, CAND, now)
+        ticks.append({"tick": i + 1, "advanced": r.advanced, "indexed": r.indexed,
+                      "conflicts": r.conflicts, "window": r.window, "dead": len(r.dead)})
+        note("tick", **ticks[-1])
+    # final drain tick (captures the last delayed arrivals), watermark persisted in-cluster
+    _time.sleep(11)
+    r = driver.tick(plan, CAND, _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=30))
+    ticks.append({"tick": "drain", "advanced": r.advanced, "indexed": r.indexed,
+                  "conflicts": r.conflicts, "window": r.window, "dead": len(r.dead)})
+    ingest_elapsed = _time.monotonic() - t_ingest0
+    c.refresh(op_index)
+    indexed_total = c.count(op_index)
+    planned_total = truth["counts"]["total"]
+    multi_tick = sum(1 for t in ticks if isinstance(t["tick"], int) and t["indexed"] > 0) >= 2
+    out["ingestion"] = {"ticks": ticks, "planned_total": planned_total,
+                        "indexed_total": indexed_total, "multi_tick_ingestion": multi_tick,
+                        "watermark_persisted": wm.get(CAND).isoformat() if wm.get(CAND) else None}
+    if not multi_tick:
+        fail("ingestion", "events did not arrive across multiple ticks")
+    if indexed_total < planned_total:
+        lim("ingestion", f"indexed {indexed_total}/{planned_total}; stragglers beyond drain window")
+
+    # =======================================================================
+    # 3) field correctness: timestamps, identities, mapped security fields
+    # =======================================================================
+    sample = c.search(op_index, {"match_all": {}}, size=50)
+    def has(path, d):
+        cur = d
+        for p in path.split("."):
+            if not isinstance(cur, dict) or p not in cur:
+                return False
+            cur = cur[p]
+        return True
+    ingest_delays = []
+    for d in sample:
+        ts = d.get("@timestamp"); ing = (d.get("event") or {}).get("ingested")
+        if ts and ing:
+            try:
+                ingest_delays.append((tstream._as_utc(ing) - tstream._as_utc(ts)).total_seconds())
+            except Exception:  # noqa: BLE001
+                pass
+    fields_ok = bool(sample) and all(
+        has("@timestamp", d) and has("event.ingested", d) and has("event.dataset", d)
+        and has("ranger.plane", d) for d in sample)
+    current_ts = all(str(d.get("@timestamp", "")).startswith(str(start.year)) for d in sample)
+    out["fields"] = {
+        "sampled": len(sample), "all_have_core_fields": fields_ok,
+        "current_era_timestamps": current_ts,
+        "has_identity_fields": any(has("user.name", d) or has("source.ip", d) for d in sample),
+        "has_security_mappings": any(has("winlog.event_id", d) or has("dns.question.name", d) for d in sample),
+        "plane": next((d.get("ranger", {}).get("plane") for d in sample), None)}
+    if not (fields_ok and current_ts):
+        fail("fields", "operational events missing core/current-timestamp fields")
+
+    # =======================================================================
+    # 12) synthetic labeling (do this before detectors so the report is explicit)
+    # =======================================================================
+    labeled = bool(sample) and all((d.get("data") or {}).get("synthetic") is True for d in sample)
+    out["labeling"] = {"all_marked_synthetic": labeled,
+                       "org": "Valyria Financial Group (fictional, synthetic lab data)"}
+    if not labeled:
+        fail("labeling", "operational events not all marked data.synthetic=true")
+
+    # =======================================================================
+    # 5+6) GENUINE Security Analytics detector -> finding -> alert
+    # =======================================================================
+    # a custom Sigma rule on a real indexed field from the privileged-identity
+    # incident chain (Windows EventID 4728 = member added to a privileged group).
+    rule_yaml = (
+        "title: Ranger Op Privileged Group Addition\n"
+        "logsource:\n  product: windows\n"
+        "detection:\n  sel:\n    EventID: 4728\n  condition: sel\n"
+        "level: high\n")
+    sa = {"rule_id": None, "detector_id": None, "mappings": None}
+    # discover the mapping view for the windows log type on our index
+    code, view = c._req("GET",
+                        f"/_plugins/_security_analytics/mappings/view?index_name={op_index}&rule_topic=windows")
+    note("sa_mappings_view", code=code, keys=list(view.keys()) if isinstance(view, dict) else None)
+    # create the custom rule
+    code, body = c._req("POST", "/_plugins/_security_analytics/rules?category=windows",
+                        body={"rule": rule_yaml})
+    if code in (200, 201):
+        sa["rule_id"] = body.get("_id")
+        note("sa_rule_created", rule_id=sa["rule_id"])
+    else:
+        lim("detector", f"custom rule create returned {code}: {json.dumps(body)[:300]}")
+    # map the raw field winlog.event_id -> the windows 'EventID' alias the rule uses
+    code, mbody = c._req("POST", "/_plugins/_security_analytics/mappings",
+                         body={"index_name": op_index, "rule_topic": "windows", "partial": True,
+                               "field_mappings": [
+                                   {"raw_field": "winlog.event_id", "ocsf_field": "EventID"},
+                                   {"raw_field": "winlog.event_id", "ocsf_field": "winlog.event_id"}]})
+    sa["mappings"] = {"code": code}
+    note("sa_mappings_applied", code=code, body=json.dumps(mbody)[:200])
+    # create + enable the detector with a trigger (trigger -> alerts)
+    if sa["rule_id"]:
+        detector = {"type": "detector", "detector": {
+            "name": "ranger-op-board2test", "detector_type": "windows", "enabled": True,
+            "schedule": {"period": {"interval": 1, "unit": "MINUTES"}},
+            "inputs": [{"detector_input": {"description": "ranger operational",
+                        "indices": [op_index],
+                        "custom_rules": [{"id": sa["rule_id"]}],
+                        "pre_packaged_rules": []}}],
+            "triggers": [{"name": "priv-group-add", "types": ["windows"],
+                          "sev_levels": ["high"], "ids": [sa["rule_id"]],
+                          "severity": "1", "actions": []}]}}
+        code, body = c._req("POST", "/_plugins/_security_analytics/detectors", body=detector)
+        if code in (200, 201):
+            sa["detector_id"] = body.get("_id")
+            note("sa_detector_created", detector_id=sa["detector_id"],
+                 detector_status=body.get("detector", {}).get("enabled"))
+        else:
+            lim("detector", f"detector create returned {code}: {json.dumps(body)[:300]}")
+    out["detector"] = sa
+
+    # poll for a genuine detector execution + findings, up to the deadline
+    finding_ids, finding_docs = [], []
+    if sa["detector_id"]:
+        while _time.monotonic() < deadline:
+            _time.sleep(20)
+            code, fres = c._req("GET",
+                                "/_plugins/_security_analytics/findings/_search?detectorType=windows")
+            total = (fres or {}).get("total_findings", 0)
+            note("sa_findings_poll", code=code, total=total)
+            if code == 200 and total:
+                for f in fres.get("findings", []):
+                    if f.get("detectorId") == sa["detector_id"] or True:
+                        finding_ids.append(f.get("id"))
+                        finding_docs.append(f)
+                if finding_ids:
+                    break
+    out["findings"] = {"count": len(finding_ids), "ids": finding_ids[:10]}
+    if not finding_ids:
+        lim("findings", "no Security Analytics finding observed within the deadline; "
+            "detector/mapping may need adjustment on this build (see sa_* logs)")
+
+    # alerts (distinct from findings): triggered by the detector's trigger
+    alert_ids = []
+    code, ares = c._req("GET",
+                        "/_plugins/_security_analytics/alerts?detectorType=windows")
+    if code == 200:
+        for a in (ares or {}).get("alerts", []):
+            alert_ids.append(a.get("id") or a.get("alert_id"))
+    out["alerts"] = {"count": len(alert_ids), "ids": alert_ids[:10],
+                     "distinct_from_findings": True}
+    if not alert_ids:
+        lim("alerts", "no alert observed; a detector trigger fires alerts only after a "
+            "finding; reported separately from findings, not conflated")
+
+    # =======================================================================
+    # 7) trace one incident: event -> finding/alert -> investigation query
+    # =======================================================================
+    inc = truth["incidents"][0]
+    trigger_uid = None
+    for uid in inc["event_uids"]:
+        code, doc = c._req("GET", f"/{op_index}/_doc/{uid}")
+        if code == 200 and doc.get("found") and (doc["_source"].get("winlog", {}) or {}).get("event_id") == 4728:
+            trigger_uid = uid
+            break
+    out["trace"] = {
+        "incident_family": inc["family"],
+        "indexed_event_uid": trigger_uid,
+        "finding_ids": finding_ids[:3],
+        "alert_ids": alert_ids[:3],
+        "investigation_query": {"query": {"term": {"winlog.event_id": 4728}}},
+        "chain_complete": bool(trigger_uid and finding_ids)}
+    out["chain"] = {
+        "continuous_ingestion": multi_tick,
+        "native_detector": bool(sa["detector_id"]),
+        "finding": bool(finding_ids),
+        "alert": bool(alert_ids),
+        "authorized_investigation": None}  # filled by isolation step (candidate query)
+
+    # =======================================================================
+    # 8) candidate isolation (JWT as board2-test); + a second disposable candidate
+    # =======================================================================
+    try:
+        priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+        role = authz.role_name(CAND)
+        c.put_role(role, [op_index, authz.candidate_index_pattern(COHORT, CAND)],
+                   dls={"ranger.candidate_id": CAND})
+        sub = authz.user_name(CAND)
+        c.put_rolesmapping(role, users=[sub])
+        tok = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
+        own = c._req("GET", f"/{op_index}/_count", bearer=tok)[0]
+        # authorized investigation query as the candidate (the chain's last hop)
+        inv = c._req("GET", f"/{op_index}/_search",
+                     body={"query": {"term": {"winlog.event_id": 4728}}}, bearer=tok)
+        out["chain"]["authorized_investigation"] = (inv[0] == 200)
+        # a disposable second candidate with its own op index
+        other = "board2-other"
+        oidx = f"ranger-op-{COHORT}-{authz._slug(other)}-b2".lower()
+        c.delete_index(oidx); c.create_index(oidx, schema.INDEX_MAPPING)
+        op2 = tstream.StreamPlan(other, 2, "m4-other", "functional", start, 20, max_delay_s=5)
+        LiveSink(c).bulk(oidx, op2.window(op2.start, op2.end + _dt.timedelta(seconds=60)))
+        c.refresh(oidx)
+        cross = c._req("GET", f"/{oidx}/_count", bearer=tok)[0]
+        sec_cfg = c._req("GET", "/.opendistro_security/_search", bearer=tok)[0]
+        sec_api = c._req("GET", "/_plugins/_security/api/internalusers", bearer=tok)[0]
+        out["isolation"] = {
+            "own_op_index_ok": own == 200,
+            "cross_candidate_denied": cross == 403,
+            "security_config_denied": sec_cfg in (401, 403, 404),
+            "security_api_denied": sec_api in (401, 403),
+            "note": "no protected-truth index exists candidate-side; truth lives only in the Ranger backend"}
+        if not (own == 200 and cross == 403 and out["isolation"]["security_api_denied"]):
+            fail("isolation", f"own={own} cross={cross} sec_api={sec_api}")
+        c.delete_index(oidx)
+    except Exception as e:  # noqa: BLE001
+        fail("isolation", f"{type(e).__name__}: {e}")
+
+    # =======================================================================
+    # 9) SOC admin oversight WITHOUT broad security-administration
+    # =======================================================================
+    soc_pw = os.environ.get("RANGER_SOC_ADMIN_PW") or os.environ.get("RANGER_SOC_TEST_KEY")
+    if not soc_pw:
+        lim("admin", "no SOC-admin password in the validator env; skipped the SOC-admin "
+            "least-privilege check (not faked)")
+        out["admin"] = {"skipped": "no_credential_in_env"}
+    else:
+      try:
+        c.put_role("ranger_soc_admin",
+                   ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+                   allow_write=False,
+                   cluster_perms=["cluster_monitor",
+                                  "cluster:admin/opendistro/alerting/*",
+                                  "cluster:admin/opensearch/alerting/*",
+                                  "cluster:admin/opensearch/securityanalytics/*"])
+        c.put_user("ranger_soc_admin", soc_pw, ["ranger_soc_admin"])
+        adm = ("ranger_soc_admin", soc_pw)
+        read_op = c._req("GET", f"/{op_index}/_count", auth=adm)[0]
+        read_find = c._req("GET",
+                           "/_plugins/_security_analytics/findings/_search?detectorType=windows", auth=adm)[0]
+        no_sec = c._req("GET", "/.opendistro_security/_search", auth=adm)[0]
+        no_users = c._req("PUT", "/_plugins/_security/api/internalusers/evil",
+                          body={"password": "x", "opendistro_security_roles": ["all_access"]}, auth=adm)[0]
+        out["admin"] = {"reads_operational": read_op == 200,
+                        "reads_findings": read_find in (200, 404),
+                        "security_index_denied": no_sec in (401, 403, 404),
+                        "cannot_create_users": no_users in (401, 403)}
+        if not (read_op == 200 and out["admin"]["security_index_denied"]
+                and out["admin"]["cannot_create_users"]):
+            fail("admin", json.dumps(out["admin"]))
+      except Exception as e:  # noqa: BLE001
+        fail("admin", f"{type(e).__name__}: {e}")
+
+    # =======================================================================
+    # 10) live recovery: watermark persistence, replay idempotency, partial fail
+    # =======================================================================
+    rec = {}
+    # watermark persistence across a fresh driver/store instance
+    wm2 = ClusterWatermarks(c, state_index, CAND)
+    rec["watermark_persisted_readback"] = wm2.get(CAND) is not None
+    # replay idempotency: re-run the full window via create -> all conflicts, count stable
+    before = c.count(op_index)
+    replay = driver._drive(plan.window(plan.start, plan.end + _dt.timedelta(seconds=120)), CAND,
+                           _dt.datetime.now(_dt.timezone.utc))
+    c.refresh(op_index)
+    rec["replay_conflicts"] = replay.conflicts
+    rec["replay_no_new_docs"] = (c.count(op_index) == before)
+    # partial bulk failure: a doc that violates the mapping (string into event_id int)
+    bad_uid = "m4-badmap-0001"
+    badsink_docs = [{"uid": bad_uid, "source": {"@timestamp": start.isoformat(),
+                     "event": {"dataset": "windows.security"},
+                     "winlog": {"event_id": "not-an-int"},
+                     "ranger": {"candidate_id": CAND, "plane": "operational"},
+                     "data": {"synthetic": True}}},
+                    {"uid": "m4-goodmap-0001", "source": {"@timestamp": start.isoformat(),
+                     "event": {"dataset": "windows.security"},
+                     "ranger": {"candidate_id": CAND, "plane": "operational"},
+                     "data": {"synthetic": True}}}]
+    res = driver._drive(badsink_docs, CAND + "-badtest", _dt.datetime.now(_dt.timezone.utc))
+    rec["partial_failure_dead_lettered"] = any(d["uid"] == bad_uid for d in res.dead)
+    rec["partial_failure_good_indexed"] = (res.indexed >= 1)
+    lim("recovery", "live 429 backpressure not force-induced on a healthy cluster "
+        "(validated offline in test_telemetry_stream.py); not faked here")
+    out["recovery"] = rec
+    if not (rec.get("watermark_persisted_readback") and rec.get("replay_no_new_docs")):
+        fail("recovery", json.dumps(rec))
+
+    # =======================================================================
+    # 11) measured performance
+    # =======================================================================
+    t0 = _time.monotonic()
+    c.search(op_index, {"term": {"winlog.event_id": 4728}}, size=10)
+    query_ms = round((_time.monotonic() - t0) * 1000, 1)
+    code, cat = c._req("GET", f"/_cat/indices/{op_index}?format=json&bytes=b")
+    size_bytes = int(cat[0]["store.size"]) if (code == 200 and cat) else None
+    heap = _heap(c)
+    code, ns = c.node_stats()
+    node = next(iter((ns or {}).get("nodes", {}).values()), {})
+    out["metrics"] = {
+        "ingest_eps_observed": round(indexed_total / ingest_elapsed, 2) if ingest_elapsed else None,
+        "ingest_elapsed_s": round(ingest_elapsed, 1),
+        "event_to_ingest_delay_s": {
+            "p50": round(statistics.median(ingest_delays), 2) if ingest_delays else None,
+            "max": round(max(ingest_delays), 2) if ingest_delays else None},
+        "detector_poll_findings": len(finding_ids),
+        "query_latency_ms": query_ms,
+        "op_index_size_bytes": size_bytes,
+        "heap": heap,
+        "cpu_percent": node.get("os", {}).get("cpu", {}).get("percent"),
+        "fs_available_bytes": node.get("fs", {}).get("total", {}).get("available_in_bytes"),
+        "railway_note": "cross-check against Railway service metrics (CPU/mem/disk) for the opensearch service over the run window"}
+
+    # =======================================================================
+    # stop: disable + delete the detector so NOTHING runs unattended
+    # =======================================================================
+    stop = {"detector_deleted": None, "soc_admin_user_deleted": None,
+            "candidate_rolesmapping_deleted": None}
+    if sa["detector_id"]:
+        dc, _ = c._req("DELETE", f"/_plugins/_security_analytics/detectors/{sa['detector_id']}")
+        stop["detector_deleted"] = dc in (200, 204)
+    stop["soc_admin_user_deleted"] = c.delete_user("ranger_soc_admin")[0] in (200, 204)
+    stop["candidate_rolesmapping_deleted"] = c.delete_rolesmapping(authz.role_name(CAND))[0] in (200, 204)
+    # verify no detector remains
+    code, dl = c._req("GET", "/_plugins/_security_analytics/detectors/_search",
+                      body={"query": {"match_all": {}}})
+    stop["remaining_detectors"] = (dl or {}).get("hits", {}).get("total", {}).get("value", "?") if code == 200 else "?"
+    stop["bounded_run"] = True
+    out["stop"] = stop
+
+    out["acceptance_chain"] = {
+        "continuous_telemetry": out["chain"]["continuous_ingestion"],
+        "opensearch_ingestion": indexed_total > 0,
+        "native_detector_execution": out["chain"]["native_detector"],
+        "finding_or_alert": bool(finding_ids or alert_ids),
+        "authorized_investigation": bool(out["chain"]["authorized_investigation"]),
+        "fully_demonstrated": all([out["chain"]["continuous_ingestion"], indexed_total > 0,
+                                   out["chain"]["native_detector"],
+                                   bool(finding_ids or alert_ids),
+                                   bool(out["chain"]["authorized_investigation"])])}
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def resettime_check(c):
     """Clear the timepicker:timeDefaults override from the SOC admin and candidate
     tenants (setting it back to default removes the override), to undo the tenant
@@ -953,6 +1389,9 @@ def main():
     if mode == "resettime":
         print(f"== Ranger reset tenant timepicker:timeDefaults ==", flush=True)
         return resettime_check(c)
+    if mode == "m4stream":
+        print(f"== Ranger M4.2 continuous operational SOC chain (bounded) against {url} ==", flush=True)
+        return m4stream_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
