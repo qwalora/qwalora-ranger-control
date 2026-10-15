@@ -283,22 +283,54 @@ def dashauth_check(c):
         except Exception as ex:  # noqa: BLE001
             return -1, str(ex)[:160]
 
-    base_hdr = {"osd-xsrf": "true"}
-    out = {"mode": "dashauth", "dashboards": dash, "probes": {}}
-    out["probes"]["no_auth"] = hit(base_hdr)
-    out["probes"]["bearer_header"] = hit({**base_hdr, "Authorization": "Bearer " + token})
-    out["probes"]["url_param"] = hit(base_hdr, qs="?authorization=" + token)
+    def op(path, method="GET", headers=None, body=None):
+        # A real Dashboards operation: the console proxy executes against OpenSearch
+        # as the JWT-authenticated user. This is Discover-equivalent, not just HTML.
+        url = dash + "/api/console/proxy?path=" + path + "&method=" + method
+        data = json.dumps(body).encode() if body is not None else b""
+        req = _u.Request(url, data=data, headers=headers or {}, method="POST")
+        try:
+            with _u.urlopen(req, timeout=30) as r:
+                return r.status, r.read(800).decode(errors="replace")
+        except _e.HTTPError as ex:
+            return ex.code, ex.read(400).decode(errors="replace")
+        except Exception as ex:  # noqa: BLE001
+            return -1, str(ex)[:160]
 
-    na = out["probes"]["no_auth"][0]
-    bh, bh_body = out["probes"]["bearer_header"]
-    up = out["probes"]["url_param"][0]
+    base_hdr = {"osd-xsrf": "osd-fetch"}
+    bearer = {**base_hdr, "Authorization": "Bearer " + token}
+    b_idx = authz.index_name(COHORT, "cand-b", 2)
+    if not c.index_exists(b_idx):
+        c.create_index(b_idx, schema.INDEX_MAPPING)
+        evb, _ = enterprise.generate("cand-b", 2, "dash-b", "A")
+        c.bulk_index(b_idx, evb)
+        c.refresh(b_idx)
+
+    out = {"mode": "dashauth", "dashboards": dash, "probes": {}}
+    out["probes"]["no_auth_account"] = hit(base_hdr)
+    out["probes"]["bearer_account"] = hit(bearer)
+    out["probes"]["url_param_account"] = hit(base_hdr, qs="?authorization=" + token)
+    # real operation: Discover-style search of own index, and of another candidate's
+    out["probes"]["discover_own"] = op(f"{idx}%2F_search", "GET", bearer,
+                                       body={"size": 1, "query": {"match_all": {}}})
+    out["probes"]["discover_cross"] = op(f"{b_idx}%2F_search", "GET", bearer,
+                                         body={"size": 1, "query": {"match_all": {}}})
+
+    na = out["probes"]["no_auth_account"][0]
+    bh, bh_body = out["probes"]["bearer_account"]
+    up = out["probes"]["url_param_account"][0]
+    own_code, own_body = out["probes"]["discover_own"]
+    cross_code, _cb = out["probes"]["discover_cross"]
     out["no_auth_rejected"] = na in (401,)
     out["header_auth_works"] = bh == 200 and (sub in bh_body or "user_name" in bh_body)
     out["url_param_auth_works"] = up == 200
+    out["discover_own_ok"] = own_code == 200 and '"hits"' in own_body
+    out["discover_cross_denied"] = cross_code in (401, 403) or '"status":403' in _cb
     out["recommended_transport"] = (
         "authorization_header" if out["header_auth_works"] else
         ("url_param" if out["url_param_auth_works"] else "undetermined"))
-    out["status"] = "PASS" if (out["no_auth_rejected"] and out["header_auth_works"]) else "WARN"
+    out["status"] = "PASS" if (out["no_auth_rejected"] and out["header_auth_works"]
+                               and out["discover_own_ok"] and out["discover_cross_denied"]) else "WARN"
     print(f"[{out['status']}] dashauth: no_auth={na} bearer={bh} url_param={up} "
           f"transport={out['recommended_transport']}", flush=True)
     print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
