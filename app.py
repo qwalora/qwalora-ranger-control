@@ -190,6 +190,59 @@ def _backfill_cert_ids():
             db.session.commit()
     except Exception:
         db.session.rollback()
+
+
+# Baseline public references, seeded ONLY when the resource table is empty, so
+# the public library is populated and backend-driven from day one. Once an admin
+# adds, edits, or removes anything, the table is no longer empty and this never
+# runs again, so it never overrides curated content. Public + published, real
+# authoritative references (not lab solutions).
+_SEED_RESOURCES = [
+    {"title": "MITRE ATT&CK Enterprise matrix", "rtype": "reference", "topic": "MITRE",
+     "summary": "The tactic and technique taxonomy the program maps every board to.",
+     "url": "https://attack.mitre.org/matrices/enterprise/"},
+    {"title": "SOC alert triage, by MITRE", "rtype": "guide", "topic": "Triage", "board": 1,
+     "role": "soc-analyst", "summary": "Scoping, severity and escalation for an alert queue.",
+     "url": "https://www.cisa.gov/resources-tools/resources/incident-response-training"},
+    {"title": "The ThreatHunting Project", "rtype": "guide", "topic": "Hunting", "board": 2,
+     "role": "threat-hunter", "summary": "A library of hunt hypotheses and the data they need.",
+     "url": "https://github.com/ThreatHuntingProject/ThreatHunting"},
+    {"title": "SigmaHQ detection rules", "rtype": "reference", "topic": "Detection", "board": 3,
+     "role": "detection-engineer", "summary": "Portable, vendor-agnostic detection rule format and rule set.",
+     "url": "https://github.com/SigmaHQ/sigma"},
+    {"title": "Atomic Red Team", "rtype": "dataset-doc", "topic": "Detection", "board": 3,
+     "role": "detection-engineer", "summary": "Small, portable tests mapped to ATT&CK, for exercising detections.",
+     "url": "https://github.com/redcanaryco/atomic-red-team"},
+    {"title": "NIST SP 800-61 Computer Security Incident Handling Guide", "rtype": "whitepaper",
+     "topic": "IR", "board": 4, "role": "incident-responder",
+     "summary": "The incident-response lifecycle and evidence handling the IR board follows.",
+     "url": "https://csrc.nist.gov/pubs/sp/800/61/r2/final"},
+    {"title": "GOAD (Game of Active Directory)", "rtype": "reference", "topic": "Active Directory",
+     "board": 5, "role": "red-teamer", "summary": "The vulnerable AD lab the red-team boards are built on.",
+     "url": "https://github.com/Orange-Cyberdefense/GOAD"},
+    {"title": "LOLBAS project", "rtype": "reference", "topic": "Windows", "board": 1, "role": "soc-analyst",
+     "summary": "Living-off-the-land binaries and scripts attackers abuse on Windows.",
+     "url": "https://lolbas-project.github.io/"},
+    {"title": "Windows security auditing reference", "rtype": "reference", "topic": "Windows", "board": 1,
+     "role": "soc-analyst", "summary": "The Windows event IDs that matter for logon, process and persistence analysis.",
+     "url": "https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/"},
+]
+
+
+def _bootstrap_resources():
+    """Seed baseline public references if the resource library is empty. Only
+    ever runs on a truly empty table, so admin curation is never overridden."""
+    try:
+        if Resource.query.count() > 0:
+            return
+        for r in _SEED_RESOURCES:
+            db.session.add(Resource(
+                title=r["title"], summary=r.get("summary"), rtype=r["rtype"],
+                topic=r.get("topic"), board=r.get("board"), role=r.get("role"),
+                url=r.get("url"), visibility="public", status="published"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 ROLES = list(dict.fromkeys(P.ROLES + [
     "red-teamer", "detection-engineer", "soc-analyst", "incident-responder"]))
 BOARDS = [P.bstr(b["n"]) for b in P.BOARD_PLAN]
@@ -292,6 +345,7 @@ def create_app():
         ensure_schema(db)  # add post-launch columns to an existing DB, idempotent
         _bootstrap_cohorts()  # make sure cohort rows exist and one is active
         _backfill_cert_ids()  # give any pre-existing certified badge a cert_id
+        _bootstrap_resources()  # seed baseline public references if none exist yet
 
     admin_token = os.environ.get("ADMIN_TOKEN")
     # Once GitHub reviewer sign-in is confirmed, set DISABLE_ADMIN_TOKEN=1 to
