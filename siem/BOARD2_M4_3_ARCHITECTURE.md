@@ -392,8 +392,227 @@ scenario.
   build (pre-packaged rules suffice); off-site snapshot bucket for DR (cost review).
 - M3 grader shadow-only; 95% bar unchanged; act-as disabled.
 
+## 15. Ranger Cohort Provisioning & Lifecycle Orchestration (foundational)
+
+Cohorts C, D, E, and beyond must be stood up and torn down by an administrator
+through the existing portal, with no code change, no manual seed assignment, no
+manual OpenSearch configuration, and no developer intervention for routine
+provisioning. This is foundational, not a later manual workaround. It is grounded in
+the existing models: `Cohort` (already has `scheduled|active|completed`, `sequence`,
+auto-advance), `CohortScenarioPlan`, `ScenarioAssignment`, `RangeRequest` (an
+idempotent status/slot-accounting lifecycle analog with broker messages and poll
+timestamps), `AdminUser`, GitHub OAuth identity, `authz`, and `Case`.
+
+### 15.1 Models (extend existing, do not fork)
+
+```
+Cohort (extend):
+  + lifecycle: draft|scheduled|provisioning|validating|active|suspended|retiring|retired
+  + start_at, end_at (schedule), capacity_max (max concurrent analysts)
+  + enterprise_version, board_set (default 1..4)
+  (keeps name, sequence, auto-advance)
+
+ScenarioCatalogEntry (NEW - the validated, versioned catalog; req 2, 13):
+  spec_id, family, enterprise_version, scenario_version
+  profile, difficulty, calibration(json), diversity_axes(json)
+  status: authored|validated|approved|deprecated
+  reuse_policy: {cooldown_cohorts:int, max_concurrent_uses:int}
+  authored_by, validated_at, approved_by, approved_at
+
+CohortScenario (from §5; the per-cohort binding):
+  cohort, board, scenario_version, enterprise_version, spec_id, package_seed,
+  profile, difficulty, calibration, status: draft|active|retiring|retired
+
+CohortMembership (NEW; team membership, req 4/11):
+  cohort, candidate_id, soc_role: analyst|lead|reviewer, added_by, added_at, removed_at
+
+CohortProvisioningJob (NEW; idempotent orchestration, modeled on RangeRequest; req 4,8):
+  cohort, board, kind: provision|suspend|resume|retire|rotate
+  state: queued|running|succeeded|failed|rolling_back|rolled_back
+  steps(json): [{name, status: pending|ok|failed|skipped|rolled_back, detail, attempts}]
+  cursor(int), attempts, last_error, created_by, created_at, updated_at
+```
+
+### 15.2 Administrator lifecycle through the portal (req 1)
+
+Admin actions (portal routes, gated by the new orchestrator capability in §15.7):
+create a cohort (draft), schedule it (start/end, capacity), configure it (board set,
+scenario selection or auto), activate (triggers provisioning), suspend (stop
+ingestion + detectors, keep data), resume, and retire (teardown + reclamation). Each
+action records an audit entry and, where it changes infrastructure, enqueues a
+`CohortProvisioningJob`. No action requires a code change.
+
+### 15.3 Scenario catalog + selection (req 2, 3, 13)
+
+- The catalog holds versioned `ScenarioCatalogEntry` rows. Only `approved` entries are
+  eligible for automated assignment; `authored`/`validated` are not.
+- Promotion pipeline (req 13): author a ScenarioSpec -> `validated` (offline:
+  determinism, difficulty calibration within the board band, diversity-axis coverage,
+  no hidden-truth leakage) -> `approved` (admin sign-off, the only step that unlocks
+  auto-assignment) -> `deprecated` (retired from selection, existing cohorts keep
+  their pinned version).
+- Auto-selection for a new cohort+board (req 3): from `approved` entries, pick one
+  that (a) matches the board difficulty band (parity), (b) differs materially on the
+  diversity axes (§2) from entries used by recent sibling cohorts, (c) satisfies the
+  reuse policy (cohort cooldown + max concurrent uses), (d) is compatible with the
+  cohort `enterprise_version`. Selection is deterministic and logged; an administrator
+  may override with a manual selection. Materially-different-from-siblings is enforced
+  by comparing diversity-axis vectors, not seeds.
+
+### 15.4 Idempotent provisioning workflow (req 4, 5)
+
+A `CohortProvisioningJob` executes ordered, individually idempotent steps under the
+existing `pg_try_advisory_lock` single-run guard (reused from the scheduler). Each
+step is create-if-absent and re-runnable:
+
+1. resolve/validate the selected `ScenarioCatalogEntry` (approved + parity).
+2. create the versioned op index `ranger-op-<cohort>-b<board>-v<N>` (if absent).
+3. apply field mappings (keyword `winlog.event_data.*`, as M4.2 proved necessary).
+4. generate the shared world from (enterprise_version, spec_id, package_seed, profile)
+   and bulk-load it (idempotent via `op_type=create`).
+5. create the least-privilege cohort role `cohort_<cohort>_soc` + rolesmapping +
+   saved-object tenant (if absent).
+6. create native SA detectors on the op index + wire findings/alerts access.
+7. enroll `CohortMembership` rows (analysts/leads from the admin's roster).
+8. run readiness validation (§15.5); only on all-green does the cohort go `active`.
+
+Failure handling (req 8): a failed step records `last_error`, retries with bounded
+backoff up to a cap, then the job goes `failed`; an admin (or policy) triggers
+`rolling_back`, which undoes exactly what this job created (reverse order: drop
+detectors, role, mappings, index, memberships) to a clean state, leaving no partial
+cohort. Every step transition is appended to an audit log. Jobs are resumable: a
+re-run continues from `cursor` and is safe because each step is idempotent.
+
+### 15.5 Pre-activation validation gates (req 5)
+
+Before `validating -> active`: provisioning success (all steps ok), permissions
+(cohort JWT reads its op/findings only; cross-cohort 403; SOC admin read-only; no
+security-index access), detector execution (a synthetic trigger yields a finding, as
+in M4.2), scenario readiness (expected incident families present, calibration vector
+within band, no hidden truth indexed), and resource capacity (heap/CPU/storage within
+the budget for the number of active cohort-versions). A gate failure blocks activation
+and surfaces the reason; nothing half-active is exposed.
+
+### 15.6 Multiple active cohorts + independent lifecycles (req 6, 7, 9)
+
+- Many cohorts active at once; isolation by index pattern + `cohort_<cohort>_soc`
+  role; each cohort's provisioning, suspend/resume, rotation, and retire run
+  independently via their own jobs.
+- Case/investigation binding to an immutable `scenario_version` + concrete `-v<N>`
+  index (from §9); provisioning or rotation never changes an active case's dataset.
+- Capacity + lifecycle management (req 9): cohort `capacity_max` caps concurrent
+  analysts; the active schedule (start/end) drives ingestion start/stop; detectors are
+  created on provision, stopped on suspend/retire; retention keeps a retiring version's
+  index until its bound open cases close; signed evidence records persist in Postgres
+  regardless; resource reclamation deletes retired indices and removes the cohort role
+  once no bound case is open. Reuses the `RangeRequest`-style idle/TTL + reconcile
+  worker pattern already in the scheduler.
+
+### 15.7 Permission separation (req 11)
+
+Three distinct capabilities, enforced server-side and surfaced as separate portal
+areas:
+
+| Capability | Who | Can do |
+|---|---|---|
+| Cohort Orchestrator | provisioning admin | create/schedule/configure/activate/suspend/resume/retire cohorts; promote/approve catalog entries; trigger jobs. Does NOT hold the OpenSearch admin credential (the broker performs OS changes on the job's behalf). |
+| SOC Analyst / Lead / Reviewer | cohort member | read cohort telemetry/findings; triage; investigate; notes/actions; (Lead) own/assign/close; (Reviewer) peer review |
+| SOC Admin | oversight | read-only oversight of operational data + findings (M4.2 least privilege); never telemetry write, never the security index, never provisioning |
+
+The orchestrator can mutate provisioning but not investigate or grade; analysts/leads
+can investigate but not provision; SOC admin is read-only. None can read another
+cohort's data. Qualification grading remains a separate backend path.
+
+### 15.8 Boards 5-6 adapter contract (req 12; not provisioned now)
+
+An abstract `EnvironmentProvisioner` interface decouples lifecycle from substrate:
+
+```
+EnvironmentProvisioner:
+  provision(cohort|candidate, board, spec) -> job
+  validate(target) -> readiness
+  suspend(target) / resume(target)
+  retire(target) -> reclamation
+  status(target)
+```
+
+- `SharedSocProvisioner` (boards 1-4): the OpenSearch implementation in §15.4.
+- `LudusRangeProvisioner` (boards 5-6): a FUTURE implementation over the existing
+  `RangeRequest` seam (per-candidate GOAD ranges, slot accounting, WireGuard). Defined
+  as a contract only; not implemented or provisioned now. Ranger stays the control
+  plane for authz, assignment, evidence, signing, and qualification on all boards.
+
+### 15.9 Preserved invariants (req 10)
+
+Individual qualification assignments (`ScenarioAssignment`), hidden truth (recomputed,
+never indexed), signed evidence (Ed25519), shadow-only enterprise grading, and
+`PASS_BAR = 95.0` are all unchanged by orchestration. Provisioning touches only the
+operational plane and cohort access; it never writes qualification indices, truth, or
+grades.
+
+### 15.10 Worked example - Cohort 2027-C lifecycle (req 14)
+
+1. **Create**: an orchestrator admin creates `2027-C` (draft), schedules it
+   (start 2027-01-05, end 2027-03-01, capacity 20), board set 1-4,
+   `enterprise_version 1`, scenario mode = auto.
+2. **Select**: for board 2, Ranger auto-selects an `approved` catalog entry whose
+   diversity-axis vector differs from the entries used by sibling cohorts C/D/E and
+   whose calibration is within the board-2 parity band and reuse cooldown; it records
+   the choice (e.g., `payroll-fraud-ach-diversion`, scenario_version 1). Admin may
+   override.
+3. **Provision**: activation enqueues a `CohortProvisioningJob`. Steps run idempotently:
+   create `ranger-op-2027-c-b2-v1`, apply mappings, generate + load the shared world,
+   create `cohort_2027-c_soc` role + tenant, create detectors, enroll the analyst
+   roster as `CohortMembership`. A transient detector-create failure retries, then
+   succeeds; every step is audited.
+4. **Validate**: gates pass (isolation: a 2027-C JWT cannot read 2026-A/B; detector
+   fires a synthetic finding; scenario families present; heap/storage within budget).
+   Cohort -> `active`.
+5. **Operate**: enrolled analysts investigate the 2027-C shared SOC (team queue,
+   claims, notes, peer review, closure); each candidate is independently assigned a
+   private qualification case (separate index/seed/world) graded at 95%, untouched by
+   the team work.
+6. **Rotate (optional)**: a refresh publishes `-v2`, validates it, moves the alias for
+   new work; open `-v1` cases stay pinned to `-v1` until they close.
+7. **Retire**: at end of schedule the admin retires 2027-C: a retire job stops
+   ingestion + detectors, sets the version `retiring` (index read-only, kept while any
+   bound case is open), preserves signed evidence, then on no-open-cases deletes the
+   op indices and removes `cohort_2027-c_soc` (reclamation). Qualification results and
+   their signed evidence persist. Audit shows the full lifecycle.
+
+No code change, manual seed assignment, or manual OpenSearch configuration was needed
+at any step.
+
+## 16. Proposed M4.3 implementation milestones (for approval)
+
+Each milestone is independently testable, flag-gated, reversible, and stops for
+review. No candidate access, no act-as, no unattended ingestion, no paid
+infrastructure, no cohort activation until the specific milestone is approved. Offline
+milestones need no cluster; live milestones use the existing Railway services with
+synthetic identities and a bounded, verified-stop run (the M4.2 pattern).
+
+| Milestone | Scope | Primary tests | Infra |
+|---|---|---|---|
+| M4.3.1 Scenario catalog + specs | `ScenarioSpec`, two-layer generator (foundation + spec), `ScenarioCatalogEntry`, calibration + promotion (authored->validated->approved) | determinism; difficulty parity band; diversity-axis coverage; no-truth-leak; only approved are selectable | offline |
+| M4.3.2 Cohort lifecycle + portal + permissions | extend `Cohort`; `CohortMembership`; orchestrator vs analyst vs SOC-admin capabilities; portal CRUD + state machine | state transitions; permission separation; audit entries; no infra side effects | portal only |
+| M4.3.3 Idempotent orchestrator | `CohortProvisioningJob`; step engine (create-if-absent, retry, rollback, resume) under the advisory lock; audit | idempotent re-run; forced step failure -> rollback to clean; resume from cursor; full audit | dry-run + bounded live |
+| M4.3.4 Shared operational plane | cohort index/alias, mappings, `cohort_<cohort>_soc` role, detectors, findings; `TeamInvestigation` + notes/actions + queue; `/case` operational wiring | cohort isolation; team permissions; concurrent-claim 409; finding->case->evidence verify | bounded live, synthetic |
+| M4.3.5 Rotation + retention | versioned rotation, alias cutover, case-version pinning, retiring/retired lifecycle, evidence preservation, reclamation | pinned case never switches dataset; evidence verifies offline after retire; reclamation leaves nothing | bounded live, synthetic |
+| M4.3.6 Auto-selection + multi-cohort | catalog auto-select with diversity + reuse policy; multiple active cohorts; capacity/schedule | two cohorts differ on every axis; cross-cohort isolation; capacity enforced; workload within budget | bounded live, synthetic |
+| M4.3.7 Boards 5-6 adapter contract | `EnvironmentProvisioner` interface + `LudusRangeProvisioner` stub over the `RangeRequest` seam (no provisioning) | contract conformance tests; stub raises not-implemented; no Ludus calls | offline |
+
+Sequencing: 4.3.1 and 4.3.2 first (offline/portal, no infra), then 4.3.3 (orchestrator
+on a synthetic cohort), then 4.3.4 and 4.3.5 (the shared plane + rotation), then 4.3.6
+(auto-selection + multi-cohort), with 4.3.7 as an offline contract stub at any point.
+Continuous shared ingestion stays OFF until its workload+cost plan is separately
+approved.
+
+## Deliverable summary
+
 Deliver for final approval: this revised architecture, the scenario-diversity +
 calibration model (§2), the enterprise continuity model (§3), the SOC team operations
 model (§7), the qualification boundaries (§8), the rotation + case-pinning model (§9),
-the multi-cohort workload (§10), the migration + validation tests (§11), and the
-two-cohort worked example (§12). Implementation begins only after final approval.
+the multi-cohort workload (§10), the migration + validation tests (§11), the
+two-cohort worked example (§12), the cohort provisioning + lifecycle orchestration
+layer (§15), and the proposed M4.3 implementation milestones (§16). Implementation
+begins only after final approval, milestone by milestone.
