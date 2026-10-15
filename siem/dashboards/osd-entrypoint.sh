@@ -12,6 +12,8 @@ cat > "$CFG" <<EOF
 server.host: "0.0.0.0"
 server.port: 5601
 server.name: "ranger-soc"
+server.basePath: "/soc"
+server.rewriteBasePath: true
 opensearch.hosts: ["https://opensearch.railway.internal:9200"]
 opensearch.ssl.verificationMode: full
 opensearch.ssl.certificateAuthorities: ["/usr/share/opensearch-dashboards/config/ranger-ca.pem"]
@@ -21,8 +23,10 @@ opensearch.requestHeadersAllowlist: ["authorization", "securitytenant"]
 opensearch_security.auth.type: "jwt"
 opensearch_security.jwt.url_param: "authorization"
 opensearch_security.jwt.header: "Authorization"
-opensearch_security.jwt.login_endpoint: "/soc/login"
-opensearch_security.multitenancy.enabled: false
+opensearch_security.multitenancy.enabled: true
+opensearch_security.multitenancy.tenants.enable_global: false
+opensearch_security.multitenancy.tenants.enable_private: true
+opensearch_security.multitenancy.tenants.preferred: ["Private"]
 opensearch_security.cookie.secure: false
 opensearch_security.cookie.ttl: 3600000
 opensearch_security.session.ttl: 3600000

@@ -2848,6 +2848,16 @@ def create_app():
         except Exception as e:  # noqa: BLE001
             app.logger.warning("maintenance scheduler not started: %s", e)
 
+    # SOC Dashboards gateway (/soc). Wrapped so a gateway problem never breaks the
+    # control plane. Only active when its env (OpenSearch/JWT) is configured.
+    if os.environ.get("RANGER_JWT_PRIVATE_B64") and os.environ.get("OPENSEARCH_ADMIN_PASSWORD"):
+        try:
+            import soc_gateway
+            soc_gateway.register(app, Candidate, db)
+            app.logger.info("SOC gateway registered at /soc")
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("SOC gateway not registered: %s", e)
+
     return app
 
 

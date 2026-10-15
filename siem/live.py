@@ -141,7 +141,7 @@ class LiveCluster:
 
     # --- security API (admin) -------------------------------------------
     def put_role(self, name, index_patterns, dls=None, allow_write=False,
-                 cluster_perms=None):
+                 cluster_perms=None, tenant_permissions=None):
         actions = ["read", "search", "indices:data/read/*", "indices:admin/mappings/get"]
         if allow_write:
             actions += ["write", "indices:data/write/*", "indices:admin/create"]
@@ -150,7 +150,8 @@ class LiveCluster:
             field, val = next(iter(dls.items()))
             perm["dls"] = json.dumps({"term": {field: val}})
         role = {"cluster_permissions": cluster_perms or [],
-                "index_permissions": [perm]}
+                "index_permissions": [perm],
+                "tenant_permissions": tenant_permissions or []}
         code, body = self._req("PUT", f"/_plugins/_security/api/roles/{name}", body=role)
         if code not in (200, 201):
             raise LiveError(f"put_role {name}: {code} {body}")
