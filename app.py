@@ -21,7 +21,13 @@ the human-review surface and the Ludus provisioning queue.
 import datetime as _dt
 import functools
 import hashlib
+import json as _json
 import os
+
+try:
+    import markdown as _markdown
+except Exception:  # markdown is optional; fall back to escaped <pre>
+    _markdown = None
 import secrets
 import urllib.parse
 
@@ -247,6 +253,26 @@ def _bootstrap_resources():
                 source_attribution=e.get("source_attribution"),
                 last_reviewed=None,  # drafts carry no review date until reviewed
                 visibility="public", status="draft"))  # draft -> not publicly shown
+            added += 1
+        for e in getattr(catalog, "PUBLICATIONS", []):
+            if e["slug"] in have:
+                continue
+            db.session.add(Resource(
+                slug=e["slug"], title=e["title"], summary=e.get("summary"),
+                rtype=e.get("rtype", "research-publication"), category=e.get("category"),
+                topic=e.get("topic"), level=e.get("level"), publisher=e.get("publisher"),
+                prereqs=e.get("prereqs"), board=e.get("board"), role=e.get("role"),
+                url=e.get("url"), image=e.get("image"), body=e.get("body"),
+                source_attribution=e.get("source_attribution"),
+                pub_id=e.get("pub_id"), maturity=e.get("maturity"),
+                pub_type=e.get("pub_type"), collection=e.get("collection"),
+                version=e.get("version"), related=e.get("related"),
+                artifacts=_json.dumps(e["artifacts"]) if e.get("artifacts") else None,
+                refs=_json.dumps(e["refs"]) if e.get("refs") else None,
+                verification=_json.dumps(e["verification"]) if e.get("verification") else None,
+                last_reviewed=None,         # no review date until a reviewer approves
+                visibility="public",        # becomes publicly visible only when published
+                status="draft"))            # NOT auto-approved: a reviewer publishes it
             added += 1
         if added:
             db.session.commit()
@@ -1678,11 +1704,15 @@ def create_app():
                         "topic": r.topic, "board": r.board,
                         "role_title": (P.ROLE_TITLES.get(r.role, r.role) if r.role else None),
                         "cohort": r.cohort, "visibility": r.visibility,
+                        "pub_id": r.pub_id,
+                        "maturity_label": (catalog.MATURITY_LABELS.get(r.maturity) if r.maturity else None),
                         "status": r.status, "url": r.url} for r in rows],
               "edit": edit,
               "rtypes": [(t, catalog.TYPE_LABELS[t]) for t in Resource.RTYPES],
               "categories": [(c, catalog.CATEGORY_LABELS[c]) for c in Resource.CATEGORIES],
               "levels": [(l, catalog.LEVEL_LABELS[l]) for l in Resource.LEVELS],
+              "maturities": [(m, catalog.MATURITY_LABELS[m]) for m in Resource.MATURITIES],
+              "pub_types": [(t, catalog.PUB_TYPE_LABELS[t]) for t in Resource.PUB_TYPES],
               "visibilities": Resource.VISIBILITIES,
               "roles": [(s, P.ROLE_TITLES.get(s, s)) for s in P.ROLES],
               "boards": [(b["n"], P.badge_for(b["n"])[1]) for b in P.BOARD_PLAN],
@@ -1719,6 +1749,23 @@ def create_app():
         r.status = "published" if request.form.get("status") == "published" else "draft"
         r.url = (request.form.get("url") or "").strip() or None
         r.body = (request.form.get("body") or "").strip() or None
+        # Research-publication fields (optional; present only for QR-RES-* items).
+        r.pub_id = (request.form.get("pub_id") or "").strip() or None
+        r.maturity = request.form.get("maturity") if request.form.get("maturity") in Resource.MATURITIES else (r.maturity or None)
+        r.pub_type = request.form.get("pub_type") if request.form.get("pub_type") in Resource.PUB_TYPES else (r.pub_type or None)
+        r.collection = (request.form.get("collection") or "").strip() or None
+        r.version = (request.form.get("version") or "").strip() or None
+        r.related = (request.form.get("related") or "").strip() or None
+        for fld in ("artifacts", "refs"):
+            raw = (request.form.get(fld) or "").strip()
+            if raw == "":
+                setattr(r, fld, None)
+            else:
+                try:   # keep only well-formed JSON; leave prior value on parse error
+                    _json.loads(raw)
+                    setattr(r, fld, raw)
+                except Exception:
+                    pass
         db.session.commit()
         return redirect(url_for("admin_resources"))
 
@@ -2153,6 +2200,10 @@ def create_app():
         d["category_short"] = catalog.CATEGORY_SHORT.get(r.category, r.category)
         d["type_label"] = catalog.TYPE_LABELS.get(r.rtype, r.rtype)
         d["level_label"] = catalog.LEVEL_LABELS.get(r.level, r.level)
+        # Publication metadata (present only on QR-RES-* research publications).
+        d["maturity_label"] = catalog.MATURITY_LABELS.get(r.maturity) if r.maturity else None
+        d["pub_type_label"] = catalog.PUB_TYPE_LABELS.get(r.pub_type) if r.pub_type else None
+        d["is_publication"] = bool(r.pub_id)
         d["tags"] = _topics_of(r)
         d["updated"] = _iso(d.pop("updated_at"))
         return d
@@ -2239,6 +2290,72 @@ def create_app():
             resp.headers["Vary"] = "Origin"
         resp.headers["Cache-Control"] = "public, max-age=%d" % PUBLIC_API_MAXAGE
         return resp
+
+    def _published_public_by_slug(slug):
+        """One published + public resource by slug, or None. The only resource a
+        public article request may ever resolve: draft/candidate/restricted items
+        and their bodies are never served here."""
+        if not slug:
+            return None
+        return Resource.query.filter_by(slug=slug, status="published",
+                                        visibility="public").first()
+
+    def _render_markdown(text):
+        """Render Qwalora-authored article markdown to HTML. The body is our own
+        trusted content (never user-submitted), so tables and fenced code are
+        enabled. Falls back to an escaped block if markdown is unavailable."""
+        if not text:
+            return ""
+        if _markdown is None:
+            from markupsafe import escape
+            return "<pre>%s</pre>" % escape(text)
+        return _markdown.markdown(text, extensions=["tables", "fenced_code", "toc"])
+
+    def _article_row(r):
+        """Full public-safe article projection with display labels."""
+        d = r.article_view()
+        d["body_html"] = _render_markdown(r.body)
+        d["role_title"] = P.ROLE_TITLES.get(r.role, r.role) if r.role else None
+        d["board_label"] = _board_label(r.board)
+        d["category_label"] = catalog.CATEGORY_LABELS.get(r.category, r.category)
+        d["type_label"] = catalog.TYPE_LABELS.get(r.rtype, r.rtype)
+        d["level_label"] = catalog.LEVEL_LABELS.get(r.level, r.level)
+        d["maturity_label"] = catalog.MATURITY_LABELS.get(r.maturity) if r.maturity else None
+        d["pub_type_label"] = catalog.PUB_TYPE_LABELS.get(r.pub_type) if r.pub_type else None
+        d["tags"] = _topics_of(r)
+        d["updated"] = _iso(d.pop("updated_at"))
+        return d
+
+    @app.get("/resources/<slug>.json")
+    def resource_article_json(slug):
+        """Public JSON for one internal publication page. Published + public
+        only; 404 for anything else (including a draft under technical review).
+        CORS restricted to the public-site origin allowlist."""
+        r = _published_public_by_slug(slug)
+        if r is None:
+            resp = jsonify(error="not found"), 404
+            return resp
+        resp = jsonify(_article_row(r))
+        origin = request.headers.get("Origin")
+        if origin in PUBLIC_API_ORIGINS:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            resp.headers["Vary"] = "Origin"
+        resp.headers["Cache-Control"] = "public, max-age=%d" % PUBLIC_API_MAXAGE
+        return resp
+
+    @app.get("/resources/<slug>")
+    def resource_article(slug):
+        """Portal-rendered internal publication page (canonical on the control
+        plane; the public site mirrors it at ranger.qwalora.com/resources/<slug>).
+        Published + public only."""
+        r = _published_public_by_slug(slug)
+        if r is None:
+            return render_template("resources_public.html",
+                                   vm={"rows": [], "facets": _resource_facets(),
+                                       "active": {}, "count": 0,
+                                       "not_found_slug": slug}), 404
+        return render_template("resource_article.html", a=_article_row(r))
 
     def _candidate_resources(c, limit=8):
         """Resources a signed-in ranger may see for their current board/role:

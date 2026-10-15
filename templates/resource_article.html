@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}{{ a.title }} · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <a class="btn btn-ghost btn-pill" href="/resources">{{ ic('arrow-left','ic ic-sm') }} Resource library</a>
+  </div></header>
+
+  <article class="art-wrap">
+    <div class="art-head">
+      <div class="art-eyebrow">
+        {% if a.pub_id %}<span class="art-pid mono">{{ a.pub_id }}</span>{% endif %}
+        {% if a.collection %}<span class="art-coll">{{ a.collection }}</span>{% endif %}
+      </div>
+      <h1 class="art-h1">{{ a.title }}</h1>
+      <div class="art-meta">
+        {% if a.pub_type_label %}<span class="art-chip art-chip-type">{{ a.pub_type_label }}</span>{% endif %}
+        {% if a.maturity_label %}<span class="art-chip art-chip-mat">{{ a.maturity_label }}</span>{% endif %}
+        {% if a.version %}<span class="art-chip">v{{ a.version }}</span>{% endif %}
+        {% if a.level_label %}<span class="art-chip">{{ a.level_label }}</span>{% endif %}
+        {% if a.board_label %}<span class="art-chip">{{ a.board_label }}</span>{% endif %}
+      </div>
+      <div class="art-by">
+        {% if a.publisher %}<span>{{ a.publisher }}</span>{% endif %}
+        {% if a.last_reviewed %}<span>Reviewed {{ a.last_reviewed }}</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="art-body md">{{ a.body_html | safe }}</div>
+
+    {% if a.artifacts %}
+    <section class="art-sec">
+      <h2 class="art-h2">Engineering artifacts</h2>
+      <ul class="art-links">
+        {% for x in a.artifacts %}
+        <li><a href="{{ x.url }}" target="_blank" rel="noopener">{{ ic('file','ic ic-sm') }} {{ x.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if a.verification %}
+    <section class="art-sec">
+      <h2 class="art-h2">Verification record</h2>
+      <div class="art-verif mono">
+        <div><span>status</span>{{ a.verification.execution.status }} · {{ a.verification.execution.environment }}</div>
+        <div><span>source commit</span>{{ a.verification.execution.source_commit }}</div>
+        <div><span>tests</span>{{ a.verification.tests.passed }}/{{ a.verification.tests.total }} passed (exit {{ a.verification.tests.pytest_exit_code }})</div>
+        <div><span>scenarios</span>{{ a.verification.scenarios.verdict_matches_requirement }}/{{ a.verification.scenarios.count }} match requirement</div>
+        <div><span>independent</span>{{ a.verification.independent_verification.method }}</div>
+        <div><span>trust boundary</span>{{ a.verification.independent_verification.trust_boundary }}</div>
+        <div><span>review</span>{{ a.verification.review.technical_status }}{% if not a.verification.review.approved_by %} · not self-approved{% endif %}</div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if a.refs %}
+    <section class="art-sec">
+      <h2 class="art-h2">References</h2>
+      <ul class="art-links">
+        {% for x in a.refs %}
+        <li><a href="{{ x.url }}" target="_blank" rel="noopener">{{ ic('ext','ic ic-sm') }} {{ x.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <div class="art-foot">
+      <a class="btn btn-ghost btn-pill" href="/resources">{{ ic('arrow-left','ic ic-sm') }} Return to Resources</a>
+    </div>
+  </article>
+</div>
+{% endblock %}

@@ -23,8 +23,8 @@
         <div class="co-row" style="grid-template-columns:1.9fr 1.1fr 1fr auto auto">
           <div class="co-id"><b>{{ r.title }}</b><span class="mono dim">{{ r.type_label }}{% if r.level %} · {{ r.level }}{% endif %}{% if r.publisher %} · {{ r.publisher }}{% endif %}</span></div>
           <div class="co-id">
-            <span class="mono dim">{% if r.category_label %}{{ r.category_label }}{% else %}uncategorized{% endif %}</span>
-            <span class="mono dim">{% if r.board %}Board {{ r.board }}{% endif %}{% if r.role_title %} · {{ r.role_title }}{% endif %}</span>
+            <span class="mono dim">{% if r.pub_id %}{{ r.pub_id }}{% elif r.category_label %}{{ r.category_label }}{% else %}uncategorized{% endif %}</span>
+            <span class="mono dim">{% if r.maturity_label %}{{ r.maturity_label }}{% elif r.board %}Board {{ r.board }}{% endif %}{% if r.role_title %} · {{ r.role_title }}{% endif %}</span>
           </div>
           <div>
             <span class="pill {% if r.visibility=='public' %}pill-ok{% elif r.visibility=='candidate' %}pill-violet{% else %}pill{% endif %}"><span class="dot {% if r.visibility=='public' %}dot-ok{% elif r.visibility=='candidate' %}dot-violet{% else %}dot{% endif %}"></span>{{ r.visibility }}</span>
@@ -92,6 +92,23 @@
               <option value="published" {% if vm.edit and vm.edit.status=='published' %}selected{% endif %}>published</option>
             </select>
           </div>
+          <div class="eyebrow" style="margin-top:14px"><span class="d"></span>Research publication (QR-RES-*) — leave blank for a plain reference</div>
+          <div class="res-frow" style="margin-top:8px">
+            <input class="input" name="pub_id" placeholder="Publication ID (e.g. QR-RES-002)" value="{{ vm.edit.pub_id or '' if vm.edit else '' }}" style="max-width:220px">
+            <input class="input" name="version" placeholder="Version (e.g. 1.0.0)" value="{{ vm.edit.version or '' if vm.edit else '' }}" style="max-width:160px">
+            <select class="input" name="pub_type">
+              <option value="">Publication type…</option>
+              {% for t, lbl in vm.pub_types %}<option value="{{ t }}" {% if vm.edit and vm.edit.pub_type==t %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+            <select class="input" name="maturity">
+              <option value="">Maturity…</option>
+              {% for m, lbl in vm.maturities %}<option value="{{ m }}" {% if vm.edit and vm.edit.maturity==m %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+            </select>
+          </div>
+          <input class="input" name="collection" placeholder="Research collection (e.g. A. Adversarial Verification & Evidence Integrity)" value="{{ vm.edit.collection or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
+          <input class="input" name="related" placeholder="Related publication IDs (comma-separated)" value="{{ vm.edit.related or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
+          <textarea class="input" name="artifacts" placeholder='Artifacts JSON: [{"label":"Source","url":"https://…"}]' style="width:100%;margin-top:8px;min-height:60px">{{ vm.edit.artifacts or '' if vm.edit else '' }}</textarea>
+          <textarea class="input" name="refs" placeholder='References JSON: [{"label":"NIST SP 800-115","url":"https://…"}]' style="width:100%;margin-top:8px;min-height:60px">{{ vm.edit.refs or '' if vm.edit else '' }}</textarea>
           <input class="input" name="source_attribution" placeholder="Source attribution / credit line" value="{{ vm.edit.source_attribution or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
           <input class="input" name="url" placeholder="Link (https://…) — external resource" value="{{ vm.edit.url or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">
           <input class="input" name="image" placeholder="Image path/URL (optional real source image)" value="{{ vm.edit.image or '' if vm.edit else '' }}" style="width:100%;margin-top:8px">

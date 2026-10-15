@@ -53,6 +53,20 @@ LEVEL_LABELS = {
     "advanced": "Advanced", "research": "Research",
 }
 
+# Research-publication maturity (how far the research itself has progressed).
+MATURITY_LABELS = {
+    "draft": "Draft", "implemented": "Implemented", "executed": "Executed",
+    "independently-checked": "Independently Checked", "technical-review": "Technical Review",
+    "approved": "Approved for Publication", "published": "Published", "superseded": "Superseded",
+}
+# Evidence maturity of a publication's claim.
+PUB_TYPE_LABELS = {
+    "verified-research": "Verified Research",
+    "evaluated-artifact": "Evaluated Engineering Artifact",
+    "technical-methodology": "Technical Methodology",
+    "research-in-progress": "Research in Progress",
+}
+
 REVIEWED = "2026-10-14"  # technical review date for the verified external catalog
 
 # --- 40 external references, 8 categories, five or more per category ---------
@@ -865,3 +879,204 @@ workflow.
 """,
     },
 ]
+
+
+# --- Original research portfolio (QR-RES-*) ---------------------------------
+# Internal Qwalora research publications. Each leads to a substantive on-site
+# article (body below); external standards appear only as references. These are
+# inserted with status="draft" (not public) and maturity reflecting how far the
+# work has actually progressed. They are NEVER auto-approved: an authorized
+# reviewer promotes a publication to status="published" in the admin.
+_REPO = "https://github.com/qwalora/qwalora-cyber-range/tree/main/research"
+_RAW = "https://github.com/qwalora/qwalora-cyber-range/blob/main/research"
+
+QR_RES_002_VERIFICATION = {
+    "publication_id": "QR-RES-002", "version": "1.0.0",
+    "execution": {
+        "status": "executed",
+        "environment": "Linux / Python 3.13.16 (single cloud container)",
+        "host_note": "target and verifier are separate OS processes on 127.0.0.1",
+        "source_commit": "0b997a06f830d59b7c82c6938ddd5ed5da23f03d",
+        "started_at": "2026-10-15T03:26:07Z", "completed_at": "2026-10-15T03:26:09Z",
+    },
+    "tests": {"total": 26, "passed": 26, "failed": 0, "inconclusive": 0, "pytest_exit_code": 0},
+    "scenarios": {"count": 11, "verdict_matches_requirement": 11,
+                  "verdict_tally": {"PASS": 2, "FAIL": 8, "INCONCLUSIVE": 1}},
+    "independent_verification": {
+        "performed": True,
+        "verifier": "separate verifier process with its own Ed25519 key",
+        "method": "verifier-generated run_id+nonce, active loopback probing, "
+                  "signature + run-binding + replay intake checks; verdicts a pure "
+                  "function of (requirement, observations)",
+        "trust_boundary": "process isolation on one host (key never leaves the verifier "
+                          "process); NOT container/VM isolation against a host-privileged target",
+    },
+    "review": {"technical_status": "pending_technical_review",
+               "approved_by": None, "approved_at": None,
+               "note": "Produced and executed by Claude. Independent human technical "
+                       "review and publication approval required; not self-approved."},
+}
+
+PUBLICATIONS = [
+    {
+        "pub_id": "QR-RES-002",
+        "slug": "adversarial-authorization-and-evidence-verification",
+        "title": "Adversarial Authorization and Evidence Verification",
+        "category": "frameworks", "rtype": "research-publication", "level": "research",
+        "pub_type": "evaluated-artifact",
+        "collection": "A. Adversarial Verification & Evidence Integrity",
+        "version": "1.0.0", "maturity": "technical-review",
+        "publisher": "Qwalora LLC, Ranger research practice",
+        "topic": "Authorization, Evidence integrity, Verification, ATT&CK T1078",
+        "board": 1, "role": "detection-engineer",
+        "source_attribution": "Qwalora LLC, Ranger research practice",
+        "related": "QR-RES-001,QR-RES-003,QR-RES-017",
+        "artifacts": [
+            {"label": "Source (target, verifier, evidence)", "url": _REPO + "/QR-RES-002/qr_res_002"},
+            {"label": "Test suite", "url": _REPO + "/QR-RES-002/tests"},
+            {"label": "Verification record", "url": _RAW + "/QR-RES-002/evidence/verification.json"},
+            {"label": "Recorded observations", "url": _RAW + "/QR-RES-002/evidence/scenarios.json"},
+            {"label": "Evidence manifest (sha256)", "url": _RAW + "/QR-RES-002/evidence/manifest.sha256"},
+            {"label": "Reproduction instructions (README)", "url": _RAW + "/QR-RES-002/README.md"},
+        ],
+        "refs": [
+            {"label": "MITRE ATT&CK T1078: Valid Accounts", "url": "https://attack.mitre.org/techniques/T1078/"},
+            {"label": "OWASP API Security Top 10: Broken Object Level Authorization",
+             "url": "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"},
+            {"label": "NIST SP 800-115: Technical Guide to Information Security Testing",
+             "url": "https://csrc.nist.gov/pubs/sp/800/115/final"},
+            {"label": "RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519)",
+             "url": "https://www.rfc-editor.org/rfc/rfc8032"},
+        ],
+        "verification": QR_RES_002_VERIFICATION,
+        "summary": "An independent, out-of-process verifier probes a target application and adjudicates "
+        "eleven authorization and evidence-integrity conditions from observed behavior, not from the "
+        "target's self-report. Verdicts are a pure function of (requirement, observations); evidence is "
+        "signature-, run-, and replay-protected. The reference run recorded 26 of 26 tests passing and "
+        "11 of 11 verdicts matching the security requirement, with an honest process-isolation trust "
+        "boundary. An evaluated engineering artifact, pending independent technical review.",
+        "body": r"""## Technical abstract
+
+A competence assessment that trusts a candidate's own claims about their own system
+is unfalsifiable. This work builds a target application and an independent verifier
+that runs in a separate process, generates its own signing key, actively probes the
+target, and decides PASS, FAIL, or INCONCLUSIVE for eleven authorization and
+evidence-integrity conditions from what it observes. Verdicts never read the scenario
+label. Evidence is bound to the assessment run and protected against tampering and
+replay. The reference run recorded 26 of 26 automated tests passing and 11 of 11
+verdicts matching the stated security requirement.
+
+## Threat model and engineering objective
+
+Decide, from outside the target, whether an authorization requirement was actually
+enforced, and whether the evidence of that decision can be trusted. The adversary is
+the target itself: it may be misconfigured, buggy, or actively dishonest, and it may
+attempt to submit evidence from another run, alter signed evidence, or replay stale
+evidence. Behavior classes map to MITRE ATT&CK T1078 (valid/spoofed accounts) and the
+OWASP BOLA class (broken object-level authorization).
+
+## System topology
+
+Two processes on one host. The target binds a loopback port; the verifier runs
+separately and reaches the target only over `http://127.0.0.1:<port>`. The verifier
+generates an Ed25519 keypair in its own memory; the private key is never serialized
+or transmitted.
+
+## Environment specifications
+
+- Python 3.11+ (reference run on 3.13.16), standard library plus `cryptography` and `pytest`.
+- No external network beyond loopback. No Docker required for this artifact.
+- Deterministic: the harness launches and tears down the target per scenario.
+
+## Exact experiment commands
+
+```
+pip install cryptography pytest
+python run_experiment.py     # runs tests + all scenarios, writes evidence/
+python -m pytest -v          # tests only
+```
+
+## Adversarial scenarios
+
+| Case | Security condition | Required verdict |
+|------|--------------------|------------------|
+| AV-01 | Correct authorization | PASS |
+| AV-02 | Anonymous access to protected data | FAIL |
+| AV-03 | Cross-user object access (BOLA) | FAIL |
+| AV-04 | Spoofed administrative authority | FAIL |
+| AV-05 | Protection removed during the observation interval | FAIL |
+| AV-06 | Sensitive data in an error response | FAIL |
+| AV-07 | Evidence submitted from the wrong run | FAIL (rejected) |
+| AV-08 | Signed evidence changed after signing | FAIL (rejected) |
+| AV-09 | Valid but stale evidence replayed | FAIL (rejected) |
+| AV-10 | Alternative valid implementation (404 resource-hiding) | PASS |
+| AV-11 | Critical observations unavailable | INCONCLUSIVE |
+
+The adjudicator receives only `(requirement, observations)`. It never sees the scenario
+id or the expected verdict, so a verdict cannot be hardcoded to a scenario name. An
+explicit anti-hardcoding test runs the AV-02 requirement against a correct target and
+asserts the verdict flips to PASS, proving verdicts track observed behavior.
+
+## Detection and telemetry analysis
+
+Each requirement is decided from concrete observations: HTTP status, response body, and
+whether protected object data was disclosed. AV-05 samples the protected object across
+the observation interval and fails if any probe within the window saw data without
+authentication. AV-06 fails if a known secret marker appears in any error body. AV-10
+accepts a 404 resource-hiding denial as satisfying the no-disclosure requirement,
+showing the verdict keys on the security property rather than a specific status code.
+
+## Defensive implementation (evidence intake)
+
+Evidence counts only after three ordered checks: Ed25519 signature over a canonical
+serialization using the verifier's own key; run binding to this run's `run_id` and
+unpredictable `nonce` (defeats cross-run submission); and freshness by unique
+`evidence_id` (defeats replay). Missing critical observations yield INCONCLUSIVE, never
+a silent PASS.
+
+## Verification evidence
+
+The orchestrator records, under `evidence/`: the real pytest output and exit code,
+per-scenario observations and verdicts, the verifier-signed evidence records, a sha256
+manifest over artifacts and source modules, and a machine-readable verification record
+anchored to the source commit. An independent re-check confirmed all eleven signatures
+valid, all eleven manifest hashes matched, and that a one-byte mutation invalidates the
+signature.
+
+## Measured results (reference run)
+
+- Tests: 26 of 26 passed, pytest exit code 0.
+- Scenario verdicts: 11 of 11 match the security requirement (PASS 2, FAIL 8, INCONCLUSIVE 1).
+- Source commit: `0b997a06f830d59b7c82c6938ddd5ed5da23f03d`.
+- Environment: Linux / Python 3.13.16, single cloud container.
+
+## Failure analysis, limitations, and threats to validity
+
+- **Trust boundary is process isolation, not VM or container isolation.** The verifier's
+  private key never leaves its process, which defeats HTTP-level misbehavior, tampering,
+  and replay. It does not defeat a target with same-user host access that could read the
+  verifier's memory. Container or VM isolation with network and privilege boundaries is
+  proposed follow-up and was **not executed**: this environment has no running Docker daemon.
+- **Determinism, not statistics.** Eleven deterministic scenarios demonstrate specific
+  conditions; no false-positive or false-negative rate over a population is claimed.
+  QR-RES-005 is the benchmark that would measure rates.
+- **Synthetic data only.** No real credentials, users, or production systems are involved.
+
+## Conclusions
+
+An out-of-process verifier can correctly adjudicate the eleven authorization and
+evidence-integrity conditions from observed behavior, and the evidence it emits is
+signature-, run-, and replay-protected under a documented process boundary. Stronger
+independence (host-privileged adversary resistance) and measured detection rates remain
+future work. This publication is an evaluated engineering artifact pending independent
+technical review; it is not self-approved.
+
+## References
+
+See the linked standards: MITRE ATT&CK T1078, OWASP API Security BOLA, NIST SP 800-115,
+and RFC 8032 (Ed25519). Source, tests, the verification record, recorded observations,
+and the evidence manifest are linked as artifacts above.
+""",
+    },
+]
+

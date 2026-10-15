@@ -71,6 +71,16 @@ def ensure_schema(db):
             ("image", "VARCHAR(300)"),
             ("source_attribution", "VARCHAR(300)"),
             ("last_reviewed", "DATE"),
+            # Original-research publication fields (QR-RES-* portfolio).
+            ("pub_id", "VARCHAR(40)"),
+            ("maturity", "VARCHAR(30)"),
+            ("pub_type", "VARCHAR(40)"),
+            ("collection", "VARCHAR(80)"),
+            ("version", "VARCHAR(20)"),
+            ("verification", "TEXT"),
+            ("artifacts", "TEXT"),
+            ("refs", "TEXT"),
+            ("related", "VARCHAR(200)"),
         ],
     }
     insp = _inspect(db.engine)
@@ -357,6 +367,17 @@ class Resource(db.Model):
     image = db.Column(db.String(300), nullable=True)     # optional real source image (path/url)
     source_attribution = db.Column(db.String(300), nullable=True)  # credit line for the source
     last_reviewed = db.Column(db.Date, nullable=True)    # technical review date (never fabricated)
+    # Original-research publication fields. Present only on QR-RES-* publications;
+    # null on ordinary external-reference rows.
+    pub_id = db.Column(db.String(40), nullable=True, index=True)   # e.g. QR-RES-002
+    maturity = db.Column(db.String(30), nullable=True)   # one of MATURITIES
+    pub_type = db.Column(db.String(40), nullable=True)   # one of PUB_TYPES
+    collection = db.Column(db.String(80), nullable=True) # research collection label
+    version = db.Column(db.String(20), nullable=True)    # e.g. 1.0.0
+    verification = db.Column(db.Text, nullable=True)     # JSON: machine-readable verification record
+    artifacts = db.Column(db.Text, nullable=True)        # JSON: [{label,url}] source/tests/manifest/results
+    refs = db.Column(db.Text, nullable=True)             # JSON: [{label,url}] authoritative external references
+    related = db.Column(db.String(200), nullable=True)   # comma-separated related pub_ids
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -371,6 +392,42 @@ class Resource(db.Model):
     LEVELS = ("foundational", "intermediate", "advanced", "research")
     VISIBILITIES = ("public", "candidate", "restricted")
     STATUSES = ("draft", "published")
+    # Research publication maturity (research maturity is distinct from the
+    # publish gate: `status` controls public visibility, `maturity` records how
+    # far the research itself has progressed). A publication reaches the public
+    # surface only when an authorized reviewer sets status="published"; Claude's
+    # own work is never auto-approved.
+    MATURITIES = ("draft", "implemented", "executed", "independently-checked",
+                  "technical-review", "approved", "published", "superseded")
+    # Evidence maturity of the claim a publication makes.
+    PUB_TYPES = ("verified-research", "evaluated-artifact", "technical-methodology",
+                 "research-in-progress")
+
+    def article_view(self):
+        """Full projection for an internal publication page. Only ever returned
+        by the single-article endpoint for a published + public resource, so the
+        body and research metadata are safe to expose here."""
+        import json as _json
+        def _loads(s, default):
+            if not s:
+                return default
+            try:
+                return _json.loads(s)
+            except Exception:
+                return default
+        base = self.public_view()
+        base.update({
+            "body": self.body,
+            "pub_id": self.pub_id, "maturity": self.maturity,
+            "pub_type": self.pub_type, "collection": self.collection,
+            "version": self.version,
+            "verification": _loads(self.verification, None),
+            "artifacts": _loads(self.artifacts, []),
+            "refs": _loads(self.refs, []),
+            "related": [x.strip() for x in (self.related or "").split(",") if x.strip()],
+            "created_at": (self.created_at.isoformat() if self.created_at else None),
+        })
+        return base
 
     def public_view(self):
         """Safe projection for public/candidate surfaces. Never includes the
@@ -382,6 +439,9 @@ class Resource(db.Model):
                 "url": self.url, "image": self.image,
                 "source_attribution": self.source_attribution,
                 "has_article": bool(self.body),
+                "pub_id": self.pub_id, "maturity": self.maturity,
+                "pub_type": self.pub_type, "collection": self.collection,
+                "version": self.version,
                 "last_reviewed": (self.last_reviewed.isoformat() if self.last_reviewed else None),
                 "updated_at": (self.updated_at or self.created_at)}
 
