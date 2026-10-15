@@ -67,14 +67,70 @@ def persist_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def harden(c):
+    """P1.2/P1.4: create distinct least-privilege identities and rotate the admin
+    and Dashboards credentials. Runs as the current admin, then proves the OLD
+    admin password no longer authenticates."""
+    base = c.base
+    out = {"mode": "harden", "created": [], "rotated": [], "status": "PASS"}
+
+    # least-privilege roles
+    c.put_role("ranger_ingest_role", ["ranger-*"], allow_write=True)
+    c.put_role("ranger_search_role", ["ranger-*"], allow_write=False)
+
+    # identities. The validator identity is isolated from the real admin: it maps to
+    # all_access + security_rest_api_access so it can run tests, and can be disabled
+    # without touching the real admin credential.
+    def put_user_roles(name, pw_env, sec_roles):
+        pw = os.environ[pw_env]
+        code, body = c._req("PUT", f"/_plugins/_security/api/internalusers/{name}",
+                            body={"password": pw, "opendistro_security_roles": sec_roles})
+        if code not in (200, 201):
+            raise SystemExit(f"put_user {name} failed: {code} {body}")
+        out["created"].append(name)
+
+    put_user_roles("ranger_ingest", "RANGER_INGEST_PW", ["ranger_ingest_role"])
+    put_user_roles("ranger_search", "RANGER_SEARCH_PW", ["ranger_search_role"])
+    put_user_roles("ranger_validator", "RANGER_VALIDATOR_PW",
+                   ["all_access", "security_rest_api_access"])
+
+    # rotate passwords (PATCH only the password field). admin is rotated LAST so the
+    # old admin credential stays valid for every preceding call.
+    for user, env in (("kibanaserver", "RANGER_NEW_KIBANA_PW"),
+                      ("admin", "RANGER_NEW_ADMIN_PW")):
+        newpw = os.environ[env]
+        code, body = c._req("PATCH", f"/_plugins/_security/api/internalusers/{user}",
+                            body=[{"op": "replace", "path": "/password", "value": newpw}])
+        if code not in (200, 201):
+            raise SystemExit(f"rotate {user} failed: {code} {body}")
+        out["rotated"].append(user)
+
+    # prove the OLD admin credential is dead and the NEW one works
+    newadmin = LiveCluster(base, "admin", os.environ["RANGER_NEW_ADMIN_PW"],
+                           verify_tls=False, timeout=30)
+    code_new, _ = newadmin.health()
+    code_old, _ = c.health()  # c still holds the OLD admin password
+    out["new_admin_works"] = code_new == 200
+    out["old_admin_denied"] = code_old in (401, 403)
+    if not (out["new_admin_works"] and out["old_admin_denied"]):
+        out["status"] = "FAIL"
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
     pw = os.environ["OPENSEARCH_ADMIN_PASSWORD"]
     c = LiveCluster(url, admin, pw, verify_tls=False, timeout=60)
-    if os.environ.get("RANGER_VALIDATE_MODE") == "persist":
+    mode = os.environ.get("RANGER_VALIDATE_MODE")
+    if mode == "persist":
         print(f"== Ranger SIEM persistence re-check against {url} ==", flush=True)
         return persist_check(c)
+    if mode == "harden":
+        print(f"== Ranger SIEM credential hardening against {url} ==", flush=True)
+        return harden(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
