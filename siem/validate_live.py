@@ -510,6 +510,105 @@ def socadmin_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def gwsec_check(c):
+    """Stage 1 gateway-security integration checks that need NO authenticated
+    session. Runs inside Railway against the live portal, Dashboards, and OpenSearch:
+    portal session-cookie flags, unauthenticated gateway denial with no token leak,
+    Dashboards osd-xsrf CSRF enforcement (the gateway's upstream), and Security
+    Analytics authorized for the SOC admin but denied for a candidate. Browser-only
+    properties (JS storage, network to the browser) are confirmed by the operator."""
+    import urllib.error as _e
+    import urllib.request as _u
+
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    portal = os.environ["PORTAL_URL"].rstrip("/")
+    dash = os.environ.get("DASHBOARDS_URL", "http://dashboards.railway.internal:5601").rstrip("/")
+    out = {"mode": "gwsec", "portal": portal, "tests": {}, "status": "PASS"}
+
+    def rec(n, ok, **kv):
+        out["tests"][n] = {"pass": bool(ok), **kv}
+        if not ok:
+            out["status"] = "FAIL"
+        print(f"[{'PASS' if ok else 'FAIL'}] gwsec/{n}: {json.dumps(kv)[:300]}", flush=True)
+
+    def raw(url, method="GET", headers=None, body=None):
+        req = _u.Request(url, data=(json.dumps(body).encode() if body is not None else None),
+                         method=method, headers=headers or {})
+        try:
+            with _u.urlopen(req, timeout=30) as r:
+                return r.status, dict(r.headers), r.read(4000).decode(errors="replace")
+        except _e.HTTPError as ex:
+            return ex.code, dict(ex.headers), ex.read(2000).decode(errors="replace")
+        except Exception as ex:  # noqa: BLE001
+            return -1, {}, str(ex)[:160]
+
+    # 1. Session-cookie flags on a normal rendered portal page (the CSRF context
+    #    processor sets session["csrf"], so Flask emits Set-Cookie).
+    setc = ""
+    for p in ("/", "/admin", "/enroll", "/login"):
+        _s, h, _b = raw(portal + p)
+        if h.get("Set-Cookie"):
+            setc = h.get("Set-Cookie")
+            break
+    low = setc.lower()
+    rec("cookie_httponly", "httponly" in low, set_cookie=setc[:140])
+    rec("cookie_secure", "secure" in low)
+    rec("cookie_samesite_lax", "samesite=lax" in low)
+
+    # 2. Unauthenticated gateway request -> denied, with no token/credential leaked.
+    s2, h2, b2 = raw(portal + "/soc/app/home")
+    leaked = ("eyJ" in b2) or ("eyJ" in (h2.get("Set-Cookie", "") or ""))
+    rec("unauth_gateway_denied", s2 in (401, 403, 302), code=s2)
+    rec("no_token_leak_unauth", not leaked)
+
+    # 3. Dashboards CSRF: a state-changing API without osd-xsrf is rejected (400);
+    #    with it, the authorized operation succeeds. (Upstream the gateway forwards to.)
+    cand = "cand-a"
+    idx = authz.index_name(COHORT, cand, 2)
+    if not c.index_exists(idx):
+        c.create_index(idx, schema.INDEX_MAPPING)
+        ev, _ = enterprise.generate(cand, 2, "gwsec-a", "A")
+        c.bulk_index(idx, ev)
+        c.refresh(idx)
+    role = authz.role_name(cand)
+    c.put_role(role, [authz.candidate_index_pattern(COHORT, cand)], dls={"ranger.candidate_id": cand})
+    sub = authz.user_name(cand)
+    c.put_rolesmapping(role, users=[sub])
+    ctok = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
+    base = {"Authorization": "Bearer " + ctok, "Content-Type": "application/json"}
+    dash_url = dash + "/api/console/proxy?path=" + idx + "%2F_search&method=GET"
+    s3a, _, _ = raw(dash_url, "POST", base, {"size": 1, "query": {"match_all": {}}})
+    s3b, _, b3b = raw(dash_url, "POST", {**base, "osd-xsrf": "osd-fetch"},
+                      {"size": 1, "query": {"match_all": {}}})
+    rec("dashboards_csrf_blocks_without_xsrf", s3a == 400, code=s3a)
+    rec("dashboards_op_ok_with_xsrf", s3b == 200 and '"hits"' in b3b, code=s3b)
+
+    # 4. Security Analytics: SOC admin authorized, candidate denied (authorization
+    #    is checked before data, so 200/404 = authorized, 403 = denied).
+    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+    atok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
+    sap = "/_plugins/_security_analytics/detectors/_search"
+    adm_sap = c._req("POST", sap, body={"query": {"match_all": {}}}, bearer=atok)[0]
+    cand_sap = c._req("POST", sap, body={"query": {"match_all": {}}}, bearer=ctok)[0]
+    rec("sap_admin_authorized", adm_sap in (200, 404), code=adm_sap)
+    rec("sap_candidate_denied", cand_sap in (401, 403), code=cand_sap)
+
+    out["notes"] = {
+        "cookie": "Flask config: HttpOnly, Secure, SameSite=Lax (COOKIE_INSECURE unset in production).",
+        "gateway_csrf": "osd-xsrf required at the gateway for POST/PUT/PATCH/DELETE; SameSite=Lax blocks cross-site cookie carriage.",
+        "token_handling": "JWT minted server-side, injected to upstream only; never in a client response body, header, or cookie.",
+        "browser_pending": "localStorage/sessionStorage/network-to-browser and the live Discover render are confirmed in the operator's authenticated session.",
+    }
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -545,6 +644,9 @@ def main():
     if mode == "socadmin":
         print(f"== Ranger SOC administrator authorization boundary ==", flush=True)
         return socadmin_check(c)
+    if mode == "gwsec":
+        print(f"== Ranger gateway security integration checks ==", flush=True)
+        return gwsec_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health

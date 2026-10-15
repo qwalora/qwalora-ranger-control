@@ -285,6 +285,17 @@ def register(app, candidate_model, db):
         if not _rate_ok(subject):
             _log("rate_limited", subject=subject)
             abort(429)
+        # Gateway-level CSRF defense for state-changing proxied actions. Dashboards
+        # issues every API mutation with an osd-xsrf (legacy kbn-xsrf) header, which a
+        # cross-site forgery cannot set without a CORS preflight the browser blocks;
+        # combined with the SameSite=Lax session cookie (a cross-site POST carries no
+        # session, so _authorize already fails), this enforces CSRF at the gateway, not
+        # only upstream. The portal form-CSRF token does not apply here because the
+        # Dashboards client cannot carry it.
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            if not (request.headers.get("osd-xsrf") or request.headers.get("kbn-xsrf")):
+                _log("csrf_missing", subject=subject, method=request.method, path=subpath)
+                abort(403)
         token = ranger_jwt.mint(subject, _jwt_priv(), board=SIEM_BOARD, cohort=cohort, ttl=600)
 
         # Build upstream request: only ever the private Dashboards, under /soc.
@@ -324,6 +335,8 @@ def register(app, candidate_model, db):
         out = Response(body, status=resp.status, headers=out_headers)
         out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
         out.headers["Pragma"] = "no-cache"
+        out.headers["X-Content-Type-Options"] = "nosniff"
+        out.headers["Referrer-Policy"] = "no-referrer"
         return out
 
     # Test-only session bootstrap. Disabled unless RANGER_SOC_TEST_KEY is set (never

@@ -515,7 +515,12 @@ def create_app():
     # API endpoints authenticate with header tokens (not cookies), so CSRF does
     # not apply to them; they are exempt.
     _CSRF_EXEMPT = {"submit_report", "grade", "lab_start", "lab_status",
-                    "grade_submit", "lab_dataset"}
+                    "grade_submit", "lab_dataset",
+                    # The /soc gateway proxy: Dashboards XHRs carry their own osd-xsrf
+                    # header (enforced at the gateway and upstream) and ride a
+                    # SameSite=Lax session cookie, so the portal form-CSRF token (which
+                    # the Dashboards client cannot send) does not apply here.
+                    "soc_proxy"}
 
     @app.before_request
     def _csrf_protect():
