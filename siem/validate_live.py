@@ -339,6 +339,94 @@ def dashauth_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def socgw_check(c):
+    """P2 gateway validation end-to-end through the REAL deployed stack: portal
+    /soc gateway -> private Dashboards -> private OpenSearch. Exercises auth
+    enforcement, the full Discover path, cross-candidate isolation, header-spoofing
+    resistance, no-store caching, and revocation. Uses the env-gated test session
+    (no production bypass)."""
+    import http.cookiejar as _cj
+    import urllib.error as _e
+    import urllib.request as _u
+
+    portal = os.environ["PORTAL_URL"].rstrip("/")
+    key = os.environ["RANGER_SOC_TEST_KEY"]
+    cohort = os.environ.get("DEFAULT_COHORT", "2026-A")
+    handle = "soc-test-a"
+    slug = authz._slug("test-" + handle)  # gateway uses github_id="test-<handle>"
+    own_idx = authz.index_name(cohort, slug, 2)
+    other_idx = authz.index_name("pilot", "cand-b", 2)
+    out = {"mode": "socgw", "portal": portal, "tests": {}, "status": "PASS"}
+
+    def rec(n, ok, **kv):
+        out["tests"][n] = {"pass": bool(ok), **kv}
+        if not ok:
+            out["status"] = "FAIL"
+        print(f"[{'PASS' if ok else 'FAIL'}] socgw/{n}: {json.dumps(kv)[:260]}", flush=True)
+
+    def mk_opener():
+        jar = _cj.CookieJar()
+        return _u.build_opener(_u.HTTPCookieProcessor(jar), _NoRedirect), jar
+
+    def req(opener, path, method="GET", headers=None, body=None):
+        r = _u.Request(portal + path, data=(json.dumps(body).encode() if body is not None else None),
+                       method=method, headers=headers or {})
+        try:
+            with opener.open(r, timeout=45) as resp:
+                return resp.status, dict(resp.headers), resp.read(2000).decode(errors="replace")
+        except _e.HTTPError as ex:
+            return ex.code, dict(ex.headers), ex.read(800).decode(errors="replace")
+        except Exception as ex:  # noqa: BLE001
+            return -1, {}, str(ex)[:160]
+
+    # T1 no session -> gateway denies
+    op0, _ = mk_opener()
+    s1, _h1, _b1 = req(op0, "/soc/app/home")
+    rec("no_session_denied", s1 in (401, 403), code=s1)
+
+    # T2 authorized test session -> provision + proxied Dashboards home
+    op, jar = mk_opener()
+    s2, _h2, _b2 = req(op, f"/soc-test/login?key={key}&cand={handle}")
+    rec("authorized_session_reaches_dashboards", s2 == 200, code=s2)
+
+    # T3 real Discover search of OWN index, through the gateway
+    xsrf = {"osd-xsrf": "osd-fetch", "Content-Type": "application/json"}
+    s3, h3, b3 = req(op, f"/soc/api/console/proxy?path={own_idx}%2F_search&method=GET",
+                     method="POST", headers=xsrf, body={"size": 1, "query": {"match_all": {}}})
+    rec("discover_own_through_gateway", s3 == 200 and '"hits"' in b3, code=s3)
+    rec("no_store_caching", "no-store" in (h3.get("Cache-Control") or h3.get("cache-control") or ""),
+        cache_control=h3.get("Cache-Control") or h3.get("cache-control"))
+
+    # T4 cross-candidate index via the gateway -> denied
+    s4, _h4, b4 = req(op, f"/soc/api/console/proxy?path={other_idx}%2F_search&method=GET",
+                      method="POST", headers=xsrf, body={"size": 1, "query": {"match_all": {}}})
+    rec("cross_candidate_denied", s4 in (401, 403) or '"status":403' in b4, code=s4)
+
+    # T5 header spoofing: client tries to inject identity/auth -> stripped
+    spoof = {"Authorization": "Basic YWRtaW46YWRtaW4=", "X-Forwarded-User": "admin",
+             "x-proxy-roles": "all_access", "securitytenant": "global_tenant",
+             "osd-xsrf": "osd-fetch"}
+    s5, _h5, b5 = req(op, "/soc/api/v1/configuration/account", headers=spoof)
+    spoof_ok = s5 == 200 and ("cand_" + slug) in b5 and "all_access" not in b5
+    rec("header_spoof_stripped", spoof_ok, code=s5,
+        is_candidate=("cand_" + slug) in b5)
+
+    # T6 revocation: drop the candidate's roles-mapping -> live session loses data access
+    c.delete_rolesmapping(authz.role_name(slug))
+    s6, _h6, b6 = req(op, f"/soc/api/console/proxy?path={own_idx}%2F_search&method=GET",
+                      method="POST", headers=xsrf, body={"size": 1, "query": {"match_all": {}}})
+    rec("revocation_enforced", s6 in (401, 403) or '"status":403' in b6, code=s6)
+
+    out["notes"] = {
+        "direct_origin": "OpenSearch and Dashboards have no public domains/TCP proxies; unreachable except via the gateway.",
+        "arbitrary_upstream": "Gateway hardcodes upstream to the private Dashboards base path; no client-controlled host/path.",
+        "browser_screenshots": "Require a connected browser or the operator; exact production steps provided separately.",
+    }
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -368,6 +456,9 @@ def main():
     if mode == "dashauth":
         print(f"== Ranger Dashboards JWT transport probe ==", flush=True)
         return dashauth_check(c)
+    if mode == "socgw":
+        print(f"== Ranger /soc gateway end-to-end validation ==", flush=True)
+        return socgw_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
