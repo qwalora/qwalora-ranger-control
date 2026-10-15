@@ -755,6 +755,81 @@ def dataview_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def tenantprobe_check(c):
+    """Diagnose the supported mechanism for tenant-scoped data-view provisioning in
+    OpenSearch Dashboards 2.17.1, per the operator's condition to verify supported
+    APIs before implementing. Compares a scoped BASIC-AUTH provisioning identity
+    (named tenant) against the failing JWT path, and tests whether a JWT user can then
+    READ the provisioned object from that tenant. No sample data. Cleans up after."""
+    import urllib.error as _e
+    import urllib.request as _u
+    import soc_gateway as gw
+
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    dash = os.environ.get("DASHBOARDS_URL", "http://dashboards.railway.internal:5601").rstrip("/")
+    out = {"mode": "tenantprobe", "tests": {}}
+
+    def http(method, path, headers, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = _u.Request(dash + "/soc" + path, data=data, method=method, headers=headers)
+        try:
+            with _u.urlopen(req, timeout=30) as r:
+                return r.status, r.read(600).decode(errors="replace")
+        except _e.HTTPError as ex:
+            return ex.code, ex.read(600).decode(errors="replace")
+        except Exception as ex:  # noqa: BLE001
+            return -1, str(ex)[:160]
+
+    tn = "prov_probe_tn"
+    prov_user, prov_pw = "ranger_provisioner_probe", "Prov-Probe-" + base64.b64encode(os.urandom(6)).decode().rstrip("=")
+    prov_role = "ranger_provisioner_probe_role"
+    # Named tenant + a narrowly scoped provisioning identity: ONLY kibana write on tn.
+    c._req("PUT", f"/_plugins/_security/api/tenants/{tn}", body={"description": "provisioning probe"})
+    c._req("PUT", f"/_plugins/_security/api/roles/{prov_role}",
+           body={"cluster_permissions": [], "index_permissions": [],
+                 "tenant_permissions": [{"tenant_patterns": [tn], "allowed_actions": ["kibana_all_write"]}]})
+    c.put_user(prov_user, prov_pw, [prov_role])
+    basic = base64.b64encode(f"{prov_user}:{prov_pw}".encode()).decode()
+
+    # 1. Supported path: basic-auth provisioning identity writes into the named tenant.
+    bh = {"Authorization": "Basic " + basic, "securitytenant": tn,
+          "osd-xsrf": "osd-fetch", "Content-Type": "application/json"}
+    bc, bb = http("POST", "/api/saved_objects/index-pattern/probe-dv",
+                  bh, {"attributes": {"title": "ranger-*", "timeFieldName": "@timestamp"}})
+    out["tests"]["basic_auth_named_tenant_write"] = {"code": bc, "body": bb[:200]}
+    print(f"[tenantprobe] basic_auth_named_tenant_write code={bc} body={bb[:220]}", flush=True)
+
+    # 2. Can a JWT user READ it back from the named tenant? Grant soc admin read on tn.
+    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": [tn], "allowed_actions": ["kibana_all_read"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+    jtok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
+    jh = {"Authorization": "Bearer " + jtok, "securitytenant": tn, "osd-xsrf": "osd-fetch"}
+    jc, jb = http("GET", "/api/saved_objects/index-pattern/probe-dv", jh)
+    out["tests"]["jwt_read_named_tenant"] = {"code": jc, "found": "probe-dv" in jb}
+    print(f"[tenantprobe] jwt_read_named_tenant code={jc} found={'probe-dv' in jb}", flush=True)
+
+    # 3. For the record: the JWT write path that failed before.
+    wc, wb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
+                              "/api/saved_objects/index-pattern/probe-jwt-write",
+                              {"attributes": {"title": "ranger-*", "timeFieldName": "@timestamp"}}, tenant=tn)
+    out["tests"]["jwt_named_tenant_write"] = {"code": wc, "body": wb[:200]}
+    print(f"[tenantprobe] jwt_named_tenant_write code={wc} body={wb[:220]}", flush=True)
+
+    # Cleanup
+    http("DELETE", "/api/saved_objects/index-pattern/probe-dv", bh)
+    c.delete_user(prov_user)
+    c._req("DELETE", f"/_plugins/_security/api/roles/{prov_role}")
+    c._req("DELETE", f"/_plugins/_security/api/tenants/{tn}")
+
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -796,6 +871,9 @@ def main():
     if mode == "dataview":
         print(f"== Ranger per-tenant data view provisioning + isolation ==", flush=True)
         return dataview_check(c)
+    if mode == "tenantprobe":
+        print(f"== Ranger tenant provisioning mechanism probe ==", flush=True)
+        return tenantprobe_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
