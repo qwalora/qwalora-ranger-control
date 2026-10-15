@@ -56,6 +56,39 @@ Deployed (portal commit `761d162`): gateway registers with `test_mode=False`,
 `actas_enabled=False`. To run the candidate-scoped tests, act-as is enabled for the
 window only (`RANGER_SOC_ACTAS_ENABLED=1`) and removed afterward.
 
+## Stage 1 validation (SOC administrator), 2026-10-15
+
+Run against the live stack from inside Railway. act-as disabled, candidate access off.
+
+Administrator authorization boundary (`validate_live.py socadmin`, over the real
+`sub=ranger_soc_admin` JWT transport, no password): 11/11 PASS. Oversight read across
+all candidate `ranger-*` indices and `cluster_monitor`; denied on write, doc/index
+delete, non-`ranger-*` read, security API, security index, role creation, and cluster
+settings. No standing credential (JWT is 10 min).
+
+Gateway security integration (`validate_live.py gwsec`, no authenticated session
+needed): 9/9 PASS.
+- Session cookie (observed live): HttpOnly, Secure, SameSite=Lax.
+- Unauthenticated `/soc/*` request denied (403) with no token in the body or a cookie.
+- Dashboards osd-xsrf CSRF: a state-changing API without `osd-xsrf` is rejected (400);
+  with it, the authorized operation succeeds (200).
+- Security Analytics: authorized for `ranger_soc_admin` (200), denied for a candidate (403).
+
+Direct-origin isolation (Railway control plane): Dashboards, the live OpenSearch, and
+the dangling `opensearch` service have zero public domains and zero TCP proxies. Only
+the portal is public.
+
+Fix made during Stage 1: the portal's global form-CSRF guard was not exempt for the
+`soc_proxy` endpoint, so state-changing Dashboards XHRs (Discover searches POST) would
+have been rejected with 400. `soc_proxy` is now exempt from the form token, and the
+gateway enforces CSRF itself by requiring `osd-xsrf` on state-changing proxied methods
+(with SameSite=Lax blocking cross-site cookie carriage). Proxied responses also carry
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` alongside no-store.
+
+Pending (browser-only, operator-confirmed): the live `/soc/launch` landing in real
+Dashboards and a Discover render, and confirmation that no JWT appears in JS storage or
+in network traffic visible to the browser. Stage 1 is NOT closed until these are in hand.
+
 ## Validated against the real stack
 
 - OpenSearch Security layer (`validate_live.py jwt`): JWT signature/iss/aud/exp,
