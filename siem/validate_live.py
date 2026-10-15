@@ -648,41 +648,6 @@ def dataview_check(c):
     priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
     out = {"mode": "dataview", "tests": {}, "status": "PASS"}
 
-    # Diagnostic: what multitenancy config is actually live?
-    sc_code, sc = c._req("GET", "/_plugins/_security/api/securityconfig")
-    kib = {}
-    try:
-        kib = sc.get("config", {}).get("dynamic", {}).get("kibana", {})
-    except Exception:  # noqa: BLE001
-        pass
-    print(f"[diag] securityconfig code={sc_code} kibana={json.dumps(kib)[:400]}", flush=True)
-
-    # Diagnostic: private vs global tenant write for a JWT user, with the full error.
-    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
-               allow_write=False,
-               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
-                              "cluster:admin/opensearch/securityanalytics/*"],
-               tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
-    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
-    atok = ranger_jwt.mint("ranger_soc_admin", priv, board=2, cohort=COHORT)
-    ai_code, ai = c._req("GET", "/_plugins/_security/authinfo", bearer=atok)
-    tenants = ai.get("tenants") if isinstance(ai, dict) else None
-    print(f"[diag] authinfo code={ai_code} user={ai.get('user_name') if isinstance(ai,dict) else None} "
-          f"roles={ai.get('roles') if isinstance(ai,dict) else None} tenants={json.dumps(tenants)}", flush=True)
-    # Experiment: NAMED tenant write (vs the failing private tenant).
-    tn = "soc_admin_tn"
-    c._req("PUT", f"/_plugins/_security/api/tenants/{tn}", body={"description": "SOC admin tenant"})
-    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
-               allow_write=False,
-               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
-                              "cluster:admin/opensearch/securityanalytics/*"],
-               tenant_permissions=[{"tenant_patterns": [tn], "allowed_actions": ["kibana_all_write"]}])
-    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
-    nc, nb = gw._dash_as_user("ranger_soc_admin", COHORT, "POST",
-                              "/api/saved_objects/index-pattern/diag-named",
-                              {"attributes": {"title": "ranger-*", "timeFieldName": TS}}, tenant=tn)
-    print(f"[diag] named_tenant_write code={nc} body={nb[:500]}", flush=True)
-
     def rec(n, ok, **kv):
         out["tests"][n] = {"pass": bool(ok), **kv}
         if not ok:
@@ -722,7 +687,9 @@ def dataview_check(c):
     b_sub, b_idx, b_dv, b_pat = subs["cand-b"]
 
     def get_dv(subject, dv_id):
-        return gw._dash_as_user(subject, COHORT, "GET", "/api/saved_objects/index-pattern/" + dv_id)
+        # Read from the SAME private tenant the write used (addressed by username).
+        return gw._dash_as_user(subject, COHORT, "GET",
+                                "/api/saved_objects/index-pattern/" + dv_id, tenant=subject)
 
     # 1. Admin oversight data view exists with the correct pattern + time field.
     ca, ba = get_dv("ranger_soc_admin", "ranger-all-events")
