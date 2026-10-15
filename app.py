@@ -69,6 +69,15 @@ CERT_VALIDITY_YEARS = int(os.environ.get("CERT_VALIDITY_YEARS", "2"))
 # flips the dashboard copy (and, later, the environment wiring) to the real
 # SIEM once it is stood up. Off by default so the UI never over-promises.
 SIEM_LIVE = os.environ.get("SIEM_ENABLED", "0") == "1"
+# Public resource API: browser origins allowed to read /resources.json cross-site.
+# Explicit allowlist, never a wildcard. CORS is not a security boundary here; the
+# endpoint already filters to published + public server-side. Short cache so an
+# admin's publish/edit/unpublish shows on the public site within the TTL with no
+# redeploy, while staying cheap.
+PUBLIC_API_ORIGINS = [o.strip() for o in os.environ.get(
+    "PUBLIC_API_ORIGINS",
+    "https://ranger.qwalora.com,https://www.ranger.qwalora.com").split(",") if o.strip()]
+PUBLIC_API_MAXAGE = int(os.environ.get("PUBLIC_API_MAXAGE", "120"))
 # Unambiguous alphabet for the public credential id: no 0/O/1/I to keep it
 # readable and typeable off a printed certificate.
 _CERT_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -2109,9 +2118,19 @@ def create_app():
     @app.get("/resources.json")
     def resources_json():
         """Public JSON API for the resource library, for the public site to
-        consume. Public + published only, safe fields only."""
+        consume. Public + published only, safe fields only. CORS is restricted
+        to an explicit origin allowlist (never *), and the response is briefly
+        cacheable so admin changes propagate without a site redeploy."""
         rows = [_resource_row(r) for r in _public_resources(request.args)]
-        return jsonify(count=len(rows), resources=rows)
+        resp = jsonify(count=len(rows), resources=rows,
+                       updated_at=_iso(_dt.datetime.now(_dt.timezone.utc)))
+        origin = request.headers.get("Origin")
+        if origin in PUBLIC_API_ORIGINS:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            resp.headers["Vary"] = "Origin"
+        resp.headers["Cache-Control"] = "public, max-age=%d" % PUBLIC_API_MAXAGE
+        return resp
 
     def _candidate_resources(c, limit=8):
         """Resources a signed-in ranger may see for their current board/role:
