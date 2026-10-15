@@ -16,6 +16,7 @@ public HTTPS. Security-relevant events are logged without tokens or secrets.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 import urllib.error
@@ -32,6 +33,7 @@ BASE = "/soc"
 PROXY_TIMEOUT = int(os.environ.get("SOC_PROXY_TIMEOUT", "30"))
 MAX_RESP = int(os.environ.get("SOC_MAX_RESP_BYTES", str(40 * 1024 * 1024)))
 SIEM_BOARD = 2
+TS_FIELD = "@timestamp"  # the normalized event timestamp (schema.INDEX_MAPPING)
 
 # --- Admin "act-as" (candidate simulation) hard constraints -------------------
 # act-as exists ONLY to let an authenticated Super Admin drive the real candidate
@@ -96,6 +98,44 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _dash_as_user(subject, cohort, method, path, body=None):
+    """Call the private Dashboards API AS the subject (short-lived JWT) in their
+    own private tenant. Used to provision tenant-scoped saved objects (data views).
+    The token never leaves the server; it is injected into the upstream header only."""
+    token = ranger_jwt.mint(subject, _jwt_priv(), board=SIEM_BOARD, cohort=cohort, ttl=600)
+    url = DASH + BASE + path
+    hdrs = {"Authorization": "Bearer " + token, "securitytenant": "__user__",
+            "osd-xsrf": "osd-fetch", "Content-Type": "application/json",
+            "Accept-Encoding": "identity"}
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    try:
+        r = _OPENER.open(req, timeout=PROXY_TIMEOUT)
+        return r.status, r.read(2000).decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(1000).decode(errors="replace")
+    except Exception as e:  # noqa: BLE001
+        return -1, str(e)[:160]
+
+
+def _ensure_dataview(subject, cohort, dv_id, title):
+    """Idempotently ensure the subject's private tenant holds a data view (index
+    pattern) scoped to `title`, with the correct time field, and make it the default
+    so Discover opens on it. Deterministic id means a repeat launch is a no-op (409).
+    The data view is only a saved query definition: it grants no data access beyond
+    the subject's OpenSearch role, so a candidate's view can never expose another
+    candidate's indices."""
+    code, _ = _dash_as_user(subject, cohort, "POST",
+                            "/api/saved_objects/index-pattern/" + dv_id,
+                            {"attributes": {"title": title, "timeFieldName": TS_FIELD}})
+    created = code in (200, 201, 409)  # 409 = already exists -> idempotent
+    # Best-effort: set it as the tenant default so Discover lands on it.
+    _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
+                  {"index_pattern_id": dv_id, "force": True})
+    _log("dataview", subject=subject, dv_id=dv_id, title=title, code=code)
+    return created
 
 
 def register(app, candidate_model, db):
@@ -173,7 +213,10 @@ def register(app, candidate_model, db):
                         tenant_permissions=[{"tenant_patterns": ["__user__"],
                                              "allowed_actions": ["kibana_all_write"]}])
             cl.put_rolesmapping("ranger_soc_admin", users=[subject])
-            return {"role": "ranger_soc_admin"}
+            # Oversight data view across all candidate indices, in the admin's own
+            # private tenant. The admin role can read ranger-*, so fields resolve.
+            _ensure_dataview(subject, cohort, "ranger-all-events", "ranger-*")
+            return {"role": "ranger_soc_admin", "data_view": "ranger-*"}
         slug = _candidate_slug(cand)
         role = authz.role_name(slug)
         cl.put_role(role, [authz.candidate_index_pattern(cohort, slug)],
@@ -190,7 +233,12 @@ def register(app, candidate_model, db):
             for i in range(0, len(events), 1000):
                 cl.bulk_index(idx, events[i:i + 1000])
             cl.refresh(idx)
-        return {"role": role, "index": idx}
+        # Candidate-scoped data view in the candidate's OWN private tenant, titled to
+        # their own index pattern only. It is a query definition, not an access grant:
+        # the candidate's role + DLS still bound every search to their own data.
+        pattern = authz.candidate_index_pattern(cohort, slug)
+        _ensure_dataview(subject, cohort, f"cand-{slug}-b{SIEM_BOARD}", pattern)
+        return {"role": role, "index": idx, "data_view": pattern}
 
     @app.before_request
     def _actas_write_guard():

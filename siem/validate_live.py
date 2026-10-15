@@ -633,6 +633,93 @@ def gwsec_check(c):
     print("===RANGER_VALIDATION_JSON_END===", flush=True)
 
 
+def dataview_check(c):
+    """Provision and validate per-tenant data views (index patterns) via the REAL
+    gateway code path (soc_gateway._ensure_dataview). Confirms: the SOC admin gets a
+    ranger-* oversight data view in their private tenant with @timestamp; each
+    candidate gets a data view scoped to their own index pattern in their own private
+    tenant; tenants are isolated (no cross-visibility of saved objects); and a broad
+    data view a candidate creates exposes no other candidate's data (the role + DLS,
+    not the saved object, bound access). Uses existing Ranger telemetry; no sample
+    data, no duplicate indices."""
+    import soc_gateway as gw
+
+    TS = "@timestamp"
+    priv = base64.b64decode(os.environ["RANGER_JWT_PRIVATE_B64"])
+    out = {"mode": "dataview", "tests": {}, "status": "PASS"}
+
+    def rec(n, ok, **kv):
+        out["tests"][n] = {"pass": bool(ok), **kv}
+        if not ok:
+            out["status"] = "FAIL"
+        print(f"[{'PASS' if ok else 'FAIL'}] dataview/{n}: {json.dumps(kv)[:300]}", flush=True)
+
+    # Admin role + oversight data view (its private tenant).
+    c.put_role("ranger_soc_admin", ["ranger-*", ".opendistro-alerting*", ".opensearch-sap*"],
+               allow_write=False,
+               cluster_perms=["cluster_monitor", "cluster:admin/opendistro/alerting/*",
+                              "cluster:admin/opensearch/securityanalytics/*"],
+               tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
+    c.put_rolesmapping("ranger_soc_admin", users=["ranger_soc_admin"])
+    gw._ensure_dataview("ranger_soc_admin", COHORT, "ranger-all-events", "ranger-*")
+
+    # Two candidates with their own indices (existing telemetry), roles, data views.
+    subs = {}
+    for cand in ("cand-a", "cand-b"):
+        idx = authz.index_name(COHORT, cand, 2)
+        if not c.index_exists(idx):
+            c.create_index(idx, schema.INDEX_MAPPING)
+            ev, _ = enterprise.generate(cand, 2, f"dv-{cand}", "A")
+            c.bulk_index(idx, ev)
+            c.refresh(idx)
+        role = authz.role_name(cand)
+        c.put_role(role, [authz.candidate_index_pattern(COHORT, cand)],
+                   dls={"ranger.candidate_id": cand},
+                   tenant_permissions=[{"tenant_patterns": ["__user__"], "allowed_actions": ["kibana_all_write"]}])
+        sub = authz.user_name(cand)
+        c.put_rolesmapping(role, users=[sub])
+        dv_id = f"cand-{cand}-b2"
+        pattern = authz.candidate_index_pattern(COHORT, cand)
+        gw._ensure_dataview(sub, COHORT, dv_id, pattern)
+        subs[cand] = (sub, idx, dv_id, pattern)
+
+    a_sub, a_idx, a_dv, a_pat = subs["cand-a"]
+    b_sub, b_idx, b_dv, b_pat = subs["cand-b"]
+
+    def get_dv(subject, dv_id):
+        return gw._dash_as_user(subject, COHORT, "GET", "/api/saved_objects/index-pattern/" + dv_id)
+
+    # 1. Admin oversight data view exists with the correct pattern + time field.
+    ca, ba = get_dv("ranger_soc_admin", "ranger-all-events")
+    rec("admin_dataview_ranger_star", ca == 200 and '"ranger-*"' in ba and TS in ba, code=ca)
+    # 2. Candidate data view exists, scoped to the candidate's own pattern.
+    cb, bb = get_dv(a_sub, a_dv)
+    rec("candidate_dataview_scoped", cb == 200 and a_pat in bb and TS in bb, code=cb)
+    # 3-5. Tenant isolation: saved objects are not visible across tenants.
+    rec("candidate_cannot_see_admin_dv", get_dv(a_sub, "ranger-all-events")[0] == 404)
+    rec("candidate_cannot_see_other_candidate_dv", get_dv(a_sub, b_dv)[0] == 404)
+    rec("admin_cannot_see_candidate_dv", get_dv("ranger_soc_admin", a_dv)[0] == 404)
+    # 6. A broad data view a candidate creates exposes NO other candidate's data:
+    #    creation is allowed in their own tenant, but the role + DLS still bind access.
+    gw._ensure_dataview(a_sub, COHORT, "evil-broad", "ranger-*")
+    atok = ranger_jwt.mint(a_sub, priv, board=2, cohort=COHORT)
+    cross = c._req("GET", f"/{b_idx}/_count", bearer=atok)[0]
+    own = c._req("GET", f"/{a_idx}/_count", bearer=atok)[0]
+    rec("broad_dataview_exposes_nothing", cross == 403 and own == 200, cross=cross, own=own)
+    gw._dash_as_user(a_sub, COHORT, "DELETE", "/api/saved_objects/index-pattern/evil-broad")
+
+    out["notes"] = {
+        "telemetry": "Existing per-candidate ranger-* indices; no sample data, no duplicate indices.",
+        "time_field": TS,
+        "isolation": "Per-user PRIVATE tenants (enable_global false); data views live only in the owner's tenant.",
+        "candidate_scope": "Candidate data view titled to their own index pattern; a broad view grants no extra access (role + DLS bound every search).",
+        "idempotent": "Deterministic saved-object ids; a repeat /soc/launch is a no-op (409).",
+    }
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
@@ -671,6 +758,9 @@ def main():
     if mode == "gwsec":
         print(f"== Ranger gateway security integration checks ==", flush=True)
         return gwsec_check(c)
+    if mode == "dataview":
+        print(f"== Ranger per-tenant data view provisioning + isolation ==", flush=True)
+        return dataview_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
