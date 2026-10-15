@@ -53,6 +53,13 @@ WORKFLOWS = ("qualification", "assigned", "practice")
 PLANES = ("qualification", "operational")
 DISPOSITIONS = ("confirmed_incident", "no_incident", "inconclusive")
 SEVERITIES = ("low", "medium", "high", "critical")
+# The role a citation plays in the argument. Benign events are legitimate in
+# non-primary roles (baseline comparison, timeline exclusion, alternative
+# hypothesis, context) and for false-positive dispositions; they are NOT
+# auto-zeroed. "primary" means the citation is offered as direct proof of the
+# incident/disposition, where the event's true nature must be consistent.
+ROLES = ("primary", "baseline", "exclusion", "alternative", "context")
+_DEFAULT_ROLE = "primary"
 _TECH_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
 
 
@@ -150,6 +157,9 @@ def validate_submission(payload: dict) -> dict:
             if not isinstance((cite or {}).get("query"), dict):
                 err("MISSING_MANDATORY_FIELD", f"{cp}.query",
                     "the exact query (DSL object) is required for each citation")
+            role = (cite or {}).get("role")
+            if role is not None and role not in ROLES:
+                err("BAD_CITATION_ROLE", f"{cp}.role", f"role must be one of {ROLES}")
 
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
@@ -169,27 +179,55 @@ def _truth_member_uids(truth) -> set:
     return uids
 
 
-def verify_evidence(payload: dict, reader, candidate_index: str, truth=None) -> dict:
+def _claim_consistent(disposition, role, is_member):
+    """Does the cited event's true nature support the candidate's SPECIFIC claim?
+
+    Benign (non-member) events are legitimate and not auto-failed: only a citation
+    offered as PRIMARY proof must be consistent with the disposition. Supporting roles
+    (baseline/exclusion/alternative/context) and the inconclusive disposition are left
+    to reviewer judgment (returns None), never silently zeroed.
+    Returns True (consistent), False (primary proof contradicts its own disposition),
+    or None (no automated determination; reviewer decides)."""
+    if role != "primary":
+        return None
+    if disposition == "confirmed_incident":
+        return bool(is_member)            # primary proof of an incident must be a real incident event
+    if disposition == "no_incident":
+        return (is_member is False)       # primary proof of a false positive must be a benign event
+    return None                           # inconclusive: either nature is acceptable
+
+
+def verify_evidence(payload: dict, reader, candidate_index: str, truth=None,
+                    candidate_safe: bool = False) -> dict:
     """Verify every cited event against the candidate's OWN authorized index.
 
-    Per citation: exists (in the candidate's index), in_scope (index matches), and
-    reproduces (the candidate's query actually returns it). When `truth` is supplied
-    (grade time), incident_member marks whether the cited event is part of a real
-    incident; a valid, reproducible-but-non-member citation is NOT credit-eligible.
-    Returns a structured verdict; never raises on a bad citation.
+    Always checks, per citation: exists (in the candidate's index), in_scope (the
+    citation's index is the candidate's), and reproduces (the candidate's own query
+    returns it in context). A citation is `reference_valid` when all three hold; a
+    valid document reference alone does NOT establish that it supports the claim.
+
+    At grade time (`truth` supplied and not candidate_safe) each citation also gets
+    `claim_consistent` (disposition + role aware; benign events are fine in supporting
+    roles and for false-positive dispositions), and a `review_flag` when a PRIMARY
+    citation contradicts its own disposition. In candidate-safe mode truth is never
+    consulted or exposed, so the candidate can self-check existence/scope/
+    reproducibility without learning anything about the hidden scenario.
     """
-    member_uids = _truth_member_uids(truth)
+    use_truth = (truth is not None) and not candidate_safe
+    member_uids = _truth_member_uids(truth) if use_truth else set()
     out_incidents = []
     agg = {"citations": 0, "exists": 0, "in_scope": 0, "reproduces": 0,
-           "incident_member": 0, "credit_eligible": 0}
+           "reference_valid": 0, "claim_consistent": 0, "review_flags": 0}
 
     for inc in (payload.get("incidents") or []):
+        disp = inc.get("disposition")
         cites_out = []
         for cite in (inc.get("cited_evidence") or []):
             uid = str((cite or {}).get("event_uid") or "")
             idx = (cite or {}).get("index") or candidate_index
             query = (cite or {}).get("query") or {}
             tctx = (cite or {}).get("time_context")
+            role = (cite or {}).get("role") or _DEFAULT_ROLE
             errs = []
             in_scope = (idx == candidate_index)
             if not in_scope:
@@ -206,23 +244,40 @@ def verify_evidence(payload: dict, reader, candidate_index: str, truth=None) -> 
                     reproduces = False
                 if not reproduces:
                     errs.append("QUERY_DOES_NOT_REPRODUCE")
-            incident_member = (uid in member_uids) if truth is not None else None
-            credit_eligible = bool(exists and in_scope and reproduces
-                                   and (incident_member is True if truth is not None else True))
-            v = {"event_uid": uid, "exists": exists, "in_scope": in_scope,
-                 "reproduces": reproduces, "incident_member": incident_member,
-                 "credit_eligible": credit_eligible, "errors": errs}
+            reference_valid = bool(exists and in_scope and reproduces)
+            claim_consistent = None
+            review_flag = None
+            if use_truth:
+                claim_consistent = _claim_consistent(disp, role, uid in member_uids)
+                if role == "primary" and claim_consistent is False:
+                    review_flag = "PRIMARY_EVIDENCE_INCONSISTENT_WITH_DISPOSITION"
+            v = {"event_uid": uid, "role": role, "exists": exists, "in_scope": in_scope,
+                 "reproduces": reproduces, "reference_valid": reference_valid,
+                 "errors": errs}
+            if use_truth:
+                v["claim_consistent"] = claim_consistent
+                if review_flag:
+                    v["review_flag"] = review_flag
             cites_out.append(v)
             agg["citations"] += 1
             agg["exists"] += int(exists)
             agg["in_scope"] += int(in_scope)
             agg["reproduces"] += int(reproduces)
-            agg["incident_member"] += int(incident_member is True)
-            agg["credit_eligible"] += int(credit_eligible)
-        out_incidents.append({"label": inc.get("label"), "citations": cites_out})
+            agg["reference_valid"] += int(reference_valid)
+            agg["claim_consistent"] += int(claim_consistent is True)
+            agg["review_flags"] += int(review_flag is not None)
+        out_incidents.append({"label": inc.get("label"), "disposition": disp,
+                              "citations": cites_out})
 
     return {"summary": agg, "incidents": out_incidents,
-            "truth_supplied": truth is not None}
+            "truth_consulted": use_truth}
+
+
+def candidate_verification(payload: dict, reader, candidate_index: str) -> dict:
+    """Candidate-safe verification: existence, scope, and query reproducibility only.
+    Never consults or reveals the hidden truth, so it is safe to return to the
+    candidate during drafting/verify-before-submit."""
+    return verify_evidence(payload, reader, candidate_index, truth=None, candidate_safe=True)
 
 
 # --- Evidence preservation + signing -----------------------------------------

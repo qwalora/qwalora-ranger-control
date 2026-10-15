@@ -87,45 +87,67 @@ def run():
     # --- evidence verification ---------------------------------------------
     v = cc.verify_evidence(good, reader, INDEX, truth=truth)
     cite0 = v["incidents"][0]["citations"][0]
-    check("malicious citation: exists+reproduces+member+credit",
-          cite0["exists"] and cite0["reproduces"] and cite0["incident_member"] and cite0["credit_eligible"])
+    check("malicious primary citation for confirmed incident: valid + claim_consistent",
+          cite0["exists"] and cite0["reproduces"] and cite0["reference_valid"]
+          and cite0["claim_consistent"] is True and "review_flag" not in cite0)
 
-    # benign event cited for an incident: exists + reproduces but NOT a member -> no credit
+    # benign event as PRIMARY proof of a confirmed incident: valid reference, but
+    # inconsistent with the claim -> flagged for review, NOT silently zeroed
     ben = _good_submission(ben_uid)
     vb = cc.verify_evidence(ben, reader, INDEX, truth=truth)
     cb = vb["incidents"][0]["citations"][0]
-    check("benign citation: exists+reproduces but not member -> NOT credit-eligible",
-          cb["exists"] and cb["reproduces"] and cb["incident_member"] is False and not cb["credit_eligible"])
+    check("benign primary citation for confirmed incident: reference_valid but inconsistent + review flag",
+          cb["reference_valid"] and cb["claim_consistent"] is False
+          and cb.get("review_flag") == "PRIMARY_EVIDENCE_INCONSISTENT_WITH_DISPOSITION")
 
-    # fabricated uid -> not found
+    # benign event legitimately supports a FALSE-POSITIVE (no_incident) disposition
+    fp = _good_submission(ben_uid)
+    fp["incidents"][0]["disposition"] = "no_incident"
+    fp["incidents"][0]["primary_identity"] = ""   # not required for no_incident
+    fp["incidents"][0]["affected_assets"] = []
+    fp["incidents"][0]["analyst_conclusion"] = ""
+    vfp = cc.verify_evidence(fp, reader, INDEX, truth=truth)
+    cfp = vfp["incidents"][0]["citations"][0]
+    check("benign primary citation for false positive: consistent, not zeroed",
+          cfp["reference_valid"] and cfp["claim_consistent"] is True and "review_flag" not in cfp)
+
+    # benign event in a SUPPORTING role (baseline) is never auto-failed
+    bl = _good_submission(ben_uid)
+    bl["incidents"][0]["cited_evidence"][0]["role"] = "baseline"
+    vbl = cc.verify_evidence(bl, reader, INDEX, truth=truth)
+    cbl = vbl["incidents"][0]["citations"][0]
+    check("benign baseline citation: valid, consistency deferred to reviewer (None), no flag",
+          cbl["reference_valid"] and cbl["claim_consistent"] is None and "review_flag" not in cbl)
+
+    # fabricated uid -> not found, not a valid reference
     fab = _good_submission("FABRICATEDUID000000")
     vf = cc.verify_evidence(fab, reader, INDEX, truth=truth)
     cf = vf["incidents"][0]["citations"][0]
-    check("fabricated uid -> EVIDENCE_UID_NOT_FOUND, no credit",
-          (not cf["exists"]) and ("EVIDENCE_UID_NOT_FOUND" in cf["errors"]) and not cf["credit_eligible"])
+    check("fabricated uid -> EVIDENCE_UID_NOT_FOUND, not reference_valid",
+          (not cf["exists"]) and ("EVIDENCE_UID_NOT_FOUND" in cf["errors"]) and not cf["reference_valid"])
 
     # out-of-scope index
     oos = _good_submission(mal_uid)
     oos["incidents"][0]["cited_evidence"][0]["index"] = "ranger-pilot-cand-b-b2"
     vo = cc.verify_evidence(oos, reader, INDEX, truth=truth)
     co = vo["incidents"][0]["citations"][0]
-    check("out-of-scope index -> EVIDENCE_OUT_OF_SCOPE, no credit",
-          ("EVIDENCE_OUT_OF_SCOPE" in co["errors"]) and not co["credit_eligible"])
+    check("out-of-scope index -> EVIDENCE_OUT_OF_SCOPE, not reference_valid",
+          ("EVIDENCE_OUT_OF_SCOPE" in co["errors"]) and not co["reference_valid"])
 
     # query that does not reproduce (term on a wrong value)
     nr = _good_submission(mal_uid)
     nr["incidents"][0]["cited_evidence"][0]["query"] = {"query": {"term": {"host.name": "no-such-host-xyz"}}}
     vn = cc.verify_evidence(nr, reader, INDEX, truth=truth)
     cn = vn["incidents"][0]["citations"][0]
-    check("non-reproducing query -> QUERY_DOES_NOT_REPRODUCE, no credit",
+    check("non-reproducing query -> QUERY_DOES_NOT_REPRODUCE, not reference_valid",
           cn["exists"] and (not cn["reproduces"]) and ("QUERY_DOES_NOT_REPRODUCE" in cn["errors"])
-          and not cn["credit_eligible"])
+          and not cn["reference_valid"])
 
-    # truth not supplied -> incident_member is None, credit not gated on membership
-    vns = cc.verify_evidence(good, reader, INDEX, truth=None)
-    cns = vns["incidents"][0]["citations"][0]
-    check("no truth -> member None, credit on exists+reproduces only",
-          cns["incident_member"] is None and cns["credit_eligible"])
+    # candidate-safe verification NEVER consults or exposes truth
+    cv = cc.candidate_verification(good, reader, INDEX)
+    cvc = cv["incidents"][0]["citations"][0]
+    check("candidate-safe verification exposes no truth (no claim_consistent key)",
+          cv["truth_consulted"] is False and "claim_consistent" not in cvc and cvc["reference_valid"])
 
     # --- preservation + signing + tamper ------------------------------------
     meta = {"candidate": "cand-a", "board": 2, "cohort": "pilot", "seed": "case-contract-test",
