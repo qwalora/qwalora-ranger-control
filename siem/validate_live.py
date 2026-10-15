@@ -12,6 +12,7 @@ Env:  OPENSEARCH_URL, OPENSEARCH_ADMIN_USER, OPENSEARCH_ADMIN_PASSWORD
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import statistics
@@ -123,7 +124,15 @@ def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
     pw = os.environ["OPENSEARCH_ADMIN_PASSWORD"]
-    c = LiveCluster(url, admin, pw, verify_tls=False, timeout=60)
+    # P1.6: verify the node cert against the Ranger CA when it is provided.
+    ca_path = None
+    cab64 = os.environ.get("RANGER_CA_B64")
+    if cab64:
+        ca_path = "/tmp/ranger-ca.pem"
+        with open(ca_path, "wb") as f:
+            f.write(base64.b64decode(cab64))
+    c = LiveCluster(url, admin, pw, timeout=60, ca_path=ca_path)
+    REPORT["metrics"]["tls_verification"] = bool(ca_path)
     mode = os.environ.get("RANGER_VALIDATE_MODE")
     if mode == "persist":
         print(f"== Ranger SIEM persistence re-check against {url} ==", flush=True)

@@ -35,11 +35,17 @@ class NotFound(LiveError):
 
 class LiveCluster:
     def __init__(self, base_url: str, admin_user: str, admin_password: str,
-                 verify_tls: bool = False, timeout: int = 30):
+                 verify_tls: bool = False, timeout: int = 30, ca_path: str | None = None):
         self.base = base_url.rstrip("/")
         self.admin = (admin_user, admin_password)
         self.timeout = timeout
-        self._ctx = None if verify_tls else ssl._create_unverified_context()
+        if ca_path:
+            # Verify the node certificate against the Ranger CA (full verification).
+            self._ctx = ssl.create_default_context(cafile=ca_path)
+        elif verify_tls:
+            self._ctx = ssl.create_default_context()
+        else:
+            self._ctx = ssl._create_unverified_context()
 
     # --- transport -------------------------------------------------------
     def _req(self, method, path, body=None, auth=None, ndjson=False):
