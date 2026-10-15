@@ -1,7 +1,13 @@
 # Ranger AI/LLM architecture - scenario engineering, cohort planning, assisted exercise & assessment (for approval)
 
 Linked from `siem/BOARD2_M4_3_ARCHITECTURE.md` (cohort provisioning & lifecycle). This
-is design and approval work only. No AI implementation, no paid model API calls, no
+is design and approval work only.
+
+> Scope note: this document describes the internal **AI Orchestration Layer** (an untrusted
+> advisor that helps staff author/operate *any* track). It is **not** the candidate-facing
+> **Cyber AI pathway**, which is defined in `siem/RANGER_TWO_TRACK_ARCHITECTURE.md`. The two are
+> deliberately distinct: this layer holds no authority in either track.
+ No AI implementation, no paid model API calls, no
 cohort activation, no infrastructure deployment, no change to production grading.
 Candidate access, act-as, and unattended ingestion stay disabled. The shared-SOC model
 for boards 1-4, individual protected qualification, and future Ludus/GOAD for boards

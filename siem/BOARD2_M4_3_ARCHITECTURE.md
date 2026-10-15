@@ -1,5 +1,10 @@
 # Board 2+ M4.3 — Cohort-shared operational SOC: architecture & integration (revised for approval)
 
+> Track context: this document is the **cyber-ops** track. The day-one two-track platform
+> (cyber-ops + cyber-ai) is defined in `siem/RANGER_TWO_TRACK_ARCHITECTURE.md`, which gates the
+> lock of M4.3.1. This document is unchanged by that revision — cyber-ops keeps its six-board
+> program, OpenSearch, and future Ludus/GOAD architecture.
+
 Planning and architecture only. No implementation, no candidate access, no
 continuous/unattended ingestion until this revision receives final approval. M3
 grading stays shadow-only; the 95% qualification standard is unchanged; act-as stays

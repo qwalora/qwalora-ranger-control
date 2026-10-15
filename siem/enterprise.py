@@ -286,9 +286,15 @@ SCENARIO_FAMILIES = ["privileged-identity-compromise", "data-exfiltration",
                      "detection-failure"]
 
 
-def generate(candidate_id: str, board: int, seed: str, profile: str = "B"):
+def generate(candidate_id: str, board: int, seed: str, profile: str = "B",
+             families=None):
     """Return (events, truth). `events` go to the candidate's index with no labels;
-    `truth` stays in the Ranger backend for grading. Pure function of the seed."""
+    `truth` stays in the Ranger backend for grading. Pure function of the seed.
+
+    `families` (optional): an explicit, ordered list of incident families to inject,
+    so a ScenarioSpec can drive composition deterministically instead of the default
+    random sample. Each must be a known SCENARIO_FAMILIES value; unknown -> ValueError.
+    Default (None) preserves the original seed-driven random selection."""
     cfg = PROFILES[profile]
     r = _random.Random(f"ent:{board}:{seed}:{profile}")
     r._benign_target = cfg["benign"]
@@ -297,7 +303,13 @@ def generate(candidate_id: str, board: int, seed: str, profile: str = "B"):
 
     events: list[dict] = []
     # incidents first (so benign fills around them to the target benign count)
-    chosen = r.sample(SCENARIO_FAMILIES, min(cfg["incidents"], len(SCENARIO_FAMILIES)))
+    if families is not None:
+        bad = [f for f in families if f not in SCENARIO_FAMILIES]
+        if bad:
+            raise ValueError(f"unknown scenario families: {bad}")
+        chosen = list(families)[:cfg["incidents"]]
+    else:
+        chosen = r.sample(SCENARIO_FAMILIES, min(cfg["incidents"], len(SCENARIO_FAMILIES)))
     truth = []
     for i, fam in enumerate(chosen):
         truth.append(_scenario(events, r, clock, candidate_id, board, seed, fam, i))

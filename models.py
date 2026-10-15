@@ -48,6 +48,12 @@ def ensure_schema(db):
             ("exited_at", "TIMESTAMP"),
             ("exit_reason", "VARCHAR(200)"),
         ],
+        "cohorts": [
+            # M4.3.1 pathway-awareness: existing cohorts default to cyber-ops, so
+            # backward compatibility holds (no grading/access change for them).
+            ("pathway", "VARCHAR(20) DEFAULT 'cyber-ops'"),
+            ("curriculum_version", "VARCHAR(20)"),
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -284,8 +290,14 @@ class Cohort(db.Model):
     completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
     note = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    # M4.3.1 pathway-awareness. Existing cohorts default to cyber-ops -> no change in
+    # curriculum, grading, or access. cyber-ai cohorts are a future, separately
+    # approved curriculum and do NOT inherit the six-board sequence.
+    pathway = db.Column(db.String(20), nullable=False, default="cyber-ops")
+    curriculum_version = db.Column(db.String(20), nullable=True)
 
     STATUSES = ("scheduled", "active", "completed")
+    PATHWAYS = ("cyber-ops", "cyber-ai")
 
 
 class AdminUser(db.Model):
@@ -469,6 +481,47 @@ class CohortScenarioPlan(db.Model):
     __table_args__ = (db.UniqueConstraint("cohort", "board", name="uq_plan_per_cohort_board"),)
 
     DIFFICULTIES = ("intro", "standard", "advanced")
+
+
+class ScenarioCatalogEntry(db.Model):
+    """M4.3.1 - a validated, versioned, immutable scenario package in the catalog.
+
+    The catalog is pathway-aware WITHOUT being duplicated: one table, a `pathway`
+    column (cyber-ops today; cyber-ai later). An entry holds the full declarative
+    ScenarioSpec (siem/scenario_spec.py) plus its content hash (immutability),
+    calibration vector, and approval record. Only status `catalog_eligible` is
+    selectable for cohort assignment. Hidden truth is never stored here; the spec's
+    evaluator_only layer references truth GENERATION, which is recomputed from the
+    seed server-side. This does not replace CohortScenarioPlan (admin intent) or the
+    Case/CaseSubmission/BoardResult/qualification machinery, which are unchanged.
+    """
+    __tablename__ = "scenario_catalog_entries"
+    id = db.Column(db.Integer, primary_key=True)
+    spec_id = db.Column(db.String(80), nullable=False, index=True)
+    spec_version = db.Column(db.Integer, nullable=False, default=1)
+    pathway = db.Column(db.String(20), nullable=False, default="cyber-ops", index=True)
+    specialization = db.Column(db.String(40), nullable=True)
+    environment_type = db.Column(db.String(40), nullable=False, default="soc-opensearch")
+    spec_type = db.Column(db.String(40), nullable=False, default="soc-investigation")
+    board_compat = db.Column(db.String(40), nullable=True)   # JSON list of boards
+    difficulty = db.Column(db.String(20), nullable=True)
+    status = db.Column(db.String(24), nullable=False, default="draft", index=True)
+    content_hash = db.Column(db.String(64), nullable=True)   # immutable spec hash
+    spec_json = db.Column(db.Text, nullable=True)            # the full declarative ScenarioSpec
+    calibration = db.Column(db.Text, nullable=True)          # JSON complexity vector
+    diversity = db.Column(db.Text, nullable=True)            # JSON diversity axes
+    approved_by = db.Column(db.String(64), nullable=True)
+    approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    # one immutable row per (spec_id, spec_version)
+    __table_args__ = (db.UniqueConstraint("spec_id", "spec_version",
+                                          name="uq_scenario_spec_version"),)
+
+    STATUSES = ("draft", "schema_validated", "capability_validated",
+                "executable_tested", "calibrated", "approved", "catalog_eligible",
+                "deprecated")
 
 
 class Case(db.Model):
