@@ -90,39 +90,78 @@ to 16 GB RAM) past ~50 concurrent candidates or if heap pressure exceeds 75%
 sustained; add a second data node only if a single node cannot hold the working set
 in page cache, which is far beyond the initial cohort.
 
-## 4. Hosting: Railway suitability and the VPS alternative
+## 4. Hosting: Railway vs a VPS (revised after checking both)
 
-**Railway is not suitable for the OpenSearch data node**, for concrete reasons:
+Two things in the first draft of this section were wrong, and correcting them
+changes the recommendation to **run OpenSearch on Railway**, not a VPS.
 
-- OpenSearch requires `vm.max_map_count = 262144`, a host-level kernel sysctl.
-  Railway runs managed containers and does not expose host sysctl control, so
-  OpenSearch fails its bootstrap checks in production mode. Disabling bootstrap
-  checks or forcing single-node discovery to get around this produces an unreliable
-  indexer, which the brief explicitly warns against.
-- JVM memory locking (`bootstrap.memory_lock`) and guaranteed high-IOPS persistent
-  volumes are not dependable under Railway's shared, memory-limited model.
+**Correction 1: Railway can run OpenSearch reliably.** My objection was that
+OpenSearch needs the `vm.max_map_count = 262144` sysctl, which Railway does not let
+you set. But in **single-node mode** (`discovery.type=single-node`) OpenSearch
+**skips the production bootstrap checks**, so that sysctl and the `memlock`/`nofile`
+ulimits are not required. Single node is exactly our design (one small shared node
+for Boards 1 to 4). Published Railway OpenSearch templates confirm this: they boot,
+keep their index on a Railway volume across redeploys, run the Security plugin for
+authentication, and run OpenSearch + Dashboards together. The two real Railway
+quirks both have known fixes: Railway mounts the volume as root (an entrypoint takes
+ownership and drops to the `opensearch` user), and Railway terminates TLS at its edge
+and speaks HTTP internally (so OpenSearch's HTTP-layer TLS is turned off while the
+Security plugin's transport encryption and authentication stay on).
 
-**Keep the Ranger portal and Postgres on Railway** (they are small and already run
-well there). **Run OpenSearch + Dashboards on a modest dedicated VPS** where kernel
-settings, a mounted persistent volume, TLS, and the Security plugin are fully under
-our control. A Hetzner CX32 (4 vCPU / 8 GB / 80 GB, about 16 USD/month) or
-equivalent meets the sizing with margin.
+**Correction 2: the VPS is not cheaper any more.** My ~16 USD/month VPS figure was
+stale. After Hetzner's June 2026 reprice, a current 4 vCPU / 8 GB instance is about
+**39 USD/month** (the cheaper 8 GB CX/CAX lines showed as unavailable in mid-2026).
+That is at parity with Railway for this workload, not below it.
 
-## 5. Projected monthly cost
+**Revised recommendation: run OpenSearch + Dashboards on Railway**, in the existing
+qwalora-ranger workspace next to the portal and Postgres, because at cost parity the
+single-provider option is simpler and, in one respect, more secure:
+
+- The OpenSearch REST API stays on **Railway's private network**: the broker (portal)
+  and Dashboards reach it internally, and the API need not be exposed publicly at all.
+  Only Dashboards is a public surface, behind Railway's edge TLS. A VPS puts a public
+  server on the internet to harden, patch, firewall, and monitor.
+- One provider, one bill, one control plane, one secret store. No OS patching, no
+  Let's Encrypt lifecycle, no second attack surface.
+- The Security plugin (authentication + index/document-level roles) does the candidate
+  isolation regardless of HTTP-layer TLS, so isolation is unaffected by the edge-TLS model.
+
+We do **not** use the convenience templates as-is: the two-service one disables the
+Security plugin, and we require it on. The build is two Railway services (OpenSearch
+and Dashboards) from **pinned official images** with a small entrypoint for volume
+ownership, the **Security plugin enabled**, single-node, a persistent volume, the API
+private, and Dashboards the only edge-TLS surface.
+
+The honest tradeoff that would favor a VPS: a mandate for **end-to-end HTTP-layer TLS
+with our own certificates** (Railway's edge-TLS model means plaintext on its private
+network internally), or a future need for a **multi-node** cluster. For synthetic
+telemetry with no real secrets and a single small node, neither applies now. The VPS
+stays documented as the fallback if either requirement emerges.
+
+## 5. Projected monthly cost (actual rates, October 2026)
+
+Railway bills actual usage: RAM at 10 USD/GB-month, vCPU at 20 USD/vCPU-month, volume
+at 0.15 USD/GB-month, egress at 0.05 USD/GB (Pro plan 20 USD/month per workspace, with
+20 USD of usage credit). OpenSearch at a 2 GB heap sits around 2.5 GB resident;
+Dashboards adds ~0.7 GB; CPU is bursty (seeding on board access, interactive search),
+so average vCPU is low.
 
 | Component | Host | Est. USD/month |
 |---|---|---|
-| Ranger portal | Railway, always-on | 5 to 15 |
-| Postgres | Railway | 5 to 10 |
-| OpenSearch + Dashboards node (4 vCPU / 8 GB / 80 GB) | VPS (Hetzner CX32 class), always-on | 16 to 20 |
-| Snapshots / volume / egress | VPS provider | 2 to 6 |
-| **Phase 2 baseline total** | | **~28 to 51 USD/month** |
+| OpenSearch RAM (~2.5 GB) | Railway | ~25 |
+| OpenSearch Dashboards RAM (~0.7 GB) | Railway | ~7 |
+| vCPU (bursty, ~0.3 to 0.5 avg) | Railway | ~6 to 10 |
+| Volume (10 GB) | Railway | ~1.5 |
+| Egress (mostly private network) | Railway | ~1 to 3 |
+| **Phase 2 SIEM on Railway (incremental)** | | **~40 to 47 USD/month** |
+| Membership context: same on a 4 vCPU / 8 GB VPS | Hetzner, flat | ~39 to 42 plus self-managed ops |
 
-Comfortably inside the 300 USD/month combined budget, leaving headroom for the
-Phase 3 GOAD host. OpenSearch is stateful and continuously ingesting at the JVM
-level, so it does not cleanly scale to zero; the honest model is a small always-on
-node, which is cheap enough that always-on is the right call. These are current-list
-estimates to confirm at provisioning, not quotes.
+Either option lands near 40 USD/month; the existing portal + Postgres (~10 to 25) are
+unchanged. Total Phase 2 stays well inside the 300 USD/month budget with headroom for
+the Phase 3 GOAD host. OpenSearch is stateful and continuously holds its JVM heap, so
+it does not cleanly scale to zero; a small always-on node is the honest model, and it
+is cheap enough that always-on is correct. Rates are current list as of October 2026,
+to confirm at provisioning, not quotes.
 
 ## 6. Candidate isolation model
 
@@ -203,8 +242,12 @@ evidence to the correct candidate and board.**
 
 ## 10. Decision required before provisioning
 
-Approve, with any changes: (a) OpenSearch + Dashboards as the platform; (b) the
-dedicated VPS (Hetzner CX32 class, ~16 to 20 USD/month) rather than Railway for the
-OpenSearch node; (c) the ~28 to 51 USD/month Phase 2 operating cost; (d) the
-isolation and credential-mapping model above. On approval, the node is provisioned
-and the built components are validated against it.
+Approve, with any changes: (a) OpenSearch + Dashboards as the platform; (b) hosting
+it on **Railway** (single-node, Security plugin on, pinned images, API on the private
+network, Dashboards behind edge TLS) rather than a VPS, since at ~40 USD/month the two
+are at cost parity and Railway is the simpler, single-provider option; (c) the
+~40 to 47 USD/month incremental Phase 2 operating cost; (d) the isolation and
+credential-mapping model above. On approval, the two services are provisioned on
+Railway and the built components are validated against the live cluster. The VPS
+remains the documented fallback only if end-to-end HTTP-layer TLS or a multi-node
+cluster becomes a hard requirement.
