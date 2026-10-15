@@ -207,6 +207,18 @@ def _bootstrap_resources():
     original Qwalora publications are inserted as drafts, review-gated. Runs on
     every boot; it only ever adds slugs that are not yet present."""
     try:
+        # One-time cleanup of the retired launch seed. Those rows carry legacy
+        # rtypes (reference/guide/dataset-doc/whitepaper) that the current admin
+        # editor cannot produce, so any row whose rtype is outside the
+        # standardized vocabulary is a stale seed row and is removed. This cannot
+        # touch admin-curated resources, which always carry a valid rtype.
+        legacy = Resource.query.filter(Resource.rtype.notin_(Resource.RTYPES)).all()
+        removed = 0
+        for r in legacy:
+            db.session.delete(r)
+            removed += 1
+        if removed:
+            db.session.commit()
         have = {s for (s,) in db.session.query(Resource.slug)
                 .filter(Resource.slug.isnot(None)).all()}
         added = 0
