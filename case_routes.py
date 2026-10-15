@@ -32,6 +32,12 @@ def _flag_on():
     return os.environ.get("RANGER_CASE_UI", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _shadow_on():
+    """The SHADOW enterprise grader is independently gated and OFF by default. It
+    never drives qualification; it only records a comparison grade for reviewers."""
+    return os.environ.get("RANGER_SHADOW_GRADER", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 # --- evidence reader (live OpenSearch); injectable for tests -----------------
 class LiveReader:
     """Reads the candidate's OWN authorized index to check evidence. Built from the
@@ -312,6 +318,8 @@ def register(app, candidate_model, db, helpers):
                         cc.verify_evidence_record(json.loads(s.evidence_record), s.evidence_sig)
                         if (s.evidence_record and s.evidence_sig) else None),
                     "shadow_score": s.shadow_score,
+                    "shadow_breakdown": json.loads(s.shadow_breakdown) if s.shadow_breakdown else None,
+                    "review_flags": json.loads(s.review_flags) if s.review_flags else None,
                     "reviewer_feedback": s.reviewer_feedback}
         return jsonify({"ok": True, "case": {"id": case.id, "status": case.status,
                         "candidate_id": case.candidate_id},
@@ -333,7 +341,47 @@ def register(app, candidate_model, db, helpers):
         db.session.commit()
         return jsonify({"ok": True})
 
-    app.logger.info("case UI registered at /case (flag RANGER_CASE_UI=%s)", _flag_on())
+    @app.post("/admin/cases/submission/<int:sid>/shadow")
+    def admin_case_shadow(sid):
+        """Compute (or recompute) the SHADOW enterprise grade for a submitted
+        submission and store it on the shadow-only fields. Reviewer-only and gated
+        by RANGER_SHADOW_GRADER. It NEVER writes an objective grade, never alters
+        the signed evidence record/signature, and never affects clearance. The
+        hidden truth is consulted server-side only and never returned raw."""
+        _guard()
+        self_who = _admin()
+        if not _shadow_on():
+            abort(404)
+        s = CaseSubmission.query.get(sid)
+        if not s:
+            abort(404)
+        if s.submission_status not in ("submitted", "under_review", "evaluated"):
+            return jsonify({"ok": False, "error": "submission is not finalized"}), 409
+        case = Case.query.get(s.case_id)
+        cand = candidate_model.query.get(s.candidate_id)
+        if not case or not cand:
+            abort(404)
+        from siem import enterprise, enterprise_grader as eg
+        profile = os.environ.get("RANGER_B2_PROFILE", "B")
+        _events, truth = enterprise.generate(_slug(cand), CASE_BOARD, case.seed, profile)
+        payload = json.loads(s.payload) if s.payload else {}
+        reader = _reader_factory(case)
+        result = eg.score_board2_enterprise(truth, payload, reader, case.index_name)
+        s.shadow_score = result["score"]
+        s.shadow_breakdown = json.dumps(result["components"])
+        s.review_flags = json.dumps(result["review_flags"])
+        # objective grade, evidence record + signature, and clearance are untouched.
+        db.session.commit()
+        # Return the breakdown WITHOUT the raw matching detail (which would echo the
+        # truth event_uids); reviewers get scores, anchors, and flags only.
+        safe = {"score": result["score"], "normalized": result["normalized"],
+                "components": result["components"], "review_flags": result["review_flags"],
+                "version": result["version"], "rubric_version": result["rubric_version"],
+                "shadow": True, "pass_bar_reference": result["pass_bar_reference"]}
+        return jsonify({"ok": True, "shadow": safe})
+
+    app.logger.info("case UI registered at /case (flag RANGER_CASE_UI=%s, shadow=%s)",
+                    _flag_on(), _shadow_on())
 
 
 def _model(db, name):

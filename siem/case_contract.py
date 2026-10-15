@@ -58,8 +58,29 @@ SEVERITIES = ("low", "medium", "high", "critical")
 # hypothesis, context) and for false-positive dispositions; they are NOT
 # auto-zeroed. "primary" means the citation is offered as direct proof of the
 # incident/disposition, where the event's true nature must be consistent.
-ROLES = ("primary", "baseline", "exclusion", "alternative", "context")
+#   primary       - direct proof of the disposition (nature must match the claim)
+#   corroborating - strengthens a confirmed finding (member expected, benign weak)
+#   precursor     - an earlier-stage event of the same chain (member expected)
+#   baseline      - a normal-behaviour reference for contrast (benign by design)
+#   exclusion     - evidence used to rule something out (benign by design)
+#   alternative   - evidence for an alternative hypothesis (reviewer judgment)
+#   context       - background colour, low weight (reviewer judgment)
+ROLES = ("primary", "corroborating", "precursor", "baseline", "exclusion",
+         "alternative", "context")
 _DEFAULT_ROLE = "primary"
+
+# M3 evidence relevance: the three NON-INTERCHANGEABLE properties of a citation.
+#   A. reference validity  - exists in the candidate's own index + reproduces (truth-free)
+#   B. claim support       - does the evidence support THIS role's claim (role+disposition aware)
+#   C. malicious activity  - is the event actually part of a real incident (truth-only fact)
+# Membership (C) alone never grants credit: a benign event correctly used as a
+# baseline is fully supporting (B), while a real attack event mis-filed as a
+# "baseline" is misclassified (B=unsupported) despite being malicious (C=True).
+CLAIM_SUPPORT = ("supported", "partial", "unsupported", "misclassified", "indeterminate")
+# Human-review triggers raised at the citation level.
+FLAG_PRIMARY_INCONSISTENT = "PRIMARY_EVIDENCE_INCONSISTENT_WITH_DISPOSITION"
+FLAG_MALICIOUS_AS_REFERENCE = "MALICIOUS_EVENT_CITED_AS_BENIGN_REFERENCE"
+FLAG_BENIGN_DISP_CITES_MALICIOUS = "BENIGN_DISPOSITION_CITES_MALICIOUS_EVENT"
 _TECH_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
 
 
@@ -179,6 +200,18 @@ def _truth_member_uids(truth) -> set:
     return uids
 
 
+def _truth_uid_incident(truth) -> dict:
+    """Map each malicious event_uid to its incident family (property C detail)."""
+    out: dict = {}
+    if not truth:
+        return out
+    for inc in truth.get("incidents", []):
+        fam = inc.get("family")
+        for uid in inc.get("event_uids", []):
+            out[uid] = fam
+    return out
+
+
 def _claim_consistent(disposition, role, is_member):
     """Does the cited event's true nature support the candidate's SPECIFIC claim?
 
@@ -195,6 +228,57 @@ def _claim_consistent(disposition, role, is_member):
     if disposition == "no_incident":
         return (is_member is False)       # primary proof of a false positive must be a benign event
     return None                           # inconclusive: either nature is acceptable
+
+
+def _assess_claim(disposition, role, is_member):
+    """Property B (claim support), assessed with property C (membership) as INPUT
+    but never as the sole criterion.
+
+    Returns (claim_support, relevance, review_flag):
+      - claim_support in CLAIM_SUPPORT
+      - relevance is the weight this citation carries toward the claim [0..1]
+      - review_flag is a human-review trigger string or None
+
+    Design: membership alone never grants credit. The role declares what the
+    candidate intends the event to prove, and B is whether the event's true
+    nature fits THAT intent. A benign event legitimately used as a baseline or
+    exclusion is fully supporting; a real incident event mis-filed as a "benign
+    baseline" is misclassified (a missed detection), not rewarded for being
+    malicious."""
+    # inconclusive: no automated determination for any role.
+    if disposition == "inconclusive":
+        return "indeterminate", 0.5, None
+
+    if disposition == "confirmed_incident":
+        if role == "primary":
+            if is_member:
+                return "supported", 1.0, None
+            return "unsupported", 0.0, FLAG_PRIMARY_INCONSISTENT
+        if role in ("corroborating", "precursor"):
+            # member strengthens the chain; a benign event can still provide
+            # legitimate context but carries far less weight (reviewer may lift).
+            return ("supported", 1.0, None) if is_member else ("partial", 0.4, None)
+        if role in ("baseline", "exclusion"):
+            # These are benign-by-design comparative references. A real attack
+            # event used here means the candidate mistook malicious for normal.
+            if is_member:
+                return "misclassified", 0.0, FLAG_MALICIOUS_AS_REFERENCE
+            return "supported", 1.0, None
+        # alternative / context: reviewer judgment, modest weight.
+        return "indeterminate", (0.5 if role == "alternative" else 0.3), None
+
+    # no_incident (false positive): the whole claim is that nothing is malicious.
+    if role == "primary":
+        if is_member is False:
+            return "supported", 1.0, None
+        return "unsupported", 0.0, FLAG_PRIMARY_INCONSISTENT
+    # any supporting citation of a member event under a benign disposition is a
+    # missed detection; benign supporting evidence is fine.
+    if is_member:
+        return "misclassified", 0.0, FLAG_BENIGN_DISP_CITES_MALICIOUS
+    if role in ("baseline", "exclusion", "corroborating", "precursor"):
+        return "supported", 1.0, None
+    return "indeterminate", (0.5 if role == "alternative" else 0.3), None
 
 
 def verify_evidence(payload: dict, reader, candidate_index: str, truth=None,
@@ -215,9 +299,11 @@ def verify_evidence(payload: dict, reader, candidate_index: str, truth=None,
     """
     use_truth = (truth is not None) and not candidate_safe
     member_uids = _truth_member_uids(truth) if use_truth else set()
+    uid_to_incident = _truth_uid_incident(truth) if use_truth else {}
     out_incidents = []
     agg = {"citations": 0, "exists": 0, "in_scope": 0, "reproduces": 0,
-           "reference_valid": 0, "claim_consistent": 0, "review_flags": 0}
+           "reference_valid": 0, "claim_consistent": 0, "review_flags": 0,
+           "supported": 0, "misclassified": 0, "malicious": 0}
 
     for inc in (payload.get("incidents") or []):
         disp = inc.get("disposition")
@@ -244,18 +330,35 @@ def verify_evidence(payload: dict, reader, candidate_index: str, truth=None,
                     reproduces = False
                 if not reproduces:
                     errs.append("QUERY_DOES_NOT_REPRODUCE")
-            reference_valid = bool(exists and in_scope and reproduces)
+            reference_valid = bool(exists and in_scope and reproduces)   # property A
             claim_consistent = None
             review_flag = None
+            claim_support = None
+            relevance = None
+            malicious_activity = None
+            incident_family = None
             if use_truth:
-                claim_consistent = _claim_consistent(disp, role, uid in member_uids)
+                is_member = uid in member_uids
+                # property C: malicious-activity determination (a fact of the event)
+                malicious_activity = bool(is_member)
+                incident_family = uid_to_incident.get(uid)
+                # legacy primary-only consistency (unchanged semantics for M1/M2)
+                claim_consistent = _claim_consistent(disp, role, is_member)
                 if role == "primary" and claim_consistent is False:
-                    review_flag = "PRIMARY_EVIDENCE_INCONSISTENT_WITH_DISPOSITION"
+                    review_flag = FLAG_PRIMARY_INCONSISTENT
+                # property B: role+disposition-aware claim support (M3)
+                claim_support, relevance, b_flag = _assess_claim(disp, role, is_member)
+                if b_flag and not review_flag:
+                    review_flag = b_flag
             v = {"event_uid": uid, "role": role, "exists": exists, "in_scope": in_scope,
                  "reproduces": reproduces, "reference_valid": reference_valid,
                  "errors": errs}
             if use_truth:
                 v["claim_consistent"] = claim_consistent
+                v["malicious_activity"] = malicious_activity    # property C
+                v["incident_family"] = incident_family
+                v["claim_support"] = claim_support              # property B
+                v["relevance"] = relevance
                 if review_flag:
                     v["review_flag"] = review_flag
             cites_out.append(v)
@@ -266,8 +369,17 @@ def verify_evidence(payload: dict, reader, candidate_index: str, truth=None,
             agg["reference_valid"] += int(reference_valid)
             agg["claim_consistent"] += int(claim_consistent is True)
             agg["review_flags"] += int(review_flag is not None)
+            agg["supported"] += int(claim_support == "supported")
+            agg["misclassified"] += int(claim_support == "misclassified")
+            agg["malicious"] += int(malicious_activity is True)
         out_incidents.append({"label": inc.get("label"), "disposition": disp,
                               "citations": cites_out})
+
+    if not use_truth:
+        # candidate-safe: never expose truth-derived counters (property B/C), not
+        # even as zeroed keys, so the result leaks nothing about the scenario.
+        for k in ("claim_consistent", "supported", "misclassified", "malicious", "review_flags"):
+            agg.pop(k, None)
 
     return {"summary": agg, "incidents": out_incidents,
             "truth_consulted": use_truth}
@@ -281,15 +393,46 @@ def candidate_verification(payload: dict, reader, candidate_index: str) -> dict:
 
 
 # --- Evidence preservation + signing -----------------------------------------
+# Preservation format version. Bumped when the record schema changes so an old
+# record is still verifiable under the format it was signed with.
+PRESERVATION_VERSION = 2
+#
+# Retention & access model (enforced by the storage/HTTP layers, documented here
+# so the contract is self-describing):
+#   - WHERE: the signed record lives in CaseSubmission.evidence_record /
+#     .evidence_sig (Postgres), alongside the submission it preserves. It is NOT
+#     written to any candidate-readable index or tenant.
+#   - RETENTION: kept for the lifetime of the BoardResult it supports plus the
+#     appeal/audit window; it outlives the candidate's OpenSearch index, which may
+#     be reclaimed between cohorts. The embedded source snapshots make the record
+#     self-verifying after the live index is gone (verify_record_self_consistent).
+#   - ACCESS: readable by Super Admin / reviewers only (authz.require_* in the HTTP
+#     layer). A candidate may learn that their evidence was preserved and that the
+#     signature is valid, but never reads another candidate's record and never sees
+#     any hidden-truth field — there is none in the record by construction.
+#   - INTEGRITY: Ed25519 over the canonical record (origin + tamper-evidence) PLUS
+#     a per-citation SHA-256 of the canonical source snapshot (content integrity).
+#     Neither is a measure of investigative correctness.
+
+
 def _sha256_source(src: dict) -> str:
     return hashlib.sha256(signing.canonical(src)).hexdigest()
 
 
-def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict):
-    """Snapshot every cited event that exists as {event_uid, sha256(canonical _source)},
-    assemble a case evidence record from meta, and Ed25519-sign it. The signature
-    proves the record was not altered and came from Ranger; it is NOT proof the
-    investigation was correct. Returns (record, signature_b64)."""
+def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict,
+                      embed_snapshots: bool = True):
+    """Preserve every cited event and Ed25519-sign the whole record.
+
+    For each distinct cited event that exists in the candidate's authorized index
+    we record its provenance (index, the candidate's own query), a SHA-256 of the
+    canonical ``_source`` (content digest), and — when ``embed_snapshots`` — the
+    full ``_source`` snapshot so the citation stays verifiable after the live index
+    is reclaimed. No hidden-truth field is ever written: the candidate index has no
+    truth labels, so a snapshot of it leaks nothing about the scenario.
+
+    The signature proves the record was not altered and originated from Ranger; it
+    is NOT proof the investigation was correct. Returns (record, signature_b64)."""
+    # Collect role/query provenance per uid (first citation wins for the query shown).
     cited = []
     seen = set()
     for inc in (payload.get("incidents") or []):
@@ -299,11 +442,24 @@ def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict):
                 continue
             src = reader.get_source(candidate_index, uid)
             if src is None:
+                # Cannot preserve what does not exist; record the gap honestly.
+                seen.add(uid)
+                cited.append({"event_uid": uid, "index": candidate_index,
+                              "role": (cite or {}).get("role") or _DEFAULT_ROLE,
+                              "query": (cite or {}).get("query") or {},
+                              "sha256": None, "preserved": False})
                 continue
             seen.add(uid)
-            cited.append({"event_uid": uid, "sha256": _sha256_source(src)})
+            entry = {"event_uid": uid, "index": candidate_index,
+                     "role": (cite or {}).get("role") or _DEFAULT_ROLE,
+                     "query": (cite or {}).get("query") or {},
+                     "sha256": _sha256_source(src), "preserved": True}
+            if embed_snapshots:
+                entry["source_snapshot"] = src
+            cited.append(entry)
     cited.sort(key=lambda c: c["event_uid"])
     record = {
+        "preservation_version": PRESERVATION_VERSION,
         "candidate": meta.get("candidate"),
         "board": meta.get("board"),
         "cohort": meta.get("cohort"),
@@ -313,6 +469,7 @@ def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict):
         "case_id": meta.get("case_id"),
         "index": candidate_index,
         "submitted_at": meta.get("submitted_at"),
+        "preserved_at": meta.get("preserved_at") or meta.get("submitted_at"),
         "cited": cited,
     }
     return record, signing.sign(record)
@@ -323,21 +480,59 @@ def verify_evidence_record(record: dict, signature: str, public_key_b64=None) ->
     return signing.verify(record, signature, public_key_b64)
 
 
+def verify_record_self_consistent(record: dict) -> dict:
+    """Offline integrity check that needs NO cluster: recompute each citation's
+    digest from its embedded snapshot and compare to the stored sha256. Proves the
+    record is internally intact even after the source index is gone. Citations
+    preserved without a snapshot (embed_snapshots=False) are reported as
+    unverifiable, not as failures.
+    Returns {"ok", "mismatches", "unverifiable"}."""
+    mismatches, unverifiable = [], []
+    for c in record.get("cited", []):
+        if c.get("sha256") is None:
+            unverifiable.append(c["event_uid"]); continue
+        snap = c.get("source_snapshot")
+        if snap is None:
+            unverifiable.append(c["event_uid"]); continue
+        if _sha256_source(snap) != c["sha256"]:
+            mismatches.append(c["event_uid"])
+    return {"ok": not mismatches, "mismatches": mismatches, "unverifiable": unverifiable}
+
+
 def reverify_integrity(record: dict, reader) -> dict:
-    """Recompute each cited event's hash from the live index and compare to the
+    """Recompute each cited event's hash from the LIVE index and compare to the
     preserved record. Proves the cited evidence has not changed since submission.
-    Returns {"ok": bool, "mismatches": [...], "missing": [...]}"""
+
+    When the live index is unavailable (reclaimed between cohorts) the reader
+    returns None for every uid; rather than report a flood of false "missing" we
+    fall back to the embedded snapshot and verify the record against itself, and
+    flag ``index_unavailable``. Returns
+    {"ok", "mismatches", "missing", "index_unavailable", "verified_offline"}."""
     mismatches, missing = [], []
     idx = record.get("index")
-    for c in record.get("cited", []):
+    cited = record.get("cited", [])
+    live_hits = 0
+    for c in cited:
+        if c.get("sha256") is None:
+            continue  # was never preserved; nothing to compare
         src = reader.get_source(idx, c["event_uid"])
         if src is None:
             missing.append(c["event_uid"])
             continue
+        live_hits += 1
         if _sha256_source(src) != c["sha256"]:
             mismatches.append(c["event_uid"])
+    preservable = [c for c in cited if c.get("sha256") is not None]
+    index_unavailable = bool(preservable) and live_hits == 0
+    if index_unavailable:
+        # The live index is gone; verify the record against its own snapshots.
+        self_check = verify_record_self_consistent(record)
+        return {"ok": self_check["ok"], "mismatches": self_check["mismatches"],
+                "missing": [], "index_unavailable": True,
+                "verified_offline": True}
     return {"ok": not mismatches and not missing,
-            "mismatches": mismatches, "missing": missing}
+            "mismatches": mismatches, "missing": missing,
+            "index_unavailable": False, "verified_offline": False}
 
 
 # --- In-memory reader for tests ----------------------------------------------

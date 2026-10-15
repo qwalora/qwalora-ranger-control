@@ -167,6 +167,36 @@ def run():
     sess(aid)
     check("candidate cannot list admin cases -> 403", cli.get("/admin/cases").status_code == 403)
 
+    # --- SHADOW grader endpoint (feature-gated, reviewer-only) ---------------
+    shadow_sid = s0["id"]
+    before_sig2 = sub.evidence_sig
+    # flag OFF -> 404 even for admin
+    os.environ["RANGER_SHADOW_GRADER"] = ""
+    sess(admin=True)
+    check("shadow endpoint 404 when flag off",
+          cli.post(f"/admin/cases/submission/{shadow_sid}/shadow", data=json.dumps({}), headers=H).status_code == 404)
+    # candidate cannot hit it even with flag on -> 403
+    os.environ["RANGER_SHADOW_GRADER"] = "1"
+    os.environ["RANGER_B2_PROFILE"] = "A"   # match the injected profile-A reader
+    sess(aid)
+    check("candidate cannot run shadow grader -> 403",
+          cli.post(f"/admin/cases/submission/{shadow_sid}/shadow", data=json.dumps({}), headers=H).status_code == 403)
+    # admin + flag on -> 200, shadow score stored, signed evidence + objective untouched
+    sess(admin=True)
+    r = cli.post(f"/admin/cases/submission/{shadow_sid}/shadow", data=json.dumps({}), headers=H)
+    ok = r.status_code == 200 and r.get_json()["ok"]
+    shadow = r.get_json().get("shadow", {}) if ok else {}
+    check("shadow grade computed (0..100) + marked shadow + does not expose raw truth matching",
+          ok and isinstance(shadow.get("score"), (int, float)) and 0 <= shadow["score"] <= 100
+          and shadow.get("shadow") is True and "matching" not in shadow)
+    db.session.refresh(sub)
+    check("shadow grade persisted to shadow_* fields",
+          sub.shadow_score is not None and sub.shadow_breakdown and sub.review_flags is not None)
+    check("shadow grading left signed evidence + objective grade untouched",
+          sub.evidence_sig == before_sig2
+          and cc.verify_evidence_record(json.loads(sub.evidence_record), sub.evidence_sig))
+    os.environ["RANGER_SHADOW_GRADER"] = ""
+
     ctx.pop()
     print(f"\n{P} passed, {F} failed")
     return F == 0
