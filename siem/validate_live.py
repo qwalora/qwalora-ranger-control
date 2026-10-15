@@ -46,11 +46,35 @@ def _heap(cluster):
     }
 
 
+def persist_check(c):
+    """Non-destructive: count indices left by a prior full run, to prove data
+    survived an OpenSearch restart (F13 restart persistence/recovery). Deletes
+    nothing."""
+    code, h = c.health()
+    survived = {}
+    for idx in (authz.index_name(COHORT, "cand-a", 2),
+                f"ranger-{COHORT}-bench-b2".lower()):
+        try:
+            survived[idx] = c.count(idx)
+        except Exception as e:  # noqa: BLE001
+            survived[idx] = f"ERR:{e}"
+    ok = all(isinstance(v, int) and v > 0 for v in survived.values())
+    out = {"mode": "persist", "cluster_status": h.get("status"),
+           "post_restart_counts": survived, "status": "PASS" if ok else "FAIL",
+           "heap": _heap(c)}
+    print("===RANGER_VALIDATION_JSON_BEGIN===", flush=True)
+    print(json.dumps(out, default=str), flush=True)
+    print("===RANGER_VALIDATION_JSON_END===", flush=True)
+
+
 def main():
     url = os.environ["OPENSEARCH_URL"]
     admin = os.environ.get("OPENSEARCH_ADMIN_USER", "admin")
     pw = os.environ["OPENSEARCH_ADMIN_PASSWORD"]
     c = LiveCluster(url, admin, pw, verify_tls=False, timeout=60)
+    if os.environ.get("RANGER_VALIDATE_MODE") == "persist":
+        print(f"== Ranger SIEM persistence re-check against {url} ==", flush=True)
+        return persist_check(c)
     print(f"== Ranger SIEM live validation against {url} ==", flush=True)
 
     # F1 cluster health
