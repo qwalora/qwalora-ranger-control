@@ -563,7 +563,7 @@ def gwsec_check(c):
     # 1. Session-cookie flags on a normal portal response (the CSRF context processor
     #    sets session["csrf"], so Flask emits a Set-Cookie for the session cookie).
     setc = ""
-    for p in ("/", "/admin", "/enroll", "/login"):
+    for p in ("/auth/github/login", "/admin/login", "/"):
         cookies = set_cookies(portal + p)
         sess = [ck for ck in cookies if ck.lower().startswith("session=")]
         if sess:
@@ -598,7 +598,8 @@ def gwsec_check(c):
     ctok = ranger_jwt.mint(sub, priv, board=2, cohort=COHORT)
     base = {"Authorization": "Bearer " + ctok, "Content-Type": "application/json"}
     # Index-independent, xsrf-guarded Dashboards API: _bulk_get requires osd-xsrf.
-    sobj = dash + "/api/saved_objects/_bulk_get"
+    # Dashboards serves under basePath /soc (rewriteBasePath true), so prefix it.
+    sobj = dash + "/soc/api/saved_objects/_bulk_get"
     s3a, _, _ = raw(sobj, "POST", base, [])                                  # no osd-xsrf
     s3b, _, b3b = raw(sobj, "POST", {**base, "osd-xsrf": "osd-fetch"}, [])   # with osd-xsrf
     rec("dashboards_csrf_blocks_without_xsrf", s3a == 400, code=s3a)
