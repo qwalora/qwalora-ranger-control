@@ -192,6 +192,9 @@ class InMemoryEvidenceSink:
     def lock_object(self, object_key):
         return None   # single-process in-memory store needs no cross-connection lock
 
+    def abort(self):
+        return None   # in-memory staging is immediate; discard_pending handles rollback
+
     def record_custody(self, signed):
         """Append an event to its evidence chain, RE-STAMPING its seq and parent_hash from the
         tracked head so the chain is always correctly linked and re-verifiable, regardless of how
@@ -316,6 +319,12 @@ class JobCoordinator:
         except JobError:
             raise
         except Exception as e:  # noqa
+            # backstop: discard any uncommitted staged rows before recording the failure, so the
+            # failure handler can never commit partial evidence.
+            try:
+                self.sink.abort()
+            except Exception:
+                pass
             self._fail(job, "RUN_ERROR", f"{type(e).__name__}: {e}", start)
             return self.jobs.get(job_id)
 
@@ -354,38 +363,52 @@ class JobCoordinator:
                 except OSError:
                     pass
 
-        if not result.ok and not result.derived:
-            detail = {"errors": result.errors, "sandbox": result.sandbox}
+        # SAFEGUARD B: a FAILED operation (ok=False) never becomes a successful job, even if it
+        # produced partial `derived` output. We fail closed and do NOT persist the partial outputs
+        # as evidence (preserving them would require an explicit, authorized, accurately-labeled
+        # diagnostic path, which is not in scope here).
+        if not result.ok:
+            detail = {"errors": result.errors, "sandbox": result.sandbox,
+                      "partial_outputs": len(result.derived),
+                      "note": "operation failed; partial outputs were discarded, not persisted as evidence"}
             return self._fail(job, "OPERATION_FAILED", json.dumps(detail)[:4000], start,
                               retriable=True)
 
         # Persist derived outputs into the sink (pending, not yet durable for the SQL sink), then
-        # COMMIT them only via a conditional finalize that still owns the job. If the job was
-        # canceled (or its claim lost) while we were processing, finalize fails and we DISCARD the
-        # pending outputs - a canceled job can never become succeeded and leaves no committed result.
+        # COMMIT them only via a conditional finalize that still owns the job. SAFEGUARD A: if ANY
+        # exception occurs while staging outputs (e.g. a DB error after the first artifact was
+        # staged), roll back every pending row and ref-safe-clean any newly-created blob BEFORE
+        # marking the job failed - the general failure handler must never commit partial evidence.
         src_seq_before = len(self.sink.chain(src["evidence_id"]))
-        derived_ids, object_keys = self._persist_outputs(job, src, result)
-        manifest = self._build_manifest(job, src, result, derived_ids, start)
-        fields = {"finished_at": _iso(),
-                  "wall_ms": int((_now() - start).total_seconds() * 1000),
-                  "result_manifest": json.dumps(manifest), "derived_evidence_ids": derived_ids,
-                  "error_code": None, "error_detail": None}
-        committed = self.jobs.finalize_success(job["job_id"], token, fields)
+        created = {"evidence_ids": [], "object_keys": [], "source_evidence_id": src["evidence_id"],
+                   "source_seq_before": src_seq_before}
+        try:
+            self._persist_outputs(job, src, result, created)
+            manifest = self._build_manifest(job, src, result, created["evidence_ids"], start)
+            fields = {"finished_at": _iso(),
+                      "wall_ms": int((_now() - start).total_seconds() * 1000),
+                      "result_manifest": json.dumps(manifest),
+                      "derived_evidence_ids": created["evidence_ids"],
+                      "error_code": None, "error_detail": None}
+            committed = self.jobs.finalize_success(job["job_id"], token, fields)
+        except Exception as e:  # noqa
+            self.sink.discard_pending(created, store=self.store)
+            return self._fail(job, "PERSIST_FAILED", f"{type(e).__name__}: {e}", start,
+                              retriable=False)
         if not committed:
             # cancellation (or lost ownership) won the race: roll back everything we staged
-            self.sink.discard_pending({"evidence_ids": derived_ids, "object_keys": object_keys,
-                                       "source_evidence_id": src["evidence_id"],
-                                       "source_seq_before": src_seq_before}, store=self.store)
+            self.sink.discard_pending(created, store=self.store)
             cur = self.jobs.get(job["job_id"])
             raise JobError("NOT_FINALIZED",
                            f"results discarded; job is {cur and cur.get('state')} (not succeeded)")
         return self.jobs.get(job["job_id"])
 
-    def _persist_outputs(self, job, src, result):
+    def _persist_outputs(self, job, src, result, created):
         """Persist each derived output as a NEW evidence artifact (source never overwritten),
         sequence the child's first custody event, record a `derive` event on the SOURCE chain for
-        lineage, and register a reference-counted blob reference. Returns (derived_ids, object_keys)."""
-        derived_ids, object_keys = [], []
+        lineage, and register a reference-counted blob reference. Appends ids/keys to `created` as it
+        goes so a mid-way failure can be fully rolled back."""
+        derived_ids, object_keys = created["evidence_ids"], created["object_keys"]
         for d in result.derived:
             # hold the per-object lock across the write AND the reference insert so a concurrent
             # delete/sweep cannot remove the bytes in between (the key is known from the hash).
@@ -396,13 +419,14 @@ class JobCoordinator:
                                      tool_version=result.tool or job["operation"],
                                      actor=f"forensic-job:{job['job_id']}", seq=0)
             art = res["artifact"]
+            # track a NEWLY-created object for rollback BEFORE inserting its reference, so a failure
+            # during save_derived/record_custody still cleans up the bytes we just wrote. A dedup hit
+            # onto an already-stored object is never tracked (its bytes may belong to another tenant).
+            if art.get("object_key") and res.get("put", {}).get("created"):
+                object_keys.append(art["object_key"])
             self.sink.save_derived(art)
             self.sink.record_custody(res["custody"])         # child chain (sink stamps seq/parent)
             derived_ids.append(art["evidence_id"])
-            # only track objects this job NEWLY created; a dedup hit onto an already-stored object
-            # must never be deleted on rollback (its bytes may belong to another artifact/tenant).
-            if art.get("object_key") and res.get("put", {}).get("created"):
-                object_keys.append(art["object_key"])
             self.sink.record_custody(ep.custody_event(
                 "derive", evidence_id=src["evidence_id"], actor=f"forensic-job:{job['job_id']}",
                 candidate_id=src.get("candidate_id"), cohort=src.get("cohort"),
@@ -415,7 +439,6 @@ class JobCoordinator:
                 candidate_id=src.get("candidate_id"), cohort=src.get("cohort"),
                 pathway=src.get("pathway"),
                 detail={"operation": job["operation"], "observed": True}))
-        return derived_ids, object_keys
 
     def _build_manifest(self, job, src, result, derived_ids, start):
         """The reproducible result manifest: everything an authorized verifier needs to repeat the

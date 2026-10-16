@@ -493,8 +493,75 @@ def test_f41_persistence_pg():
           rec_done is False and done_state == "succeeded"
           and rec_cancel is False and cancel_state == "canceled")
 
+    # --- 11. SAFEGUARD A: a persistence failure commits no partial evidence -------------------
+    src11, _ = _acquire_source(application, store, b"\x89PNG\r\n\x1a\n" + b"src11" * 300, cand=1)
+
+    class FailingSink(fjdb.SqlEvidenceSink):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k); self._n = 0
+
+        def save_derived(self, artifact):
+            self._n += 1
+            if self._n >= 2:   # fail AFTER the first derived artifact has been staged
+                raise RuntimeError("injected PostgreSQL failure during persistence")
+            return super().save_derived(artifact)
+
+    with application.app_context():
+        valn.set_fixture_registry(fjdb.SqlTrustedFixtureRegistry(db))
+        before_derived = EvidenceArtifact.query.filter_by(evidence_type="derived_artifact").count()
+        before_src_chain = CustodyEvent.query.filter_by(evidence_id=src11).count()
+        coord = fj.JobCoordinator(store, fjdb.SqlJobStore(db), FailingSink(db, store),
+                                  processor=FakeProcessor(n_derived=3), max_concurrent=50,
+                                  scratch_dir=scratch)
+        j11 = coord.submit(operation="image.inspect", source_evidence_id=src11, requester=ADMIN)
+        coord.run(j11["job_id"])
+        j11f = fjdb.SqlJobStore(db).get(j11["job_id"])
+        after_derived = EvidenceArtifact.query.filter_by(evidence_type="derived_artifact").count()
+        after_src_chain = CustodyEvent.query.filter_by(evidence_id=src11).count()
+        src_blob_ok = store.exists(EvidenceArtifact.query.filter_by(
+            evidence_id=src11).first().object_key)
+    check("11: a persistence failure marks the job failed (no false success)",
+          j11f["state"] == "failed" and j11f["error_code"] == "PERSIST_FAILED")
+    check("11: no partial derived evidence rows are committed",
+          after_derived == before_derived)
+    check("11: the source chain and source blob are untouched by the failed job",
+          after_src_chain == before_src_chain and src_blob_ok)
+
+    # --- 12. SAFEGUARD B: a failed op with partial outputs never succeeds ---------------------
+    src12, _ = _acquire_source(application, store, b"\x89PNG\r\n\x1a\n" + b"src12" * 300, cand=2)
+    with application.app_context():
+        valn.set_fixture_registry(fjdb.SqlTrustedFixtureRegistry(db))
+        before_d12 = EvidenceArtifact.query.filter_by(evidence_type="derived_artifact").count()
+        coord = fj.JobCoordinator(store, fjdb.SqlJobStore(db), fjdb.SqlEvidenceSink(db, store),
+                                  processor=PartialFailProcessor(), max_concurrent=50,
+                                  scratch_dir=scratch)
+        j12 = coord.submit(operation="image.inspect", source_evidence_id=src12, requester=ADMIN,
+                           max_attempts=1)
+        coord.run(j12["job_id"])
+        j12f = fjdb.SqlJobStore(db).get(j12["job_id"])
+        after_d12 = EvidenceArtifact.query.filter_by(evidence_type="derived_artifact").count()
+        manifest_none = j12f["result_manifest"] in (None, "", "null")
+    check("12: a failed op (ok=False) with partial outputs does NOT become succeeded",
+          j12f["state"] == "failed" and j12f["error_code"] == "OPERATION_FAILED")
+    check("12: the partial outputs of a failed op are not persisted as evidence",
+          after_d12 == before_d12 and manifest_none)
+
     print("\n%d passed, %d failed" % (P["pass"], P["fail"]))
     assert P["fail"] == 0
+
+
+class PartialFailProcessor:
+    """Returns ok=False but WITH a partial derived output (the exact 1B failure mode)."""
+    def run(self, op_id, source_path, *, params=None, trusted_fixture=False):
+        r = fo.OpResult(op_id, fo.OPS[op_id]["category"])
+        r.ok = False
+        r.tool = "partial-fail/1"
+        r.sandbox = {"runtime_version": "fake", "wall_ms": 1, "out_bytes": 0}
+        r.errors = [{"code": "DECODE_ABORTED", "message": "failed after partial output"}]
+        b = b"\x89PNG\r\n\x1a\n" + b"PARTIAL" * 100
+        r.derived.append({"name": "partial.png", "bytes": b, "media_type": "image/png",
+                          "kind": "frame", "sha256": hashlib.sha256(b).hexdigest()})
+        return r
 
 
 JOB8 = [None]

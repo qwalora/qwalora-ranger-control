@@ -235,6 +235,10 @@ class SqlEvidenceSink:
     def lock_object(self, object_key):
         _xact_lock_text(self.db, object_key)
 
+    def abort(self):
+        self.db.session.rollback()
+        self._seq.clear(); self._head.clear()
+
     def _seed(self, evidence_id):
         if evidence_id in self._seq:
             return
