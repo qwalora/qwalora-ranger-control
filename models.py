@@ -58,6 +58,15 @@ def ensure_schema(db):
             ("pathway", "VARCHAR(20) DEFAULT 'strata'"),
             ("curriculum_version", "VARCHAR(20)"),
         ],
+        "evidence_artifacts": [
+            # F3 storage/provenance columns added after the F2 table shipped.
+            ("object_key", "VARCHAR(128)"),
+            ("storage_backend", "VARCHAR(20)"),
+            ("scan_state", "VARCHAR(20) DEFAULT 'unscanned'"),
+            ("transform", "VARCHAR(60)"),
+            ("tool_version", "VARCHAR(60)"),
+            ("retention_class", "VARCHAR(30) DEFAULT 'default'"),
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -691,11 +700,18 @@ class EvidenceArtifact(db.Model):
     acquisition_ts = db.Column(db.String(40), nullable=True)
     version = db.Column(db.Integer, nullable=False, default=1)
     validation_state = db.Column(db.String(20), nullable=False, default="unvalidated", index=True)
-    # BlobRef (reference only; bytes live in out-of-DB object storage, not provisioned yet)
+    # BlobRef (reference only; bytes live in out-of-DB object storage via ArtifactStore)
     blob_uri = db.Column(db.String(300), nullable=True)
     blob_sha256 = db.Column(db.String(64), nullable=True)
     blob_media_type = db.Column(db.String(80), nullable=True)
     blob_bytes = db.Column(db.BigInteger, nullable=True)
+    # F3 storage/provenance
+    object_key = db.Column(db.String(128), nullable=True)   # ArtifactStore content-addressed key
+    storage_backend = db.Column(db.String(20), nullable=True)   # filesystem | s3 (dev/prod)
+    scan_state = db.Column(db.String(20), nullable=True, default="unscanned")  # unscanned|clean|quarantined
+    transform = db.Column(db.String(60), nullable=True)     # transformation type (derived artifacts)
+    tool_version = db.Column(db.String(60), nullable=True)  # tool + version that produced it
+    retention_class = db.Column(db.String(30), nullable=True, default="default")
     derived_from = db.Column(db.Text, nullable=True)        # JSON list of parent evidence_ids
     supersedes = db.Column(db.String(64), nullable=True)    # prior evidence_id (immutable versioning)
     authenticity_assessment = db.Column(db.Text, nullable=True)  # advisory only, never authoritative
@@ -704,6 +720,30 @@ class EvidenceArtifact(db.Model):
     revoked = db.Column(db.Boolean, nullable=False, default=False)
     retention_until = db.Column(db.String(40), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    RETENTION_CLASSES = ("default", "active_assessment", "signed_qualification")
+    SCAN_STATES = ("unscanned", "clean", "quarantined")
+
+
+class CustodyEvent(db.Model):
+    """F3 - an append-only, Ed25519-signed chain-of-custody event for an evidence artifact.
+    Events are never mutated; each references the prior event by hash (parent_hash), forming a
+    tamper-evident chain. Kinds: acquire, verify, derive, access, revoke, retain, quarantine."""
+    __tablename__ = "custody_events"
+    id = db.Column(db.Integer, primary_key=True)
+    evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    kind = db.Column(db.String(20), nullable=False, index=True)
+    actor = db.Column(db.String(120), nullable=True)       # server principal / reviewer id
+    candidate_id = db.Column(db.Integer, nullable=True, index=True)
+    cohort = db.Column(db.String(40), nullable=True)
+    pathway = db.Column(db.String(20), nullable=True)
+    detail = db.Column(db.Text, nullable=True)             # JSON
+    record_hash = db.Column(db.String(64), nullable=False)
+    parent_hash = db.Column(db.String(64), nullable=True)
+    signature = db.Column(db.Text, nullable=False)         # Ed25519 over the event record
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    KINDS = ("acquire", "verify", "derive", "access", "revoke", "retain", "quarantine")
 
 
 class Case(db.Model):
