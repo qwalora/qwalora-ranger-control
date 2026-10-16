@@ -39,6 +39,7 @@ import catalog
 import githuboauth
 import program as P
 import scenarios
+import strata_missions
 import notify
 import signing
 from broker import broker_status
@@ -2677,7 +2678,20 @@ def create_app():
             "unread": Notification.query.filter_by(candidate_id=c.id, read=False).count(),
             "resources": (_candidate_resources(c) if c.is_active else []),
             "board_coverage": (_board_coverage(c.cohort, n) if c.is_active else None),
+            "mission": (_mission_summary(n) if c.is_active else None),
         }
+
+    def _mission_summary(n):
+        """A discovery summary of the approved mission package for board n (or None). Surfaced on the
+        dashboard so an authorized candidate can locate their board's mission instructions. The
+        environment availability is computed from real signals, never from the doc existing."""
+        pkg = strata_missions.get(n)
+        if not pkg:
+            return None
+        avail = strata_missions.environment_availability(n)
+        return {"title": pkg["title"], "version": pkg["version"], "role_title": pkg.get("role_title"),
+                "env_kind": pkg["environment_kind"], "available": avail["available"],
+                "env_state": avail["state"], "env_message": avail["message"]}
 
     def _demo_vm(n, graduated):
         """A synthetic dashboard for the admin demo preview: no real candidate,
@@ -2717,6 +2731,7 @@ def create_app():
             "report_open": not graduated, "pass_bar": P.PASS_BAR,
             "siem_live": SIEM_LIVE,
             "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
+            "mission": _mission_summary(n),
         }
 
     @app.get("/admin/preview")
@@ -2751,6 +2766,27 @@ def create_app():
             Notification.query.filter_by(candidate_id=c.id, read=False).update({"read": True})
             db.session.commit()
         return resp
+
+    @app.get("/me/mission")
+    def candidate_mission():
+        """The candidate-safe mission package for the ranger's OWN current board. Shows only their
+        authorized assignment; the environment-availability state is computed from real signals, so
+        boards 5-6 show the range as unavailable until a real GOAD deployment is validated."""
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        pkg = strata_missions.get(n)
+        if not pkg:
+            abort(404)
+        avail = strata_missions.environment_availability(n)
+        vm = {"pkg": pkg, "avail": avail, "board": n, "handle": c.handle,
+              "cohort": c.cohort, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-")}
+        return render_template("mission_brief.html", vm=vm)
 
     @app.post("/me/start")
     def candidate_start():

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Mission brief · Board {{ vm.board }} · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <div class="wrap" style="max-width:860px;margin:0 auto;padding:22px 16px 56px">
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <a class="muted" href="/me" style="text-decoration:none;font-size:12.5px">{{ ic('arrow','ic ic-sm') }} Back to your dashboard</a>
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div class="muted mono" style="font-size:11px;letter-spacing:.08em;text-transform:uppercase">Board {{ vm.board }} · {{ vm.pkg.badge or vm.role_title }} · mission brief</div>
+          <h1 style="font:600 20px/1.2 var(--f);margin:6px 0 0">{{ vm.pkg.title }}</h1>
+          <div class="muted" style="font-size:12.5px;margin-top:4px">{{ vm.pkg.org }} · {{ vm.pkg.assigned_role.split('.')[0] }}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+          <span class="pill {% if vm.pkg.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.pkg.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.pkg.tier or 'board' }}</span>
+          <span class="muted mono" style="font-size:11px">v{{ vm.pkg.version }} · approved</span>
+        </div>
+      </div>
+
+      <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
+
+        {# environment availability: computed from real signals, never implied by this page existing #}
+        {% if vm.avail.available %}
+        <div class="field" style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
+          <div style="display:flex;align-items:center;gap:9px">
+            <span class="pill pill-ok"><span class="dot dot-ok"></span>Environment ready</span>
+            <span class="muted" style="font-size:12.5px">{{ vm.avail.message }}</span>
+          </div>
+        </div>
+        {% else %}
+        <div class="field" style="border:1px solid var(--amber,#8a6d1f);background:var(--amber-bg,#2a2410);border-radius:10px;padding:12px 14px">
+          <div style="display:flex;align-items:flex-start;gap:9px">
+            <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('lock','ic ic-sm') }} Environment not yet available</span>
+          </div>
+          <p class="muted" style="font-size:12.5px;margin:8px 0 0">{{ vm.avail.message }}</p>
+        </div>
+        {% endif %}
+
+        <p class="dim" style="font-size:11.5px;margin:0">{{ vm.pkg.org_disclaimer }}</p>
+
+        {% macro section(num, icon, title, body) %}
+        <div class="field">
+          <label class="label">{{ ic(icon,'ic ic-sm') }} {{ num }}. {{ title }}</label>
+          <div style="font-size:13.5px;line-height:1.6;color:var(--ink,#d6d2ee)">{{ body }}</div>
+        </div>
+        {% endmacro %}
+
+        {% macro listsec(num, icon, title, items) %}
+        <div class="field">
+          <label class="label">{{ ic(icon,'ic ic-sm') }} {{ num }}. {{ title }}</label>
+          <ul style="margin:4px 0 0;padding-left:18px;font-size:13.5px;line-height:1.6;color:var(--ink,#d6d2ee)">
+            {% for it in items %}<li style="margin:3px 0">{{ it }}</li>{% endfor %}
+          </ul>
+        </div>
+        {% endmacro %}
+
+        {{ section(1, 'grid', 'Business context', vm.pkg.business_context) }}
+        {{ section(2, 'user', 'Your assigned role', vm.pkg.assigned_role) }}
+        {{ section(3, 'shield', 'Authorized systems and scope', vm.pkg.authorized_scope) }}
+        {{ section(4, 'server', 'Environment and access', vm.pkg.environment) }}
+        {{ listsec(5, 'flag', 'Technical mission objectives', vm.pkg.objectives) }}
+        {{ listsec(6, 'inbox', 'Expected deliverables', vm.pkg.deliverables) }}
+        {{ section(7, 'hash', 'Evidence and integrity', vm.pkg.evidence) }}
+        {{ section(8, 'edit', 'Submission and acceptance', vm.pkg.submission) }}
+        {{ section(9, 'medal', 'Evaluation expectations', vm.pkg.evaluation) }}
+        {{ section(10, 'help', 'Troubleshooting, recovery and support', vm.pkg.support) }}
+
+        {% if vm.pkg.references %}
+        <div class="field">
+          <label class="label">{{ ic('link','ic ic-sm') }} Professional references</label>
+          <div class="notes">
+            {% for r in vm.pkg.references %}
+            <div class="note-row">
+              <span class="note-ic">{{ ic('tag','ic ic-sm') }}</span>
+              <div class="note-body"><b>{{ r.title }}</b><span>{{ r.publisher }} — {{ r.note }}</span></div>
+            </div>
+            {% endfor %}
+          </div>
+          <p class="dim" style="font-size:11px;margin-top:6px">Reference and background material, not an official solution to this assessment.</p>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+
+    <p class="dim" style="font-size:11px;margin-top:14px;text-align:center">
+      Mission instructions are candidate-safe: they describe the mission, not how to solve it. The STRATA objective standard is {{ vm.pkg.pass_bar }} percent. Protected answer keys and evaluator configuration remain server-side.
+    </p>
+
+  </div>
+</div>
+{% endblock %}
