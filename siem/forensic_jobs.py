@@ -118,12 +118,29 @@ class InMemoryJobStore:
             if not j or j.get("worker_token") != token or j["state"] not in ("running",):
                 return False  # do not override a concurrent cancel/terminal state
             if requeue:
+                # requeue does NOT change attempts: the attempt already counted at claim stands, so
+                # the configured max_attempts is a hard ceiling (no unlimited-retry loop).
                 j.update(state="queued", worker_token=None, claimed_at=None, started_at=None,
                          error_code=error_code, error_detail=error_detail)
-                j["attempts"] = max(0, j.get("attempts", 1) - 1)
             else:
                 j.update(state="failed", finished_at=_iso(), error_code=error_code,
                          error_detail=error_detail, wall_ms=wall_ms)
+            return True
+
+    def recover(self, job_id, token, *, requeue, error_code, error_detail):
+        """Conditional stale recovery: only acts while the job is STILL running under the SAME
+        worker token, so it never overwrites a job that completed, failed, was canceled, or was
+        re-claimed by another worker in the meantime."""
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if not j or j["state"] != "running" or j.get("worker_token") != token:
+                return False
+            if requeue:
+                j.update(state="queued", worker_token=None, claimed_at=None, started_at=None,
+                         error_code=error_code, error_detail=error_detail)
+            else:
+                j.update(state="failed", worker_token=None, finished_at=_iso(),
+                         error_code=error_code, error_detail=error_detail)
             return True
 
     def cancel(self, job_id):
@@ -172,6 +189,9 @@ class InMemoryEvidenceSink:
     def get_source(self, evidence_id):
         return self.sources.get(evidence_id)
 
+    def lock_object(self, object_key):
+        return None   # single-process in-memory store needs no cross-connection lock
+
     def record_custody(self, signed):
         """Append an event to its evidence chain, RE-STAMPING its seq and parent_hash from the
         tracked head so the chain is always correctly linked and re-verifiable, regardless of how
@@ -218,10 +238,13 @@ class InMemoryEvidenceSink:
             self._head[seid] = src_events[-1]["record"]["record_hash"] if src_events else None
         if store is not None:
             for key in created.get("object_keys") or []:
-                try:
-                    store.delete(key, authorized_reason="canceled_job_result_discard")
-                except Exception:
-                    pass
+                # reference-safe: delete a newly-created object ONLY if no active reference remains
+                # for it (another artifact that deduplicated onto the same bytes keeps it alive).
+                if not [r for r in self.refs if r["object_key"] == key and r.get("active")]:
+                    try:
+                        store.delete(key, authorized_reason="canceled_job_result_discard")
+                    except Exception:
+                        pass
 
     def _ensure_ref(self, artifact):
         key = artifact.get("object_key")
@@ -364,6 +387,9 @@ class JobCoordinator:
         lineage, and register a reference-counted blob reference. Returns (derived_ids, object_keys)."""
         derived_ids, object_keys = [], []
         for d in result.derived:
+            # hold the per-object lock across the write AND the reference insert so a concurrent
+            # delete/sweep cannot remove the bytes in between (the key is known from the hash).
+            self.sink.lock_object("blob/" + d["sha256"])
             res = ep.persist_derived(self.store, src, d["bytes"],
                                      evidence_type="derived_artifact",
                                      transform=f"{job['operation']}:{d['kind']}",
@@ -373,7 +399,9 @@ class JobCoordinator:
             self.sink.save_derived(art)
             self.sink.record_custody(res["custody"])         # child chain (sink stamps seq/parent)
             derived_ids.append(art["evidence_id"])
-            if art.get("object_key"):
+            # only track objects this job NEWLY created; a dedup hit onto an already-stored object
+            # must never be deleted on rollback (its bytes may belong to another artifact/tenant).
+            if art.get("object_key") and res.get("put", {}).get("created"):
                 object_keys.append(art["object_key"])
             self.sink.record_custody(ep.custody_event(
                 "derive", evidence_id=src["evidence_id"], actor=f"forensic-job:{job['job_id']}",
@@ -445,17 +473,19 @@ class JobCoordinator:
 
     def recover_stale(self, *, timeout_seconds=300, now=None):
         """Restart recovery: a job left `running` past the timeout (e.g. a crash) is re-queued if
-        attempts remain, else failed. Admin/sweep-triggered; there is no always-on reaper."""
+        attempts remain, else failed. Each transition is CONDITIONAL on the job still being running
+        under the same worker token, so a job that completed, failed, was canceled, or was
+        re-claimed between listing and recovery is never overwritten. Admin/sweep-triggered; there
+        is no always-on reaper."""
         cutoff = _iso((now or _now()) - _dt.timedelta(seconds=timeout_seconds))
         recovered = []
         for j in self.jobs.list_stale(cutoff):
-            if j.get("attempts", 1) < j.get("max_attempts", 1):
-                self.jobs.update(j["job_id"], state="queued", worker_token=None, claimed_at=None,
-                                 started_at=None, error_code="RECOVERED_STALE",
-                                 error_detail="reclaimed after timeout; re-queued")
-            else:
-                self.jobs.update(j["job_id"], state="failed", worker_token=None, finished_at=_iso(),
-                                 error_code="STALE_TIMEOUT",
-                                 error_detail="running past timeout with no attempts left")
-            recovered.append(j["job_id"])
+            requeue = j.get("attempts", 1) < j.get("max_attempts", 1)
+            ok = self.jobs.recover(
+                j["job_id"], j.get("worker_token"), requeue=requeue,
+                error_code=("RECOVERED_STALE" if requeue else "STALE_TIMEOUT"),
+                error_detail=("reclaimed after timeout; re-queued" if requeue
+                              else "running past timeout with no attempts left"))
+            if ok:
+                recovered.append(j["job_id"])
         return recovered

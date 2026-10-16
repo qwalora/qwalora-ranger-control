@@ -27,6 +27,7 @@ from siem import evidence_validation as valn      # noqa: E402
 from siem import forensic_ops as fo               # noqa: E402
 from siem import forensic_jobs as fj              # noqa: E402
 from siem import forensic_jobs_db as fjdb         # noqa: E402
+from siem import custody_integrity as ci          # noqa: E402
 
 ADMIN = {"role": "admin", "id": "admin-pg"}
 
@@ -39,10 +40,11 @@ def _pg_or_skip():
 
 class FakeProcessor:
     """Deterministic, sandbox-free processor. Optionally runs a hook BEFORE returning (used to
-    inject a cancellation during processing)."""
-    def __init__(self, n_derived=1, hook=None):
+    inject a cancellation during processing), and can emit fixed bytes (to force a dedup hit)."""
+    def __init__(self, n_derived=1, hook=None, fixed_bytes=None):
         self.n = n_derived
         self.hook = hook
+        self.fixed_bytes = fixed_bytes
 
     def run(self, op_id, source_path, *, params=None, trusted_fixture=False):
         if self.hook:
@@ -53,9 +55,21 @@ class FakeProcessor:
         r.sandbox = {"runtime_version": "fake", "wall_ms": 1, "out_bytes": 0}
         r.observed_facts = {"fake": True}
         for i in range(self.n):
-            b = b"\x89PNG\r\n\x1a\n" + bytes([i]) * 200 + os.urandom(16)
+            b = self.fixed_bytes if self.fixed_bytes is not None else \
+                b"\x89PNG\r\n\x1a\n" + bytes([i]) * 200 + os.urandom(16)
             r.derived.append({"name": f"f{i}.png", "bytes": b, "media_type": "image/png",
                               "kind": "frame", "sha256": hashlib.sha256(b).hexdigest()})
+        return r
+
+
+class FailingProcessor:
+    """Always fails with a retriable operation error and no usable output."""
+    def run(self, op_id, source_path, *, params=None, trusted_fixture=False):
+        r = fo.OpResult(op_id, fo.OPS[op_id]["category"])
+        r.ok = False
+        r.tool = "failing-processor/1"
+        r.sandbox = {"runtime_version": "fake", "wall_ms": 1, "out_bytes": 0}
+        r.errors = [{"code": "FAKE_FAIL", "message": "deterministic failure"}]
         return r
 
 
@@ -102,7 +116,11 @@ def _acquire_source(application, store, raw, *, evidence_type=et.EV_MEDIA_IMAGE,
             storage_backend="filesystem", scan_state=a["scan_state"], retention_class="default",
             blob_sha256=a["content_hash"], blob_media_type=a["blob_ref"]["media_type"],
             blob_bytes=a["blob_ref"]["bytes"]))
-        db.session.add(CustodyEvent(**ep.custody_row(acq["custody"])))
+        # sequence the acquire event at seq=0 so the source chain is well-ordered from the start
+        cev0 = ep.custody_event("acquire", evidence_id=a["evidence_id"], actor="ranger-server",
+                                candidate_id=cand, cohort=cohort, pathway=pathway,
+                                detail={"acquired": True}, seq=0)
+        db.session.add(CustodyEvent(**ep.custody_row(cev0)))
         db.session.commit()
         if trust:
             fjdb.SqlTrustedFixtureRegistry(db).register(a["content_hash"], note="pg fixture",
@@ -317,8 +335,174 @@ def test_f41_persistence_pg():
     check("7: once no active reference or hold remains, a sweep physically deletes the object",
           final_active == 0 and swept["physical"] and not exists_after)
 
+    # --- 8. canceled job must NOT delete a deduplicated, actively-referenced blob -------------
+    from models import CustodyEvent  # noqa
+    shared_bytes = b"\x89PNG\r\n\x1a\n" + b"DEDUP" * 300
+    with application.app_context():
+        put = store.put_stream(io.BytesIO(shared_bytes), allowed_media_types={"image/png"})
+        dkey = put.key
+        # a committed, actively-referenced artifact already owns these exact bytes
+        db.session.add(EvidenceArtifact(evidence_id="ev-existing", evidence_type="derived_artifact",
+                       candidate_id=1, cohort="2026-A", pathway="parallax",
+                       content_hash=put.sha256, validation_state="validated", object_key=dkey,
+                       storage_backend="filesystem", scan_state="clean", retention_class="default",
+                       blob_sha256=put.sha256, blob_media_type="image/png", blob_bytes=put.size))
+        db.session.add(BlobReference(object_key=dkey, evidence_id="ev-existing", candidate_id=1,
+                                     cohort="2026-A", pathway="parallax", active=True))
+        db.session.commit()
+        src8, _ = _acquire_source(application, store, b"\x89PNG\r\n\x1a\n" + b"src8" * 300, cand=1)
+    started8 = threading.Event(); may8 = threading.Event(); out8 = {}
+
+    def run_job8():
+        with application.app_context():
+            valn.set_fixture_registry(fjdb.SqlTrustedFixtureRegistry(db))
+            coord = fj.JobCoordinator(store, fjdb.SqlJobStore(db), fjdb.SqlEvidenceSink(db, store),
+                                      processor=FakeProcessor(n_derived=1, fixed_bytes=shared_bytes,
+                                                              hook=lambda: (started8.set(),
+                                                                            may8.wait(10))),
+                                      max_concurrent=50, scratch_dir=scratch)
+            try:
+                coord.run(JOB8[0])
+            except fj.JobError as e:
+                out8["raised"] = e.code
+            finally:
+                db.session.remove()
+
+    with application.app_context():
+        JOB8[0] = fj.JobCoordinator(store, fjdb.SqlJobStore(db),
+                                    fjdb.SqlEvidenceSink(db, store), scratch_dir=scratch).submit(
+            operation="image.inspect", source_evidence_id=src8, requester=ADMIN)["job_id"]
+    t8 = threading.Thread(target=run_job8); t8.start()
+    started8.wait(10)
+    with application.app_context():
+        fjdb.SqlJobStore(db).cancel(JOB8[0]); db.session.remove()
+    may8.set(); t8.join(15)
+    with application.app_context():
+        exists8 = store.exists(dkey)
+        existing_ref = BlobReference.query.filter_by(object_key=dkey, evidence_id="ev-existing",
+                                                     active=True).count()
+    check("8: canceling a job whose derived bytes dedup onto an existing blob preserves that blob",
+          exists8 and existing_ref == 1 and out8.get("raised") == "NOT_FINALIZED")
+
+    # --- 9a. reference creation racing managed_delete never strands an active ref -------------
+    k9 = None
+    with application.app_context():
+        p9 = store.put_stream(io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"race9" * 300),
+                              allowed_media_types={"image/png"})
+        k9 = p9.key
+        fjdb.SqlBlobLifecycle(db, store).add_reference(k9, "ev-r1", candidate_id=1, cohort="A")
+
+    def adder():
+        with application.app_context():
+            try:
+                # realistic protected path: hold the per-object lock across (re)write + ref insert,
+                # exactly as the job flow does via sink.lock_object before persist_derived.
+                fjdb._xact_lock_text(db, k9)
+                store.put_stream(io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"race9" * 300),
+                                 allowed_media_types={"image/png"})
+                fjdb.SqlBlobLifecycle(db, store).add_reference(k9, "ev-r2", candidate_id=2,
+                                                               cohort="B")
+            finally:
+                db.session.remove()
+
+    def deleter():
+        with application.app_context():
+            try:
+                fjdb.SqlBlobLifecycle(db, store).managed_delete(
+                    {"evidence_id": "ev-r1", "object_key": k9, "retention_class": "default"},
+                    reason="race")
+            finally:
+                db.session.remove()
+
+    ts = [threading.Thread(target=adder), threading.Thread(target=deleter)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    with application.app_context():
+        active9 = BlobReference.query.filter_by(object_key=k9, active=True).count()
+        exists9 = store.exists(k9)
+    check("9a: ref-create vs delete never leaves an active reference pointing at missing bytes",
+          not (active9 > 0 and not exists9))
+
+    # --- 9b. concurrent custody appends on one source never duplicate a sequence --------------
+    src9, _ = _acquire_source(application, store, b"\x89PNG\r\n\x1a\n" + b"src9" * 300, cand=2)
+    cust_errors = []
+
+    def appender(tag):
+        with application.app_context():
+            try:
+                sink = fjdb.SqlEvidenceSink(db, store)
+                ev = ep.custody_event("access", evidence_id=src9, actor=f"job-{tag}",
+                                      detail={"tag": tag})
+                sink.record_custody(ev)
+                db.session.commit()
+            except Exception as e:  # noqa
+                cust_errors.append(str(e)[:80]); db.session.rollback()
+            finally:
+                db.session.remove()
+
+    ts = [threading.Thread(target=appender, args=(i,)) for i in range(4)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    with application.app_context():
+        rows = CustodyEvent.query.filter_by(evidence_id=src9).order_by(CustodyEvent.seq).all()
+        seqs = [r.seq for r in rows]
+        chain_ok = ci.verify_rows(rows)["ok"]
+    check("9b: concurrent custody appends produce distinct seqs and a valid chain",
+          len(seqs) == len(set(seqs)) and chain_ok and not cust_errors)
+
+    # --- 10a. bounded retries: max_attempts is a hard ceiling --------------------------------
+    src10, _ = _acquire_source(application, store, b"\x89PNG\r\n\x1a\n" + b"src10" * 300, cand=1)
+    with application.app_context():
+        valn.set_fixture_registry(fjdb.SqlTrustedFixtureRegistry(db))
+        coord = fj.JobCoordinator(store, fjdb.SqlJobStore(db), fjdb.SqlEvidenceSink(db, store),
+                                  processor=FailingProcessor(), max_concurrent=50, scratch_dir=scratch)
+        j10 = coord.submit(operation="image.inspect", source_evidence_id=src10, requester=ADMIN,
+                           max_attempts=2)
+        coord.run(j10["job_id"])                 # attempt 1 -> requeued
+        mid = fjdb.SqlJobStore(db).get(j10["job_id"])
+        coord.run(j10["job_id"])                 # attempt 2 -> failed (ceiling)
+        after = fjdb.SqlJobStore(db).get(j10["job_id"])
+        third = None
+        try:
+            coord.run(j10["job_id"])             # no more attempts: not claimable
+        except fj.JobError as e:
+            third = e.code
+    check("10a: a retriable job stops at max_attempts (no unlimited retry)",
+          mid["state"] == "queued" and after["state"] == "failed" and after["attempts"] == 2
+          and third == "NOT_CLAIMABLE")
+
+    # --- 10b. recovery never overwrites a completed/canceled job -----------------------------
+    with application.app_context():
+        js = fjdb.SqlJobStore(db)
+        js.create({"job_id": "fj-rec-done", "operation": "image.inspect",
+                   "source_evidence_id": src10, "params": {}, "idempotency_key": None,
+                   "requested_by": "admin", "max_attempts": 1})
+        js.claim("fj-rec-done", "rtok")
+        js.finalize_success("fj-rec-done", "rtok", {"finished_at": _now_iso(), "wall_ms": 1,
+                            "result_manifest": "{}", "derived_evidence_ids": []})
+        rec_done = js.recover("fj-rec-done", "rtok", requeue=True, error_code="X", error_detail="y")
+        done_state = js.get("fj-rec-done")["state"]
+
+        js.create({"job_id": "fj-rec-cancel", "operation": "image.inspect",
+                   "source_evidence_id": src10, "params": {}, "idempotency_key": None,
+                   "requested_by": "admin", "max_attempts": 1})
+        js.claim("fj-rec-cancel", "ctok")
+        js.cancel("fj-rec-cancel")
+        rec_cancel = js.recover("fj-rec-cancel", "ctok", requeue=True, error_code="X",
+                                error_detail="y")
+        cancel_state = js.get("fj-rec-cancel")["state"]
+    check("10b: stale recovery never overwrites a succeeded or canceled job",
+          rec_done is False and done_state == "succeeded"
+          and rec_cancel is False and cancel_state == "canceled")
+
     print("\n%d passed, %d failed" % (P["pass"], P["fail"]))
     assert P["fail"] == 0
+
+
+JOB8 = [None]
+
+
+def _now_iso():
+    import datetime as _d
+    return _d.datetime.now(_d.timezone.utc).isoformat()
 
 
 CANCEL_JOB_ID = [None]

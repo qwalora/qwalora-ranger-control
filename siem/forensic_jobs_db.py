@@ -151,9 +151,10 @@ class SqlJobStore:
     def fail(self, job_id, token, *, requeue, error_code, error_detail, wall_ms=None):
         db = self.db
         if requeue:
+            # requeue keeps `attempts` as counted at claim: max_attempts is a hard ceiling.
             sql = ("UPDATE forensic_jobs SET state='queued', worker_token=NULL, claimed_at=NULL, "
-                   "started_at=NULL, attempts=GREATEST(0, attempts-1), error_code=:ec, "
-                   "error_detail=:ed WHERE job_id=:id AND state='running' AND worker_token=:tok")
+                   "started_at=NULL, error_code=:ec, error_detail=:ed "
+                   "WHERE job_id=:id AND state='running' AND worker_token=:tok")
             params = {"ec": error_code, "ed": error_detail, "id": job_id, "tok": token}
         else:
             sql = ("UPDATE forensic_jobs SET state='failed', finished_at=:fa, wall_ms=:wm, "
@@ -161,6 +162,25 @@ class SqlJobStore:
                    "AND worker_token=:tok")
             params = {"fa": _iso(), "wm": wall_ms, "ec": error_code, "ed": error_detail,
                       "id": job_id, "tok": token}
+        res = db.session.execute(text(sql), params)
+        db.session.commit()
+        return res.rowcount == 1
+
+    def recover(self, job_id, token, *, requeue, error_code, error_detail):
+        """Conditional stale recovery: UPDATE ... WHERE state='running' AND worker_token=:tok, so a
+        completed/failed/canceled/re-claimed job is never overwritten (rowcount 0 -> no-op)."""
+        db = self.db
+        if requeue:
+            sql = ("UPDATE forensic_jobs SET state='queued', worker_token=NULL, claimed_at=NULL, "
+                   "started_at=NULL, error_code=:ec, error_detail=:ed "
+                   "WHERE job_id=:id AND state='running' AND worker_token=:tok")
+        else:
+            sql = ("UPDATE forensic_jobs SET state='failed', worker_token=NULL, finished_at=:fa, "
+                   "error_code=:ec, error_detail=:ed WHERE job_id=:id AND state='running' "
+                   "AND worker_token=:tok")
+        params = {"ec": error_code, "ed": error_detail, "id": job_id, "tok": token}
+        if not requeue:
+            params["fa"] = _iso()
         res = db.session.execute(text(sql), params)
         db.session.commit()
         return res.rowcount == 1
@@ -212,16 +232,31 @@ class SqlEvidenceSink:
                 "object_key": r.object_key, "revoked": r.revoked,
                 "retention_class": r.retention_class, "retention_until": r.retention_until}
 
+    def lock_object(self, object_key):
+        _xact_lock_text(self.db, object_key)
+
     def _seed(self, evidence_id):
         if evidence_id in self._seq:
             return
         rows = self.CE.query.filter_by(evidence_id=evidence_id).order_by(self.CE.seq).all()
-        self._seq[evidence_id] = len(rows)
-        self._head[evidence_id] = rows[-1].record_hash if rows else None
+        maxseq = max((r.seq for r in rows if r.seq is not None), default=None)
+        # next position continues past the highest existing seq (robust to legacy NULL-seq rows)
+        self._seq[evidence_id] = (maxseq + 1) if maxseq is not None else len(rows)
+        head_row = None
+        for r in rows:
+            if r.seq is not None and (head_row is None or r.seq > head_row.seq):
+                head_row = r
+        if head_row is None and rows:
+            head_row = rows[-1]
+        self._head[evidence_id] = head_row.record_hash if head_row else None
 
     def record_custody(self, signed):
         rec = signed["record"]
         eid = rec["evidence_id"]
+        # serialise seq/head allocation for THIS evidence chain against concurrent jobs on the same
+        # source (held until the job commits); combined with UNIQUE(evidence_id, seq) a duplicate
+        # sequence position is impossible even if two jobs race.
+        _xact_lock_text(self.db, "custody:" + eid)
         self._seed(eid)
         seq = self._seq[eid]
         linked = ep.custody_event(rec["kind"], evidence_id=eid, actor=rec.get("actor"),
@@ -235,6 +270,10 @@ class SqlEvidenceSink:
 
     def save_derived(self, artifact):
         a = artifact
+        # join the per-object locking protocol so a concurrent sweep/delete on the same (possibly
+        # deduplicated) object cannot run between our reference insert and the job commit.
+        if a.get("object_key"):
+            _xact_lock_text(self.db, a["object_key"])
         self.db.session.add(self.EA(
             evidence_id=a["evidence_id"], evidence_type=a["evidence_type"], case_id=a.get("case_id"),
             candidate_id=a.get("candidate_id"), cohort=a.get("cohort"), pathway=a.get("pathway"),
@@ -256,22 +295,30 @@ class SqlEvidenceSink:
         return [ci.signed_from_row(r) for r in rows]
 
     def discard_pending(self, created, *, store=None):
-        # the pending derived rows live in this uncommitted session: a rollback drops them all.
+        # the pending derived rows (EvidenceArtifact / CustodyEvent / BlobReference) live in this
+        # uncommitted session: a rollback drops them all, so no derived reference is ever committed.
         self.db.session.rollback()
         self._seq.clear(); self._head.clear()
         st = store or self.store
+        # `object_keys` already contains ONLY objects this job newly created (dedup hits excluded).
+        # Even so, delete through the reference-safe, per-object-locked sweep: it removes the bytes
+        # only when no committed active reference and no hold remain, so a source, a previously
+        # committed derived artifact, or another tenant's deduplicated object is never destroyed.
+        life = SqlBlobLifecycle(self.db, st, model=self.BR)
         for key in created.get("object_keys") or []:
             try:
-                st.delete(key, authorized_reason="canceled_job_result_discard")
+                life.sweep_object(key, reason="canceled_job_result_discard")
             except Exception:
-                pass
+                self.db.session.rollback()
 
     def _ensure_ref(self, artifact):
         key = artifact.get("object_key")
         if not key:
             return
+        _xact_lock_text(self.db, key)   # same per-object lock as the blob lifecycle
         exists = self.BR.query.filter_by(object_key=key, evidence_id=artifact["evidence_id"]).first()
         if exists:
+            self.db.session.commit()
             return
         self.db.session.add(self.BR(object_key=key, evidence_id=artifact["evidence_id"],
                                     candidate_id=artifact.get("candidate_id"),

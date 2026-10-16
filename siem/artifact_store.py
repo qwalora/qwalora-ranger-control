@@ -35,13 +35,18 @@ class StorageError(Exception):
 
 
 class PutResult:
-    def __init__(self, key, sha256, size, media_type, scan_state="unscanned"):
+    def __init__(self, key, sha256, size, media_type, scan_state="unscanned", created=True):
         self.key = key; self.sha256 = sha256; self.size = size
         self.media_type = media_type; self.scan_state = scan_state
+        # created=True iff this call actually wrote NEW bytes; False means the object already
+        # existed (content-addressed dedup hit). Callers must never physically delete a dedup hit
+        # on rollback - those bytes may belong to another artifact/tenant.
+        self.created = created
 
     def as_dict(self):
         return {"key": self.key, "sha256": self.sha256, "size": self.size,
-                "media_type": self.media_type, "scan_state": self.scan_state}
+                "media_type": self.media_type, "scan_state": self.scan_state,
+                "created": self.created}
 
 
 # --- server-side file-signature sniffing (magic bytes, never the declared type) ---
@@ -180,6 +185,7 @@ class FilesystemArtifactStore(ArtifactStore):
             final = self._path(key)
             if os.path.exists(final):
                 os.remove(tmp)                       # dedup: identical content already stored
+                created = False
             else:
                 os.chmod(tmp, 0o600)
                 os.replace(tmp, final)               # atomic publish; no partial object ever visible
@@ -188,7 +194,8 @@ class FilesystemArtifactStore(ArtifactStore):
                     os.fsync(dfd)
                 finally:
                     os.close(dfd)
-            return PutResult(key, sha, size, media, scan_state="unscanned")
+                created = True
+            return PutResult(key, sha, size, media, scan_state="unscanned", created=created)
         except BaseException:
             try:
                 if not f.closed:
@@ -258,7 +265,7 @@ class S3ArtifactStore(ArtifactStore):
         if not exists:
             buf.seek(0)
             client.put_object(Bucket=self.bucket, Key=okey, Body=buf.getvalue())
-        return PutResult(key, sha, size, media, scan_state="unscanned")
+        return PutResult(key, sha, size, media, scan_state="unscanned", created=not exists)
 
     def open_stream(self, key):
         client = self._require_client()

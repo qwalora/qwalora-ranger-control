@@ -755,6 +755,10 @@ class CustodyEvent(db.Model):
     seq = db.Column(db.Integer, nullable=True)             # 0-based position in this evidence's chain
     record_json = db.Column(db.Text, nullable=True)        # canonical signed record for exact re-verify
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    # F4.1: a per-evidence sequence position is unique, so two concurrent jobs appending to the same
+    # source chain can never both claim the same seq (the loser's INSERT is rejected). NULL seq
+    # (legacy rows) is exempt, as PostgreSQL treats NULLs as distinct.
+    __table_args__ = (db.UniqueConstraint("evidence_id", "seq", name="uq_custody_evidence_seq"),)
 
     KINDS = ("acquire", "verify", "derive", "access", "revoke", "retain", "quarantine")
 
