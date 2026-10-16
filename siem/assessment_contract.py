@@ -26,6 +26,7 @@ qualified=True.
 from __future__ import annotations
 
 import hashlib
+import os
 
 import program          # PASS_BAR (STRATA), unchanged
 import signing
@@ -33,6 +34,17 @@ import pathways
 from . import evaluator as ev
 
 ASSESSMENT_CONTRACT_VERSION = 1
+
+
+def parallax_qualification_active() -> bool:
+    """Platform-level gate for FINAL PARALLAX qualification. OFF by default and separate
+    from any blueprint field: a blueprint author cannot turn it on, and no combination of
+    scores, remediation, reviewer approval, or signed evidence can bypass it. It flips on
+    only when the PARALLAX qualification policy is separately approved
+    (RANGER_PARALLAX_QUALIFICATION_ACTIVE). Until then PARALLAX produces a signed ASSESSMENT
+    RESULT but never a final qualification (qualified stays False)."""
+    return str(os.environ.get("RANGER_PARALLAX_QUALIFICATION_ACTIVE", "")).strip().lower() \
+        in ("1", "true", "yes")
 
 # Which blueprint versions each pathway supports. An unsupported version is rejected.
 SUPPORTED_BLUEPRINT_VERSIONS = {"strata": {1}, "parallax": {1}}
@@ -184,29 +196,50 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
     if ptype == POLICY_STRATA_BAR:
         # STRATA: objective bar is authoritative and UNCHANGED (program.PASS_BAR). The
         # objective_score is supplied by scenarios.score_board2 upstream; we do not recompute it.
+        # STRATA qualification is active today, so assessment outcome and qualification coincide.
         bar = program.PASS_BAR
-        qualified = (objective_score is not None) and (objective_score >= bar) and all_required_passed
+        assessment_met = (objective_score is not None) and (objective_score >= bar) and all_required_passed
+        qualified = assessment_met
         policy_detail.update({"bar": bar, "objective_score": objective_score})
         reason = "qualified" if qualified else "below_objective_bar"
-    elif ptype == POLICY_PARALLAX_PORTFOLIO:
+        return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown)
+
+    if ptype == POLICY_PARALLAX_PORTFOLIO:
         activated = bool(policy.get("activated"))
         threshold = policy.get("rubric_threshold")
         if not activated or threshold is None:
-            # threshold not approved yet -> never qualifies (gate held open on purpose)
+            # blueprint policy itself not scored yet -> no assessment, no qualification
             return _fail(blueprint, pw, "POLICY_NOT_ACTIVATED",
                          [_err("POLICY_NOT_ACTIVATED",
-                               "PARALLAX qualification threshold is not activated (needs separate approval)")],
+                               "PARALLAX decision policy is not activated (needs separate approval)")],
                          breakdown)
         rubric_ok = (rubric_agg is not None) and (rubric_agg >= threshold)
-        qualified = all_required_passed and evidence_ok and reviewer_pass and rubric_ok
+        # The ASSESSMENT may be met (criteria satisfied) and independently signed, but FINAL
+        # QUALIFICATION is gated by the separately-approved platform activation. No score,
+        # remediation, reviewer pass, or signature can bypass that gate.
+        assessment_met = bool(all_required_passed and evidence_ok and reviewer_pass and rubric_ok)
+        platform_active = parallax_qualification_active()
+        qualified = bool(assessment_met and platform_active)
         policy_detail.update({"rubric_threshold": threshold, "rubric_aggregate": rubric_agg,
-                              "activated": activated})
-        reason = "qualified" if qualified else "portfolio_requirements_unmet"
-    else:
-        return _fail(blueprint, pw, "BAD_POLICY", [_err("BAD_POLICY", f"unknown policy {ptype!r}")],
-                     breakdown)
+                              "blueprint_activated": activated,
+                              "platform_qualification_active": platform_active})
+        if not assessment_met:
+            reason = "portfolio_requirements_unmet"
+        elif not platform_active:
+            reason = "qualification_inactive"      # assessment met; final qualification withheld
+        else:
+            reason = "qualified"
+        return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown)
 
-    return {"qualified": bool(qualified), "reason": reason, "pathway": pw,
+    return _fail(blueprint, pw, "BAD_POLICY", [_err("BAD_POLICY", f"unknown policy {ptype!r}")],
+                 breakdown)
+
+
+def _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown):
+    return {"qualified": bool(qualified),
+            "assessment_outcome": "met" if assessment_met else "unmet",
+            "assessment_passed": bool(assessment_met),
+            "reason": reason, "pathway": pw,
             "blueprint_version": bver, "blueprint_hash": blueprint_hash(blueprint),
             "policy": policy_detail, "breakdown": breakdown,
             "auditable": True, "ai_involved": False,
@@ -214,7 +247,8 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
 
 
 def _fail(blueprint, pw, reason, errors, breakdown):
-    return {"qualified": False, "reason": reason, "pathway": pw,
+    return {"qualified": False, "assessment_outcome": "not_evaluated", "assessment_passed": False,
+            "reason": reason, "pathway": pw,
             "blueprint_version": blueprint.get("blueprint_version"),
             "blueprint_hash": blueprint_hash(blueprint) if isinstance(blueprint, dict) else None,
             "errors": errors, "breakdown": breakdown,

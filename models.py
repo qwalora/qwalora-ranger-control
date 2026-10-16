@@ -188,34 +188,33 @@ def startup_pathway_check(db, existing_tables=None):
 
 def normalize_persisted_pathways(db, existing_tables=None):
     """Versioned, non-destructive pathway migration. Remaps legacy interim ids
-    ('cyber-ops'->'strata', 'cyber-ai'->'parallax') to canonical ids in every table that
-    persists a `pathway` column. Runs inside a SINGLE transaction per table with explicit
-    rollback on error (no partial writes), is idempotent (a second run updates 0 rows),
-    and is value-only (no DROP/ALTER; genuine rows untouched). Returns {table: rows_updated}.
+    ('cyber-ops'->'strata', 'cyber-ai'->'parallax') to canonical ids across EVERY table
+    that persists a `pathway` column, in a SINGLE migration-wide transaction: all tables
+    migrate or none (a failure on the second table rolls back the first). Idempotent (a
+    second run updates 0 rows) and value-only (no DROP/ALTER; genuine rows untouched).
+    Returns {table: rows_updated}; on failure returns zeros for all tables.
 
-    This is NOT called on ordinary startup; it runs only under explicit authorization
-    (startup_pathway_check with RANGER_PATHWAY_MIGRATE, or migrate_pathways.py). Python
-    read-time normalization (pathways.normalize_pathway) is insufficient once any SQL
-    predicate filters by pathway, which is why canonical persistence matters."""
+    Migration-wide atomicity (not per-table) is deliberate: the canonical-id invariant must
+    hold across cohorts AND catalog entries together, so a cohort is never left referencing
+    a pathway id its catalog no longer uses. This is NOT called on ordinary startup; it runs
+    only under explicit authorization (startup_pathway_check with RANGER_PATHWAY_MIGRATE, or
+    migrate_pathways.py)."""
     from sqlalchemy import inspect as _inspect
     if existing_tables is None:
         existing_tables = set(_inspect(db.engine).get_table_names())
-    counts = {}
-    for table in _PATHWAY_TABLES:
-        if table not in existing_tables:
-            continue
-        updated = 0
-        try:
+    tables = [t for t in _PATHWAY_TABLES if t in existing_tables]
+    counts = {t: 0 for t in tables}
+    try:
+        for table in tables:
             for legacy, canonical in pathways.LEGACY_PATHWAY_ALIASES.items():
                 res = db.session.execute(
                     db.text(f"UPDATE {table} SET pathway = :canon WHERE pathway = :legacy"),
                     {"canon": canonical, "legacy": legacy})
-                updated += (res.rowcount or 0)
-            db.session.commit()            # one transaction per table: all remaps or none
-            counts[table] = updated
-        except Exception:
-            db.session.rollback()          # rollback leaves the table exactly as it was
-            counts[table] = 0
+                counts[table] += (res.rowcount or 0)
+        db.session.commit()                # ONE transaction for all tables: all or nothing
+    except Exception:
+        db.session.rollback()              # rollback leaves EVERY table exactly as it was
+        return {t: 0 for t in tables}
     return counts
 
 
@@ -668,6 +667,43 @@ class UnitResult(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     KINDS = ("qualification_decision", "reviewer_adjudication")
+
+
+class EvidenceArtifact(db.Model):
+    """F2 - a typed evidence artifact's signed metadata envelope (siem/evidence_types.py).
+    Large/binary payloads are NOT stored here: `blob_*` hold a content-addressed BlobRef into
+    out-of-DB object storage (not provisioned yet). Bound to its Case + owner + cohort +
+    pathway so authorization and lineage travel with the evidence; immutable by version
+    (a revision is a new row that `supersedes` the prior). Reuses Ed25519 signing. Additive
+    table; nothing existing changes. Reuses Case/CaseSubmission rather than forking evidence."""
+    __tablename__ = "evidence_artifacts"
+    id = db.Column(db.Integer, primary_key=True)
+    evidence_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    evidence_type = db.Column(db.String(40), nullable=False, index=True)
+    evidence_schema_version = db.Column(db.Integer, nullable=False, default=1)
+    contract_version = db.Column(db.Integer, nullable=False, default=1)
+    case_id = db.Column(db.Integer, db.ForeignKey("cases.id"), nullable=True, index=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    cohort = db.Column(db.String(40), nullable=False, index=True)
+    pathway = db.Column(db.String(20), nullable=False, default=pathways.DEFAULT_PATHWAY, index=True)
+    source_identity = db.Column(db.String(120), nullable=True)
+    content_hash = db.Column(db.String(64), nullable=False)
+    acquisition_ts = db.Column(db.String(40), nullable=True)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    validation_state = db.Column(db.String(20), nullable=False, default="unvalidated", index=True)
+    # BlobRef (reference only; bytes live in out-of-DB object storage, not provisioned yet)
+    blob_uri = db.Column(db.String(300), nullable=True)
+    blob_sha256 = db.Column(db.String(64), nullable=True)
+    blob_media_type = db.Column(db.String(80), nullable=True)
+    blob_bytes = db.Column(db.BigInteger, nullable=True)
+    derived_from = db.Column(db.Text, nullable=True)        # JSON list of parent evidence_ids
+    supersedes = db.Column(db.String(64), nullable=True)    # prior evidence_id (immutable versioning)
+    authenticity_assessment = db.Column(db.Text, nullable=True)  # advisory only, never authoritative
+    provenance = db.Column(db.Text, nullable=True)          # JSON
+    signature = db.Column(db.Text, nullable=True)           # Ed25519 over the envelope
+    revoked = db.Column(db.Boolean, nullable=False, default=False)
+    retention_until = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
 
 class Case(db.Model):

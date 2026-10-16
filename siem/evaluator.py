@@ -17,8 +17,17 @@ media-evidence provenance - are DECLARED in the registry and raise until built a
 """
 from __future__ import annotations
 
+import hashlib
+
 import signing
 from . import case_contract
+
+
+def _fingerprint(index, event_uid):
+    """One-way, stable fingerprint of a rejected foreign reference for audit correlation.
+    It does NOT reveal the index/uid value, so logging it cannot confirm whether another
+    candidate's evidence exists."""
+    return hashlib.sha256(f"ranger-evref|{index}|{event_uid}".encode()).hexdigest()[:16]
 
 # Self-certification / authoritative-truth keys a candidate may never set. If a candidate
 # submission carries any of these, it is rejected: candidates prove outcomes with evidence,
@@ -121,32 +130,35 @@ class EventReferenceEvaluator(Evaluator):
         if bad:
             return _result(self.kind, False,
                            {"error": "candidate_supplied_truth", "keys": bad})
-        truth = scope.truth_handle.resolve()            # server-side, never candidate input
-        # Enforce least privilege BEFORE verification: strip any citation into an index
-        # other than the one this evaluator is scoped to; it never reaches the reader.
-        scoped = {k: v for k, v in submission.items() if k != "incidents"}
-        scoped_incidents = []
-        out_of_scope = 0
+        # FAIL CLOSED on any unauthorized reference BEFORE touching underlying data. We do
+        # not silently drop out-of-scope citations and grade the rest; an evaluation that
+        # cites outside its authorized scope is an explicit validation failure. We never
+        # read the foreign data and never reveal whether another candidate's evidence
+        # exists - foreign refs are recorded only as salted fingerprints for audit.
         total_cited = 0
+        rejected = []
         for inc in (submission.get("incidents") or []):
-            inc2 = dict(inc)
-            kept = []
             for c in (inc.get("cited_evidence") or []):
                 total_cited += 1
-                if c.get("index", scope.allowed_index) == scope.allowed_index:
-                    kept.append(c)
-                else:
-                    out_of_scope += 1
-            inc2["cited_evidence"] = kept
-            scoped_incidents.append(inc2)
-        scoped["incidents"] = scoped_incidents
-        v = case_contract.verify_evidence(scoped, reader, scope.allowed_index, truth=truth)
+                ref_index = c.get("index", scope.allowed_index)
+                if ref_index != scope.allowed_index:
+                    rejected.append(_fingerprint(ref_index, c.get("event_uid")))
+        if rejected:
+            # explicit, safe failure; auditable; discloses no foreign existence
+            return _result(self.kind, False,
+                           {"error": "unauthorized_reference_outside_scope",
+                            "rejected_count": len(rejected),
+                            "rejected_fingerprints": rejected,     # salted hashes, not values
+                            "total_cited": total_cited,
+                            "data_accessed": False})
+        truth = scope.truth_handle.resolve()            # server-side, never candidate input
+        v = case_contract.verify_evidence(submission, reader, scope.allowed_index, truth=truth)
         cits = [c for inc in v.get("incidents", []) for c in inc.get("citations", [])]
         valid = [c for c in cits if c.get("reference_valid")]
-        passed = bool(valid) and len(valid) == len(cits) and out_of_scope == 0
+        passed = bool(valid) and len(valid) == len(cits)
         return _result(self.kind, passed,
                        {"citations_in_scope": len(cits), "reference_valid": len(valid),
-                        "out_of_scope_ignored": out_of_scope, "total_cited": total_cited})
+                        "total_cited": total_cited, "data_accessed": True})
 
 
 class _Declared(Evaluator):

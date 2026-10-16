@@ -53,6 +53,12 @@ def run():
     db.session.execute(db.text("UPDATE cohorts SET pathway='cyber-ops' WHERE name='PGMIG-OPS'"))
     db.session.execute(db.text("UPDATE cohorts SET pathway='cyber-ai'  WHERE name='PGMIG-AI'"))
     db.session.commit()
+    # a legacy CATALOG row too, to prove migration-wide (cross-table) atomicity
+    db.session.execute(db.text("DELETE FROM scenario_catalog_entries WHERE spec_id='PGMIG-pkg'"))
+    cat = ScenarioCatalogEntry(spec_id="PGMIG-pkg", spec_version=1, status="catalog_eligible")
+    db.session.add(cat); db.session.commit()
+    db.session.execute(db.text("UPDATE scenario_catalog_entries SET pathway='cyber-ai' WHERE spec_id='PGMIG-pkg'"))
+    db.session.commit()
 
     # --- read-only detection on real Postgres ---------------------------------------
     det = detect_legacy_pathways(db)
@@ -65,25 +71,23 @@ def run():
     check("PG unauthorized startup is detection-only (no writes, rows untouched)",
           res["migrated"] is None and still_legacy >= 2)
 
-    # --- transaction atomicity + rollback: force failure on the 2nd UPDATE ----------
+    # --- MIGRATION-WIDE atomicity: fail during the SECOND table, assert the FIRST rolls back
     orig = db.session.execute
-    state = {"updates": 0}
     def flaky(statement, *a, **k):
-        s = str(statement)
-        if s.strip().upper().startswith("UPDATE"):
-            state["updates"] += 1
-            if state["updates"] == 2:               # fail the 2nd remap in the same txn
-                raise RuntimeError("injected failure mid-migration")
+        if "scenario_catalog_entries" in str(statement) and str(statement).strip().upper().startswith("UPDATE"):
+            raise RuntimeError("injected failure on the second table")
         return orig(statement, *a, **k)
     db.session.execute = flaky
     try:
-        normalize_persisted_pathways(db)            # should roll back the whole cohorts txn
+        normalize_persisted_pathways(db)            # cohorts updated, then catalog fails -> roll back BOTH
     finally:
         db.session.execute = orig
-    after_fail = db.session.execute(
+    cohorts_legacy = db.session.execute(
         db.text("SELECT COUNT(*) FROM cohorts WHERE pathway IN ('cyber-ops','cyber-ai')")).scalar()
-    check("PG transaction atomicity: a mid-migration failure rolls back ALL remaps (no partial writes)",
-          after_fail >= 2)
+    catalog_legacy = db.session.execute(
+        db.text("SELECT COUNT(*) FROM scenario_catalog_entries WHERE pathway IN ('cyber-ops','cyber-ai')")).scalar()
+    check("PG migration-wide atomicity: failure on the 2nd table rolls back the 1st too (all-or-none)",
+          cohorts_legacy >= 2 and catalog_legacy >= 1)
 
     # --- real authorized migration + idempotency ------------------------------------
     first = normalize_persisted_pathways(db)
@@ -119,7 +123,9 @@ def run():
     check("PG startup-failure handling: detection/startup never crash-loops", safe)
 
     # cleanup
-    db.session.execute(db.text("DELETE FROM cohorts WHERE name LIKE 'PGMIG-%'")); db.session.commit()
+    db.session.execute(db.text("DELETE FROM cohorts WHERE name LIKE 'PGMIG-%'"))
+    db.session.execute(db.text("DELETE FROM scenario_catalog_entries WHERE spec_id='PGMIG-pkg'"))
+    db.session.commit()
     ctx.pop()
     print(f"\n{P} passed, {F} failed")
     return F == 0

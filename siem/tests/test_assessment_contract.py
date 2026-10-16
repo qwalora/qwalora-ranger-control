@@ -105,8 +105,42 @@ def run():
                            critical_findings=[{"id": "unremediated_authz_vuln", "present": True,
                                                "remediated": True}],
                            rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
-    check("same case qualifies once the critical vulnerability is remediated",
-          remediated["qualified"] and remediated["reason"] == "qualified")
+    check("remediation yields a MET assessment but NOT a final qualification (policy inactive)",
+          remediated["assessment_passed"] is True and remediated["qualified"] is False
+          and remediated["reason"] == "qualification_inactive")
+
+    # ---- 1b. no combination bypasses the inactive PARALLAX qualification gate -------
+    combos = [
+        dict(rubric_scores={"reasoning": 100, "secure_design": 100, "recommendations": 100}),
+        dict(rubric_scores=strong_rubric, reviewer_decision={"decision": "pass", "reviewer_id": "a"}),
+    ]
+    bypass = False
+    for c in combos:
+        dd = ac.decide(_parallax_bp(activated=True, threshold=1.0), authorization=AUTH_PARALLAX,
+                       objective_results=[gate_ok],
+                       critical_findings=[{"id": "unremediated_authz_vuln", "present": True, "remediated": True}],
+                       rubric_scores=c.get("rubric_scores", strong_rubric),
+                       reviewer_decision=c.get("reviewer_decision", REV_PASS))
+        if dd["qualified"]:
+            bypass = True
+    # even a signed record of the met assessment must not read as a final qualification
+    sig_met = ac.sign_decision(remediated, candidate_id=2, unit_ref="C1")
+    check("no score/remediation/reviewer/signature bypasses the inactive PARALLAX gate",
+          not bypass and ac.verify_decision(sig_met) and sig_met["record"]["qualified"] is False)
+    # the gate is the SOLE control: flipping the platform activation on would qualify
+    os.environ["RANGER_PARALLAX_QUALIFICATION_ACTIVE"] = "1"
+    try:
+        active = ac.decide(_parallax_bp(activated=True, threshold=1.0), authorization=AUTH_PARALLAX,
+                           objective_results=[gate_ok],
+                           critical_findings=[{"id": "unremediated_authz_vuln", "present": True, "remediated": True}],
+                           rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
+    finally:
+        os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
+    check("platform activation is the sole control (on -> qualifies; default off -> not)",
+          active["qualified"] is True and active["reason"] == "qualified"
+          and ac.decide(_parallax_bp(), authorization=AUTH_PARALLAX, objective_results=[gate_ok],
+                        critical_findings=[{"id": "unremediated_authz_vuln", "present": True, "remediated": True}],
+                        rubric_scores=strong_rubric, reviewer_decision=REV_PASS)["qualified"] is False)
 
     # ---- 5. alternate valid solutions ----------------------------------------------
     alt_a = ev.signed_check("agent_canary", True, {"mitigation": "retrieval_authz"})
@@ -115,8 +149,8 @@ def run():
                    rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
     db_ = ac.decide(_parallax_bp(), authorization=AUTH_PARALLAX, objective_results=[alt_b],
                     rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
-    check("two different valid mitigations both qualify (gate checks outcome, not one path)",
-          da["qualified"] and db_["qualified"])
+    check("two different valid mitigations both MEET the assessment (outcome, not one path)",
+          da["assessment_passed"] and db_["assessment_passed"])
 
     # ---- 6. missing / contradictory evidence ---------------------------------------
     dm = ac.decide(_parallax_bp(), authorization=AUTH_PARALLAX, objective_results=[],
@@ -176,8 +210,12 @@ def run():
     oos = copy.deepcopy(good_sub); oos["incidents"][0]["cited_evidence"][0]["index"] = "ranger-OTHER-b2"
     r_oos = ev.get_evaluator("event_reference").verify(oos, scope, reader)
     check("evaluator honors an in-scope citation", r_good["passed"] and r_good["verified"])
-    check("evaluator ignores out-of-scope citations (least privilege)",
-          r_oos["detail"]["out_of_scope_ignored"] >= 1 and not r_oos["passed"])
+    check("evaluator REJECTS out-of-scope refs explicitly, fails closed, no data access",
+          not r_oos["passed"] and r_oos["detail"]["error"] == "unauthorized_reference_outside_scope"
+          and r_oos["detail"]["data_accessed"] is False)
+    check("rejection discloses no foreign existence (salted fingerprints, not index values)",
+          "ranger-OTHER-b2" not in signing.canonical(r_oos).decode()
+          and len(r_oos["detail"]["rejected_fingerprints"]) >= 1)
     try:
         ev.get_evaluator("agent_authorization").verify({}, scope, reader); gated = False
     except NotImplementedError:
@@ -255,12 +293,14 @@ def worked_example():
                         critical_findings=[{"id": "unremediated_authz_vuln", "present": True, "remediated": True}],
                         rubric_scores=strong, reviewer_decision=REV_PASS)
     rec = ac.sign_decision(d_fixed, candidate_id=2, unit_ref="C1")
-    print(f"  same report, vuln REMEDIATED    -> qualified={d_fixed['qualified']} "
-          f"reason={d_fixed['reason']} signed_ok={ac.verify_decision(rec)}")
+    print(f"  same report, vuln REMEDIATED    -> assessment={d_fixed['assessment_outcome']} "
+          f"qualified={d_fixed['qualified']} reason={d_fixed['reason']} signed_ok={ac.verify_decision(rec)}")
     check("worked example: unremediated critical authz vuln blocks qualification despite strong report",
           not d_unremediated["qualified"] and d_unremediated["reason"] == "CRITICAL_FAILURE_VETO")
-    check("worked example: remediation yields a signed, verifiable qualification",
-          d_fixed["qualified"] and ac.verify_decision(rec))
+    check("worked example: remediation yields a signed, verifiable ASSESSMENT result "
+          "but NOT a final qualification while PARALLAX policy is inactive",
+          d_fixed["assessment_passed"] and not d_fixed["qualified"]
+          and d_fixed["reason"] == "qualification_inactive" and ac.verify_decision(rec))
 
 
 def test_assessment_contract():
