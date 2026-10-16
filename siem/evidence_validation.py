@@ -35,12 +35,6 @@ REAL_VERDICTS = {SCAN_CLEAN, SCAN_INFECTED, SCAN_UNSUPPORTED, SCAN_ERROR}
 
 PROMOTER_ROLES = ("reviewer", "admin")   # never "candidate"
 
-# Explicitly trusted synthetic fixtures (by content sha256) for development demos ONLY. Registering
-# a fixture is an administrative act recorded here; it is the ONLY way media may be processed or
-# promoted without a real clean scan. Real candidate uploads are never added here.
-_TRUSTED_FIXTURES = {}   # sha256 -> {"note": str, "registered_by": str}
-
-
 class ValidationError(Exception):
     def __init__(self, code, message):
         super().__init__(f"{code}: {message}")
@@ -48,15 +42,57 @@ class ValidationError(Exception):
         self.message = message
 
 
-def register_trusted_fixture(sha256, *, note, registered_by="admin"):
-    """Mark a synthetic fixture's content hash as explicitly trusted (demo use). Admin-only act."""
-    _TRUSTED_FIXTURES[sha256] = {"note": note, "registered_by": registered_by}
-    return sha256
+# Explicitly trusted synthetic fixtures (by SERVER-computed content sha256) for development demos
+# ONLY. Registration is an authenticated administrative act; it is the ONLY way media may be
+# processed or promoted without a real clean scan. Trust is ALWAYS derived server-side from the
+# active registry keyed by content hash - never from a job parameter, submitted metadata, or a
+# caller-controlled flag. Real candidate uploads are never registered.
+#
+# The registry is pluggable: the default is in-memory (unit tests / single process); production
+# installs the DB-backed registry (siem/forensic_jobs_db.SqlTrustedFixtureRegistry) via
+# set_fixture_registry so trust is durable and administrator-approved.
+class InMemoryFixtureRegistry:
+    def __init__(self):
+        self._by_hash = {}
+
+    def register(self, sha256, *, note, approver):
+        if (approver or {}).get("role") != "admin":
+            raise ValidationError("NOT_ADMIN", "only an administrator may register a trusted fixture")
+        self._by_hash[sha256] = {"note": note, "approved_by": approver.get("id") or "admin"}
+        return sha256
+
+    def is_trusted(self, sha256) -> bool:
+        return sha256 in self._by_hash
+
+
+_REGISTRY = InMemoryFixtureRegistry()
+
+
+def set_fixture_registry(registry):
+    """Install the active trusted-fixture registry (e.g. the DB-backed one in production)."""
+    global _REGISTRY
+    _REGISTRY = registry
+    return _REGISTRY
+
+
+def fixture_registry():
+    return _REGISTRY
+
+
+def register_trusted_fixture(sha256, *, note, approver=None, registered_by=None):
+    """Register a synthetic fixture's content hash as trusted. Requires an admin `approver` (a
+    principal dict with role 'admin'). `registered_by` is a legacy alias accepted only when it is
+    itself an admin principal dict; there is no non-admin path to registration."""
+    if approver is None and isinstance(registered_by, dict):
+        approver = registered_by
+    if approver is None:
+        raise ValidationError("NOT_ADMIN", "fixture registration requires an admin approver principal")
+    return _REGISTRY.register(sha256, note=note, approver=approver)
 
 
 def is_trusted_fixture(artifact_or_hash) -> bool:
     h = artifact_or_hash if isinstance(artifact_or_hash, str) else artifact_or_hash.get("content_hash")
-    return h in _TRUSTED_FIXTURES
+    return bool(h) and _REGISTRY.is_trusted(h)
 
 
 # --- layer 1: SCREEN ---------------------------------------------------------

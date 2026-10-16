@@ -92,7 +92,7 @@ def g2_fixture_not_candidate_activatable():
     art = _acquire(store, PNG + os.urandom(32), evidence_type=et.EV_MEDIA_IMAGE,
                    declared_media_type="trusted/fixture", source_identity="please-trust-me")
     check("2: acquisition never marks evidence trusted from uploaded metadata",
-          not valn.is_trusted_fixture(art) and art["content_hash"] not in valn._TRUSTED_FIXTURES)
+          not valn.is_trusted_fixture(art) and not valn.fixture_registry().is_trusted(art["content_hash"]))
     allowed, why = valn.can_enter_unsafe_workflow(art)
     check("2: such evidence stays blocked from unsafe workflows",
           not allowed and why == "unscanned_external_evidence_blocked")
@@ -108,7 +108,7 @@ def g2_fixture_not_candidate_activatable():
         blocked = e.code == "NOT_ADMIN"
     check("2: a candidate cannot submit a forensic job (cannot set the trusted flag)", blocked)
     # registration is an explicit admin act keyed by server-computed hash, not any request field
-    valn.register_trusted_fixture(art["content_hash"], note="admin demo", registered_by="admin")
+    valn.register_trusted_fixture(art["content_hash"], note="admin demo", approver={"role": "admin", "id": "admin"})
     check("2: only an explicit admin registration (server-computed hash) confers trust",
           valn.is_trusted_fixture(art))
 
@@ -119,7 +119,7 @@ def g3_inspect_not_validate():
     store = _store()
     raw = PNG + os.urandom(48)
     src = _acquire(store, raw, evidence_type=et.EV_MEDIA_IMAGE)
-    valn.register_trusted_fixture(src["content_hash"], note="demo", registered_by="admin")
+    valn.register_trusted_fixture(src["content_hash"], note="demo", approver={"role": "admin", "id": "admin"})
     coord = fj.JobCoordinator(store, fj.InMemoryJobStore(), fj.InMemoryEvidenceSink(store),
                               scratch_dir=tempfile.mkdtemp())
     coord.sink.add_source(src)
@@ -128,7 +128,7 @@ def g3_inspect_not_validate():
     tr = os.path.join(tempfile.gettempdir(), "rev_trace.json")
     open(tr, "wb").write(json.dumps({"events": [{"type": "model_request", "ts": "t"}]}).encode())
     tsrc = _acquire(store, open(tr, "rb").read(), evidence_type=et.EV_AGENT_TRACE)
-    valn.register_trusted_fixture(tsrc["content_hash"], note="demo", registered_by="admin")
+    valn.register_trusted_fixture(tsrc["content_hash"], note="demo", approver={"role": "admin", "id": "admin"})
     coord.sink.add_source(tsrc)
     j = coord.submit(operation="agent_trace.inspect", source_evidence_id=tsrc["evidence_id"],
                      requester={"role": "admin", "id": "a"})
@@ -237,6 +237,40 @@ def g6_checkpoint_honesty():
           and any("external" in l for l in ci.LIMITATIONS))
 
 
+# --- 7. C2PA verification is never asserted on absent/ambiguous status -------
+def g7_c2pa_verification():
+    print("\n[7] C2PA: verified requires explicit success under an approved trust policy")
+    # with NO approved trust policy configured, even an explicit 'valid' status is NOT verified
+    st = fo._c2pa_state_from_report({"validation_status": "valid", "active_manifest": {"x": 1}},
+                                    policy=None)
+    check("7: no trust policy -> a 'valid' report is reported indeterminate, never verified",
+          st == fo.PROV_INDETERMINATE)
+    # absent / empty / ambiguous status is never verified (this was the reported bug)
+    for rep in ({}, {"validation_status": None}, {"validation_status": []},
+                {"validation_status": "unknown"}):
+        s = fo._c2pa_state_from_report(rep, policy="approved-anchors")
+        if s == fo.PROV_VERIFIED:
+            check("7: absent/ambiguous C2PA status must not be 'verified'", False)
+            break
+    else:
+        check("7: absent/ambiguous C2PA status is never 'verified'", True)
+    # an explicit failure is invalid; an explicit success under an approved policy is verified
+    bad = fo._c2pa_state_from_report({"validation_status": "invalid"}, policy="approved-anchors")
+    good = fo._c2pa_state_from_report({"validation_status": "valid", "active_manifest": {"a": 1}},
+                                      policy="approved-anchors")
+    check("7: explicit failure -> invalid; explicit success under a policy -> verified",
+          bad == fo.PROV_INVALID and good == fo.PROV_VERIFIED)
+    # the live op on media with no manifest: missing (never 'fake'); c2patool remains unavailable
+    import tempfile as _tf
+    p = os.path.join(_tf.gettempdir(), "rev_noc2pa.bin")
+    open(p, "wb").write(b"\x89PNG\r\n\x1a\n" + os.urandom(512))
+    r = fo.ForensicProcessor().run("provenance.c2pa", p)
+    check("7: media without a manifest is 'missing', not fake; c2patool reported unavailable",
+          r.observed_facts.get("provenance_state") in (fo.PROV_MISSING, fo.PROV_INDETERMINATE)
+          and "c2patool" not in fo.sb.TOOLS)
+    os.remove(p)
+
+
 def run():
     g1_fail_closed()
     g2_fixture_not_candidate_activatable()
@@ -244,6 +278,7 @@ def run():
     g4_delete_guards()
     g5_concurrency_partial_failure()
     g6_checkpoint_honesty()
+    g7_c2pa_verification()
     print("\n%d passed, %d failed" % (P, F))
     return F == 0
 

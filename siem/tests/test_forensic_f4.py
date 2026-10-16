@@ -94,7 +94,7 @@ def acquire_fixture(store, raw, *, evidence_type, media, candidate_id=1, cohort=
                      source_identity="f4-fixture", retention_class=retention_class)
     art = acq["artifact"]
     if trust:
-        valn.register_trusted_fixture(art["content_hash"], note=f"synthetic {evidence_type}")
+        valn.register_trusted_fixture(art["content_hash"], note=f"synthetic {evidence_type}", approver={"role": "admin", "id": "admin-test"})
     return art, acq
 
 
@@ -507,7 +507,6 @@ def phase_jobs(probe):
         s5, _ = acquire_fixture(store5, junk, evidence_type=et.EV_MEDIA_IMAGE, media="image/jpeg")
         c5.sink.add_source(s5)
         j5 = c5.submit(operation="image.inspect", source_evidence_id=s5["evidence_id"], requester=admin)
-        before = set(os.listdir(c5.scratch_dir))
         out5 = c5.run(j5["job_id"])
         after = [f for f in os.listdir(c5.scratch_dir) if f.startswith("fjsrc-")]
         check("F: a failed/degenerate op cleans up its temp source copy",

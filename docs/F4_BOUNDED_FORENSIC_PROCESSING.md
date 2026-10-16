@@ -203,3 +203,43 @@ installation would enable full provenance/metadata rather than honest `indetermi
 F4 implemented within the authorized development scope and committed for review. **STOP gate
 honored:** no production deployment, no F5, no PARALLAX qualification activation, no new forensic
 service deployed, website work not revisited.
+
+---
+
+# F4.1 — Verified code-review corrections
+
+Follow-up to the F4 review closing the gaps found reviewing PR #1 against the implementation.
+No architecture change; the in-memory stores remain for unit tests and the demos.
+
+1. **Real PostgreSQL adapters** (`siem/forensic_jobs_db.py`): `SqlJobStore`, `SqlEvidenceSink`,
+   `SqlTrustedFixtureRegistry`, `SqlBlobLifecycle` over the existing `ForensicJob`,
+   `EvidenceArtifact`, `CustodyEvent`, `BlobReference` rows. Idempotent create via
+   `UNIQUE(idempotency_key)`; atomic claim via a transaction-scoped advisory lock + conditional
+   `UPDATE ... WHERE state='queued' AND worker_token IS NULL` that also counts the cap inside the
+   lock; durable result persistence; restart recovery. Verified against real PostgreSQL 16 with
+   independent threads/connections (`siem/tests/test_f41_persistence_pg.py`, 10 checks).
+2. **Trusted-fixture bypass closed**: the `trusted_fixture` job parameter is removed; trust is
+   derived server-side from an administrator-approved registry keyed by the server-computed source
+   hash (`TrustedFixture` table + `SqlTrustedFixtureRegistry`). No trust from params, metadata, or a
+   caller flag; registration requires an admin principal.
+3. **Cancellation + terminal-state integrity**: finalize is a conditional, worker-token-checked
+   transition `running -> succeeded`; if the job was canceled mid-processing it matches zero rows,
+   the whole transaction (including pending derived rows) is rolled back, derived bytes are deleted,
+   and the job stays `canceled`. A canceled job can never become `succeeded`. Verified with a real
+   cross-thread cancel during processing.
+4. **Transactionally-safe shared-blob lifecycle**: every create/release/hold/revoke/delete/sweep on
+   an object takes the same per-object advisory lock, so bytes are never physically deleted from a
+   stale snapshot while another reference is being created; partial object-store failure leaves the
+   logical release in place and the object as an orphan for a later sweep. Verified under concurrent
+   create/hold/delete on one object.
+5. **C2PA corrected**: `verified` requires an approved trust policy AND an explicit successful
+   cryptographic validation AND an active manifest; absent/empty/ambiguous status is `indeterminate`
+   (never verified), explicit failure is `invalid`. `C2PA_TRUST_POLICY` is `None` (dormant) and
+   c2patool is not installed, so the op never asserts `verified` today and says so.
+6. **Production restrictions preserved**: untrusted candidate media processing is not activated on
+   this host; missing cgroup/seccomp remain documented; scanner-dependent validation stays fail
+   closed; GitHub Actions was not paid to unlock. Local static analysis (pyflakes) is clean on all
+   F4/F4.1 modules; CodeQL remains unavailable (org billing lock) and is reported as such.
+
+Test results: offline suite **39 passed, 1 skipped** (the PG test skips on SQLite); the PG test is
+**10 passed** on PostgreSQL 16; F4 suite **63** and review-boundary suite **22** checks pass.

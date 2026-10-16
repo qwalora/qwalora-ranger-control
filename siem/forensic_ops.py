@@ -311,6 +311,37 @@ PROV_UNSUPPORTED = "unsupported_tooling"
 PROV_ERROR = "processing_error"
 PROV_INDETERMINATE = "indeterminate"
 
+# An approved C2PA trust policy (set of trust anchors / allowed signers the deployment accepts). A
+# `verified` state is reachable ONLY when such a policy is configured AND c2patool reports an
+# explicit successful cryptographic validation against it. None here means NO policy is configured,
+# so verification can never succeed and every present manifest is at best `indeterminate`. This is
+# intentionally dormant: c2patool is not installed in this environment, and even if it were, no
+# trust policy is approved, so we never assert `verified`.
+C2PA_TRUST_POLICY = None
+
+
+def _c2pa_state_from_report(report, *, policy):
+    """Map a c2patool report to a provenance state WITHOUT ever treating an absent or ambiguous
+    status as verified. `verified` requires an approved trust policy AND an explicit 'valid' status
+    AND an active manifest; explicit failures are `invalid`; anything else is `indeterminate`."""
+    status = report.get("validation_status")
+    active = report.get("active_manifest") or report.get("manifest_store") or report.get("manifest")
+    # explicit failure signals -> invalid
+    if isinstance(status, str) and status.lower() in ("invalid", "failed", "error"):
+        return PROV_INVALID
+    if isinstance(status, list) and any(
+            isinstance(s, dict) and str(s.get("code", "")).lower().startswith(("signingcredential",
+            "timestamp", "assertion", "claim")) and s.get("passed") is False for s in status):
+        return PROV_INVALID
+    # explicit success under an approved policy -> verified
+    explicit_valid = (isinstance(status, str) and status.lower() == "valid") or \
+                     (isinstance(status, list) and len(status) > 0
+                      and all(isinstance(s, dict) and s.get("passed") is True for s in status))
+    if policy is not None and explicit_valid and active:
+        return PROV_VERIFIED
+    # absent / empty / ambiguous status, or no approved policy -> NEVER verified
+    return PROV_INDETERMINATE
+
 
 def op_provenance_c2pa(source_path, params):
     """Inspect C2PA/content-credentials. A MISSING manifest is NOT evidence of fakery; a VALID
@@ -328,9 +359,13 @@ def op_provenance_c2pa(source_path, params):
                 report = json.loads(res.stdout.decode() or "{}")
             except Exception:
                 report = {"raw": res.stdout.decode("utf-8", "replace")[:4000]}
-            state = PROV_VERIFIED if report.get("validation_status") in (None, [], "valid") else PROV_INVALID
+            state = _c2pa_state_from_report(report, policy=C2PA_TRUST_POLICY)
             r.observed_facts = {"provenance_state": state, "c2pa_report": report,
-                                "manifest_present": True}
+                                "manifest_present": True,
+                                "trust_policy_configured": C2PA_TRUST_POLICY is not None}
+            if C2PA_TRUST_POLICY is None:
+                r.limitations.append("no approved C2PA trust policy is configured: a present manifest "
+                                     "cannot be asserted 'verified' and is reported 'indeterminate'")
         else:
             r.observed_facts = {"provenance_state": PROV_MISSING if not manifest_present else PROV_ERROR,
                                 "manifest_present": manifest_present,

@@ -62,17 +62,20 @@ class InMemoryJobStore:
     `claim` atomic; `list_running`/`list_stale` are indexed queries on `state`)."""
 
     def __init__(self):
+        import threading
         self._by_id = {}
         self._by_idem = {}
+        self._lock = threading.RLock()
 
     def create(self, job):
-        idem = job.get("idempotency_key")
-        if idem and idem in self._by_idem:
-            return self._by_idem[idem], False
-        self._by_id[job["job_id"]] = job
-        if idem:
-            self._by_idem[idem] = job
-        return job, True
+        with self._lock:
+            idem = job.get("idempotency_key")
+            if idem and idem in self._by_idem:
+                return self._by_idem[idem], False
+            self._by_id[job["job_id"]] = job
+            if idem:
+                self._by_idem[idem] = job
+            return job, True
 
     def get(self, job_id):
         return self._by_id.get(job_id)
@@ -83,29 +86,65 @@ class InMemoryJobStore:
     def list_queued(self):
         return [j for j in self._by_id.values() if j["state"] == "queued"]
 
-    def claim(self, job_id, worker_token):
-        j = self._by_id.get(job_id)
-        if not j or j["state"] != "queued" or j.get("worker_token"):
-            return None
-        j["worker_token"] = worker_token
-        j["state"] = "running"
-        j["attempts"] = j.get("attempts", 0) + 1
-        j["claimed_at"] = _iso()
-        j["started_at"] = _iso()
-        return j
+    def claim(self, job_id, worker_token, *, max_concurrent=None):
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if not j or j["state"] != "queued" or j.get("worker_token"):
+                return None
+            if max_concurrent is not None and \
+               len([x for x in self._by_id.values() if x["state"] == "running"]) >= max_concurrent:
+                return None  # cap reached: leave queued (atomic under the lock)
+            j["worker_token"] = worker_token
+            j["state"] = "running"
+            j["attempts"] = j.get("attempts", 0) + 1
+            j["claimed_at"] = _iso()
+            j["started_at"] = _iso()
+            return dict(j)
+
+    def finalize_success(self, job_id, token, fields):
+        """Atomic, token-checked transition running -> succeeded. Returns False if the job is no
+        longer running under this token (e.g. it was canceled), so results are never committed."""
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if not j or j["state"] != "running" or j.get("worker_token") != token:
+                return False
+            j.update(fields)
+            j["state"] = "succeeded"
+            return True
+
+    def fail(self, job_id, token, *, requeue, error_code, error_detail, wall_ms=None):
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if not j or j.get("worker_token") != token or j["state"] not in ("running",):
+                return False  # do not override a concurrent cancel/terminal state
+            if requeue:
+                j.update(state="queued", worker_token=None, claimed_at=None, started_at=None,
+                         error_code=error_code, error_detail=error_detail)
+                j["attempts"] = max(0, j.get("attempts", 1) - 1)
+            else:
+                j.update(state="failed", finished_at=_iso(), error_code=error_code,
+                         error_detail=error_detail, wall_ms=wall_ms)
+            return True
+
+    def cancel(self, job_id):
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if not j or j["state"] in ("succeeded", "failed", "canceled", "quarantined"):
+                return j
+            j.update(state="canceled", finished_at=_iso(), worker_token=None)
+            return j
 
     def update(self, job_id, **changes):
-        j = self._by_id.get(job_id)
-        if j:
-            j.update(changes)
-        return j
+        with self._lock:
+            j = self._by_id.get(job_id)
+            if j:
+                j.update(changes)
+            return j
 
     def list_stale(self, older_than_iso):
-        out = []
-        for j in self._by_id.values():
-            if j["state"] == "running" and (j.get("claimed_at") or "") < older_than_iso:
-                out.append(j)
-        return out
+        with self._lock:
+            return [j for j in self._by_id.values()
+                    if j["state"] == "running" and (j.get("claimed_at") or "") < older_than_iso]
 
 
 # ========================= in-memory evidence sink ==========================
@@ -156,6 +195,34 @@ class InMemoryEvidenceSink:
     def chain(self, evidence_id):
         return [c for c in self.custody if c["record"]["evidence_id"] == evidence_id]
 
+    def discard_pending(self, created, *, store=None):
+        """Roll back derived outputs staged for a job that did not finalize (e.g. was canceled):
+        drop the derived artifacts, their blob references and custody chains, trim the source
+        chain back to its pre-job length, and delete the brand-new derived objects from the store.
+        Nothing here touches the source object or any other artifact's bytes."""
+        eids = set(created.get("evidence_ids") or [])
+        self.custody = [c for c in self.custody if c["record"]["evidence_id"] not in eids]
+        for eid in eids:
+            self.artifacts.pop(eid, None)
+            self._seq.pop(eid, None)
+            self._head.pop(eid, None)
+        self.refs = [r for r in self.refs if r["evidence_id"] not in eids]
+        # trim the source chain back to its pre-job length and restore its head/seq
+        seid = created.get("source_evidence_id")
+        before = created.get("source_seq_before")
+        if seid is not None and before is not None:
+            kept = [c for c in self.custody if c["record"]["evidence_id"] != seid]
+            src_events = [c for c in self.custody if c["record"]["evidence_id"] == seid][:before]
+            self.custody = kept + src_events
+            self._seq[seid] = before
+            self._head[seid] = src_events[-1]["record"]["record_hash"] if src_events else None
+        if store is not None:
+            for key in created.get("object_keys") or []:
+                try:
+                    store.delete(key, authorized_reason="canceled_job_result_discard")
+                except Exception:
+                    pass
+
     def _ensure_ref(self, artifact):
         key = artifact.get("object_key")
         if not key:
@@ -182,7 +249,10 @@ class JobCoordinator:
 
     # ---- submit (authorize BEFORE create) ----
     def submit(self, *, operation, source_evidence_id, requester, params=None,
-               idempotency_key=None, max_attempts=1, trusted_fixture=False):
+               idempotency_key=None, max_attempts=1):
+        # NOTE: there is deliberately NO trusted_fixture parameter. Trust is derived server-side at
+        # run time from the administrator-approved fixture registry (keyed by the server-computed
+        # source hash). A caller cannot assert trust via a flag, job parameter, or metadata.
         if (requester or {}).get("role") != "admin":
             raise JobError("NOT_ADMIN", "forensic jobs are administrator-controlled")
         if operation not in fo.OPS:
@@ -190,24 +260,17 @@ class JobCoordinator:
         src = self.sink.get_source(source_evidence_id)
         if src is None:
             raise JobError("SOURCE_NOT_FOUND", f"no source artifact {source_evidence_id!r}")
-        # bounded concurrency counts running jobs (DB store counts reserved+running the same way)
-        if len(self.jobs.list_running()) >= self.max_concurrent:
-            # still create the job queued; it will run when a slot frees (never over-commit compute)
-            state = "queued"
-        else:
-            state = "queued"
         job = {
             "job_id": "fj-" + uuid.uuid4().hex[:20], "operation": operation,
             "source_evidence_id": source_evidence_id, "case_id": src.get("case_id"),
             "candidate_id": src.get("candidate_id"), "cohort": src.get("cohort"),
             "pathway": src.get("pathway"), "params": params or {},
-            "idempotency_key": idempotency_key, "state": state,
+            "idempotency_key": idempotency_key, "state": "queued",
             "requested_by": requester.get("id") or requester.get("candidate_id") or "admin",
             "attempts": 0, "max_attempts": max_attempts, "worker_token": None,
             "claimed_at": None, "started_at": None, "finished_at": None, "wall_ms": None,
             "error_code": None, "error_detail": None, "result_manifest": None,
-            "derived_evidence_ids": [], "trusted_fixture": bool(trusted_fixture),
-            "created_at": _iso(),
+            "derived_evidence_ids": [], "created_at": _iso(),
         }
         job, created = self.jobs.create(job)
         return job
@@ -215,18 +278,16 @@ class JobCoordinator:
     # ---- run one job (atomic claim + execute) ----
     def run(self, job_id):
         token = secrets.token_hex(16)
-        job = self.jobs.claim(job_id, token)
+        # the claim atomically enforces the concurrency cap: it returns None if the job is not
+        # queued OR no slot is free, so compute is never over-committed (no post-claim re-queue race)
+        job = self.jobs.claim(job_id, token, max_concurrent=self.max_concurrent)
         if job is None:
             existing = self.jobs.get(job_id)
-            raise JobError("NOT_CLAIMABLE",
-                           f"job {job_id} not queued/claimable (state={existing and existing['state']})")
-        if len(self.jobs.list_running()) > self.max_concurrent:
-            # lost a concurrency race: release back to queued
-            self.jobs.update(job_id, state="queued", worker_token=None, claimed_at=None,
-                             started_at=None, attempts=job["attempts"] - 1)
-            raise JobError("CONCURRENCY_LIMIT", "no free slot; re-queued")
+            st = existing and existing.get("state")
+            if st == "queued" and len(self.jobs.list_running()) >= self.max_concurrent:
+                raise JobError("CONCURRENCY_LIMIT", "no free slot; job remains queued")
+            raise JobError("NOT_CLAIMABLE", f"job {job_id} not queued/claimable (state={st})")
         start = _now()
-        src_path = None
         try:
             return self._execute(job, start)
         except JobError:
@@ -234,27 +295,22 @@ class JobCoordinator:
         except Exception as e:  # noqa
             self._fail(job, "RUN_ERROR", f"{type(e).__name__}: {e}", start)
             return self.jobs.get(job_id)
-        finally:
-            if src_path and os.path.exists(src_path):
-                try:
-                    os.remove(src_path)
-                except OSError:
-                    pass
 
     def _execute(self, job, start):
+        token = job.get("worker_token")
         src = self.sink.get_source(job["source_evidence_id"])
         # re-check authorization/availability AT RUN TIME (revocation/expiry since submit)
         if src.get("revoked") or src.get("validation_state") == "revoked":
             return self._fail(job, "SOURCE_REVOKED", "source evidence was revoked", start)
         op = fo.OPS[job["operation"]]
         media = op["category"] in ("audio", "video", "image")
-        trusted = bool(job.get("trusted_fixture")) or ev.is_trusted_fixture(src)
+        # trust is derived SERVER-SIDE from the approved registry; never from the job/params
+        trusted = ev.is_trusted_fixture(src)
         if media:
             allowed, why = ev.can_enter_unsafe_workflow(src)
             if not allowed and not trusted:
                 return self._fail(job, "UNSAFE_WORKFLOW_BLOCKED",
                                   f"source not eligible for media decoding: {why}", start)
-        # retrieve the preserved source bytes to a read-only temp copy for the sandbox
         key = src.get("object_key")
         if not key or not self.store.exists(key):
             return self._fail(job, "SOURCE_MISSING", "source object is missing from the store", start)
@@ -276,24 +332,37 @@ class JobCoordinator:
                     pass
 
         if not result.ok and not result.derived:
-            # operation failed with nothing usable -> job fails (retry if attempts remain)
             detail = {"errors": result.errors, "sandbox": result.sandbox}
             return self._fail(job, "OPERATION_FAILED", json.dumps(detail)[:4000], start,
                               retriable=True)
 
-        derived_ids = self._persist_outputs(job, src, result)
+        # Persist derived outputs into the sink (pending, not yet durable for the SQL sink), then
+        # COMMIT them only via a conditional finalize that still owns the job. If the job was
+        # canceled (or its claim lost) while we were processing, finalize fails and we DISCARD the
+        # pending outputs - a canceled job can never become succeeded and leaves no committed result.
+        src_seq_before = len(self.sink.chain(src["evidence_id"]))
+        derived_ids, object_keys = self._persist_outputs(job, src, result)
         manifest = self._build_manifest(job, src, result, derived_ids, start)
-        self.jobs.update(job["job_id"], state="succeeded", finished_at=_iso(),
-                         wall_ms=int((_now() - start).total_seconds() * 1000),
-                         result_manifest=json.dumps(manifest), derived_evidence_ids=derived_ids,
-                         error_code=None, error_detail=None)
+        fields = {"finished_at": _iso(),
+                  "wall_ms": int((_now() - start).total_seconds() * 1000),
+                  "result_manifest": json.dumps(manifest), "derived_evidence_ids": derived_ids,
+                  "error_code": None, "error_detail": None}
+        committed = self.jobs.finalize_success(job["job_id"], token, fields)
+        if not committed:
+            # cancellation (or lost ownership) won the race: roll back everything we staged
+            self.sink.discard_pending({"evidence_ids": derived_ids, "object_keys": object_keys,
+                                       "source_evidence_id": src["evidence_id"],
+                                       "source_seq_before": src_seq_before}, store=self.store)
+            cur = self.jobs.get(job["job_id"])
+            raise JobError("NOT_FINALIZED",
+                           f"results discarded; job is {cur and cur.get('state')} (not succeeded)")
         return self.jobs.get(job["job_id"])
 
     def _persist_outputs(self, job, src, result):
         """Persist each derived output as a NEW evidence artifact (source never overwritten),
         sequence the child's first custody event, record a `derive` event on the SOURCE chain for
-        lineage, and register a reference-counted blob reference. Returns derived evidence ids."""
-        derived_ids = []
+        lineage, and register a reference-counted blob reference. Returns (derived_ids, object_keys)."""
+        derived_ids, object_keys = [], []
         for d in result.derived:
             res = ep.persist_derived(self.store, src, d["bytes"],
                                      evidence_type="derived_artifact",
@@ -304,21 +373,21 @@ class JobCoordinator:
             self.sink.save_derived(art)
             self.sink.record_custody(res["custody"])         # child chain (sink stamps seq/parent)
             derived_ids.append(art["evidence_id"])
-            # lineage event on the SOURCE chain (sink stamps seq + parent_hash)
+            if art.get("object_key"):
+                object_keys.append(art["object_key"])
             self.sink.record_custody(ep.custody_event(
                 "derive", evidence_id=src["evidence_id"], actor=f"forensic-job:{job['job_id']}",
                 candidate_id=src.get("candidate_id"), cohort=src.get("cohort"),
                 pathway=src.get("pathway"),
                 detail={"produced": art["evidence_id"], "operation": job["operation"],
                         "derived_sha256": d["sha256"], "kind": d["kind"]}))
-        # an observation-only op (no derived bytes) still records a processing event on the source
         if not result.derived:
             self.sink.record_custody(ep.custody_event(
                 "verify", evidence_id=src["evidence_id"], actor=f"forensic-job:{job['job_id']}",
                 candidate_id=src.get("candidate_id"), cohort=src.get("cohort"),
                 pathway=src.get("pathway"),
                 detail={"operation": job["operation"], "observed": True}))
-        return derived_ids
+        return derived_ids, object_keys
 
     def _build_manifest(self, job, src, result, derived_ids, start):
         """The reproducible result manifest: everything an authorized verifier needs to repeat the
@@ -357,13 +426,10 @@ class JobCoordinator:
     def _fail(self, job, code, detail, start, *, retriable=False):
         attempts = job.get("attempts", 1)
         can_retry = retriable and attempts < job.get("max_attempts", 1)
-        self.jobs.update(job["job_id"],
-                         state=("queued" if can_retry else "failed"),
-                         worker_token=None if can_retry else job.get("worker_token"),
-                         claimed_at=None if can_retry else job.get("claimed_at"),
-                         finished_at=None if can_retry else _iso(),
-                         wall_ms=int((_now() - start).total_seconds() * 1000),
-                         error_code=code, error_detail=detail)
+        # token-checked transition: never override a concurrent cancel of this job
+        self.jobs.fail(job["job_id"], job.get("worker_token"),
+                       requeue=can_retry, error_code=code, error_detail=detail,
+                       wall_ms=int((_now() - start).total_seconds() * 1000))
         return self.jobs.get(job["job_id"])
 
     def cancel(self, job_id, *, requester):
@@ -372,9 +438,9 @@ class JobCoordinator:
         j = self.jobs.get(job_id)
         if not j:
             raise JobError("NOT_FOUND", job_id)
-        if j["state"] in ("succeeded", "failed", "canceled", "quarantined"):
-            return j  # terminal; cancellation is a no-op
-        self.jobs.update(job_id, state="canceled", finished_at=_iso(), worker_token=None)
+        # atomic transition: canceled only from a non-terminal state; a job that already
+        # succeeded/failed is never reopened, and a canceled job can never become succeeded.
+        self.jobs.cancel(job_id)
         return self.jobs.get(job_id)
 
     def recover_stale(self, *, timeout_seconds=300, now=None):

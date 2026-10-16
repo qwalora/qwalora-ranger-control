@@ -811,6 +811,21 @@ class BlobReference(db.Model):
     __table_args__ = (db.UniqueConstraint("object_key", "evidence_id", name="uq_blobref_obj_ev"),)
 
 
+class TrustedFixture(db.Model):
+    """F4.1 - an authenticated, administrator-approved synthetic-fixture registry.
+
+    The ONLY thing that may let media bypass the scan gate for development demonstrations is a
+    content hash registered here by an explicit administrative action. Trust is derived server-side
+    from this table keyed by the server-computed sha256; it is never taken from a job parameter,
+    submitted metadata, or any caller-controlled flag. Real candidate uploads are never registered."""
+    __tablename__ = "trusted_fixtures"
+    id = db.Column(db.Integer, primary_key=True)
+    sha256 = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note = db.Column(db.String(300), nullable=True)
+    approved_by = db.Column(db.String(120), nullable=False)   # admin principal that approved it
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
 class ForensicJob(db.Model):
     """F4 - a persistent, auditable bounded-forensic-processing job.
 
