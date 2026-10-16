@@ -153,6 +153,71 @@ def test_candidate_route_shows_own_board_and_never_leaks():
     assert anon.get("/me/mission").status_code in (302, 401)
 
 
+# --- presentation regression (the refined mission workspace) --------------------------------
+def _render(board):
+    import app as appmod
+    from models import db, Candidate
+    application = appmod.create_app()
+    with application.app_context():
+        db.create_all()
+        c = Candidate(handle=f"pres{board}", name="P", email=f"p{board}@e", cohort="2026-A",
+                      github_id=f"g-p{board}", status="active", current_board=board)
+        db.session.add(c); db.session.commit()
+        cid = c.id
+    client = application.test_client()
+    with client.session_transaction() as s:
+        s["cand"] = cid
+    return client.get("/me/mission")
+
+
+def test_presentation_workspace_overview_and_tabs():
+    r = _render(1)
+    assert r.status_code == 200
+    html = r.data.decode()
+    # the mission view uses its own responsive stylesheet (not the narrow global card)
+    assert "mission.css" in html
+    assert 'class="mw-shell"' in html and 'class="card"' not in html
+    # always-visible overview: role, environment, version, objective standard
+    for marker in ("Professional role", "Environment", "Mission version", "Objective standard",
+                   "v1 · approved", "95.0%"):
+        assert marker in html, f"overview missing {marker!r}"
+    # four accessible tabs and four panels; Mission is the default-checked tab
+    assert 'id="mwt-mission" checked' in html
+    for t in ("mwt-mission", "mwt-env", "mwt-sub", "mwt-ref"):
+        assert f'id="{t}"' in html
+    for p in ("mwp-mission", "mwp-env", "mwp-sub", "mwp-ref"):
+        assert f'id="{p}"' in html
+    for label in (">Mission<", ">Environment<", ">Submission<", ">References<"):
+        assert label in html, f"tab label missing {label!r}"
+
+
+def test_presentation_preserves_all_sections_and_substance():
+    # every substantive paragraph of all ten sections must still be present verbatim (not shortened).
+    r = _render(1)
+    html = r.data.decode()
+    import html as _h
+    pkg = sm.get(1)
+    for key in ("business_context", "assigned_role", "authorized_scope", "environment",
+                "evidence", "submission", "evaluation", "support"):
+        assert _h.escape(pkg[key]) in html or pkg[key] in html, f"section {key} text was dropped"
+    for item in pkg["objectives"] + pkg["deliverables"]:
+        assert _h.escape(item) in html or item in html, f"list item dropped: {item[:40]}"
+    # references are present and compact (rendered in the references panel)
+    for ref in pkg["references"]:
+        assert _h.escape(ref["title"]) in html or ref["title"] in html
+
+
+def test_presentation_environment_truthful_for_range_boards():
+    for board in (5, 6):
+        html = _render(board).data.decode()
+        # overview status and the environment-tab banner both show pending / not available
+        assert "Pending" in html
+        assert "not yet available" in html.lower(), f"board {board} must show range unavailable"
+    # a dataset board shows ready, no false pending
+    html1 = _render(1).data.decode()
+    assert "Ready" in html1 and "not yet available" not in html1.lower()
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

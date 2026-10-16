@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Qwalora Ranger{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_ver }}">
+  {% block head %}{% endblock %}
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
 {% block body %}{% endblock %}

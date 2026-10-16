@@ -2784,7 +2784,11 @@ def create_app():
         if not pkg:
             abort(404)
         avail = strata_missions.environment_availability(n)
-        vm = {"pkg": pkg, "avail": avail, "board": n, "handle": c.handle,
+        # a concise one-line mission summary for the always-visible overview (derived from the
+        # approved business context; the full text is preserved in the Mission tab).
+        bc = pkg.get("business_context") or ""
+        summary = (bc.split(". ")[0].strip() + ".") if bc else None
+        vm = {"pkg": pkg, "avail": avail, "board": n, "handle": c.handle, "summary": summary,
               "cohort": c.cohort, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-")}
         return render_template("mission_brief.html", vm=vm)
 
