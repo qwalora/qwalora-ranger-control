@@ -101,7 +101,7 @@ def register(app, candidate_model, db, helpers=None):
         payload = _json.loads(sub.payload) if (sub and sub.payload) else {}
         scope = wc.case_scope_view(case, pathway)
         evidence = [_evidence_vm(e) for e in wc.candidate_evidence(db, c, case.id)]
-        readiness = wc.submission_readiness(db, case, c, payload, evidence)
+        readiness = wc.submission_readiness(db, case, c, payload, evidence, pathway)
         vm = {
             "case": scope,
             "pathway": pathway,

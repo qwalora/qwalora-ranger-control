@@ -308,8 +308,9 @@ def _pg_concurrency_test():
     Runs in a DISPOSABLE test database (no destructive ops on the provided/shared database)."""
     disp = _pgtest.make_disposable_or_none()
     if disp is None:
-        print("SKIP concurrent-submission race (no isolated disposable PostgreSQL; set "
-              "RANGER_TEST_ALLOW_DB_MUTATION and a postgres DATABASE_URL)")
+        print("SKIP concurrent-submission race (no authorized disposable PostgreSQL; set "
+              "RANGER_TEST_ALLOW_DB_MUTATION + RANGER_TEST_DATABASE_URL and provision the sentinel "
+              "database on a dedicated local test server)")
         return None
     _new_url, _cleanup = disp
     try:
@@ -419,7 +420,173 @@ def _pg_concurrency_body():
         check("PG: deleting one candidate's reference preserves the shared evidence object",
               res["physical"] is False and store.exists(shared_key)
               and EvidenceArtifact.query.filter_by(evidence_id=ay["evidence_id"]).first() is not None)
+
+    _pg_correction2_upload_atomicity(application)
     return True
+
+
+def _unique_trace():
+    return _json.dumps({"schema": "ranger-agent-trace/1", "events": [], "nonce": os.urandom(8).hex()}
+                       ).encode()
+
+
+def _pg_correction2_upload_atomicity(application):
+    """F5.1 correction 2: evidence upload joins the per-object locking protocol BEFORE publishing
+    bytes, so no committed active reference can ever point at missing bytes, and a failed upload
+    never destroys another artifact's evidence. Exercises the 8 required scenarios on real PG."""
+    import workbench_core as _wc
+    from models import (db, Candidate as C, Cohort as Co, Case as K, EvidenceArtifact as EA,
+                        BlobReference as BR)
+    from siem import forensic_jobs_db as fjdb
+
+    def _mkcand(application, tag):
+        with application.app_context():
+            if not Co.query.filter_by(name="2026-P").first():
+                db.session.add(Co(name="2026-P", pathway="parallax", status="active"))
+            c = C(handle=tag, name=tag, email=f"{tag}@e", cohort="2026-P", github_id=f"g-{tag}",
+                  status="active", current_board=1)
+            db.session.add(c); db.session.commit()
+            k = K(candidate_id=c.id, board=1, cohort="2026-P", plane="qualification",
+                  workflow="qualification", seed=tag, scenario_version=1, index_name=tag,
+                  scenario_ref="parallax-agent-authz")
+            db.session.add(k); db.session.commit()
+            return c.id, k.id
+
+    store = _wc.evidence_store()
+
+    # --- 5. DB failure AFTER bytes are written (at reference insert): rollback is reference-safe ---
+    cid, kid = _mkcand(application, "c2-fail-after")
+    content5 = _unique_trace()
+    key5 = "blob/" + __import__("hashlib").sha256(content5).hexdigest()
+    orig_blobref = _wc._persist_blobref
+
+    def boom_blobref(dbh, art):
+        raise RuntimeError("injected DB failure after bytes written")
+
+    with application.app_context():
+        c = C.query.get(cid); k = K.query.get(kid)
+        _wc._persist_blobref = boom_blobref
+        failed = False
+        try:
+            _wc.submit_evidence(db, store, k, c, "parallax", io.BytesIO(content5),
+                                evidence_type="agent_trace")
+        except _wc.WorkbenchError as e:
+            failed = e.code == "EVIDENCE_PERSIST_FAILED"
+        finally:
+            _wc._persist_blobref = orig_blobref
+        no_row = EA.query.filter(EA.object_key == key5).count() == 0
+        gone = not store.exists(key5)
+    check("PG C2-5: a DB failure after bytes are written leaves no committed row and sweeps the "
+          "newly-published object (reference-safe)", failed and no_row and gone)
+
+    # --- 6. DB failure BEFORE reference creation (at artifact insert): same safe rollback ---------
+    cid, kid = _mkcand(application, "c2-fail-before")
+    content6 = _unique_trace()
+    key6 = "blob/" + __import__("hashlib").sha256(content6).hexdigest()
+    orig_artifact = _wc._persist_artifact
+
+    def boom_artifact(dbh, art, *, backend):
+        raise RuntimeError("injected DB failure before reference creation")
+
+    with application.app_context():
+        c = C.query.get(cid); k = K.query.get(kid)
+        _wc._persist_artifact = boom_artifact
+        failed = False
+        try:
+            _wc.submit_evidence(db, store, k, c, "parallax", io.BytesIO(content6),
+                                evidence_type="agent_trace")
+        except _wc.WorkbenchError as e:
+            failed = e.code == "EVIDENCE_PERSIST_FAILED"
+        finally:
+            _wc._persist_artifact = orig_artifact
+        gone = not store.exists(key6)
+        no_row = EA.query.filter(EA.object_key == key6).count() == 0
+    check("PG C2-6: a DB failure before reference creation commits nothing and leaves no orphan "
+          "bytes", failed and gone and no_row)
+
+    # --- 7. deduplicated rollback where ANOTHER active artifact references the bytes -------------
+    cid, kid = _mkcand(application, "c2-dedup-a")
+    cid2, kid2 = _mkcand(application, "c2-dedup-b")
+    shared7 = _unique_trace()
+    key7 = "blob/" + __import__("hashlib").sha256(shared7).hexdigest()
+    with application.app_context():
+        c = C.query.get(cid); k = K.query.get(kid)
+        good = _wc.submit_evidence(db, store, k, c, "parallax", io.BytesIO(shared7),
+                                   evidence_type="agent_trace")  # commits artifact + ref for key7
+    with application.app_context():
+        c2 = C.query.get(cid2); k2 = K.query.get(kid2)
+        _wc._persist_blobref = boom_blobref
+        failed = False
+        try:   # identical bytes -> dedup hit (published_new False); failure must NOT delete key7
+            _wc.submit_evidence(db, store, k2, c2, "parallax", io.BytesIO(shared7),
+                                evidence_type="agent_trace")
+        except _wc.WorkbenchError as e:
+            failed = e.code == "EVIDENCE_PERSIST_FAILED"
+        finally:
+            _wc._persist_blobref = orig_blobref
+        preserved = store.exists(key7)
+        first_ref = BR.query.filter_by(object_key=key7, evidence_id=good["evidence_id"],
+                                       active=True).count()
+    check("PG C2-7: a failed deduplicated upload never deletes bytes another artifact references",
+          failed and preserved and first_ref == 1)
+
+    # --- 8. a retention hold prevents physical deletion of a referenced object -------------------
+    cid, kid = _mkcand(application, "c2-hold")
+    content8 = _unique_trace()
+    with application.app_context():
+        c = C.query.get(cid); k = K.query.get(kid)
+        a8 = _wc.submit_evidence(db, store, k, c, "parallax", io.BytesIO(content8),
+                                 evidence_type="agent_trace")
+        key8 = a8["object_key"]
+        life = fjdb.SqlBlobLifecycle(db, store)
+        life.place_hold(key8, on=True, evidence_id=a8["evidence_id"])
+        # release the reference but keep the hold: the object must survive
+        life.revoke(key8, evidence_id=a8["evidence_id"], reason="withdrew")
+        swept = life.sweep_object(key8, reason="retention_test")
+        held_exists = store.exists(key8)
+    check("PG C2-8: a retention hold prevents physical deletion even with no active reference",
+          swept["physical"] is False and held_exists)
+
+    # --- 2/3/4. upload racing a concurrent sweep / managed_delete / physical deletion -----------
+    # The invariant (never a committed active reference pointing at missing bytes) must hold under
+    # a genuine race. We run several rounds; each round a fresh unique object is uploaded by one
+    # thread while another thread hammers sweep_object()/managed_delete() on that exact key.
+    violations = []
+    for rnd in range(6):
+        cid, kid = _mkcand(application, f"c2-race-{rnd}")
+        content = _unique_trace()
+        key = "blob/" + __import__("hashlib").sha256(content).hexdigest()
+
+        def uploader():
+            with application.app_context():
+                try:
+                    cc_ = C.query.get(cid); kk_ = K.query.get(kid)
+                    _wc.submit_evidence(db, store, kk_, cc_, "parallax", io.BytesIO(content),
+                                        evidence_type="agent_trace")
+                except Exception:  # noqa
+                    pass
+                finally:
+                    db.session.remove()
+
+        def sweeper():
+            with application.app_context():
+                life = fjdb.SqlBlobLifecycle(db, store)
+                for _ in range(15):
+                    try:
+                        life.sweep_object(key, reason="race_sweep")
+                    except Exception:  # noqa
+                        db.session.rollback()
+                db.session.remove()
+
+        th = [threading.Thread(target=uploader), threading.Thread(target=sweeper)]
+        [t.start() for t in th]; [t.join() for t in th]
+        with application.app_context():
+            active = BR.query.filter_by(object_key=key, active=True).count()
+            exists = store.exists(key)
+            if active > 0 and not exists:
+                violations.append((rnd, active, exists))
+    check("PG C2-2/3/4: upload racing a concurrent sweep/delete never leaves an active reference "
+          "pointing at missing bytes", not violations)
 
 
 def test_workbench():

@@ -129,6 +129,7 @@ def case_scope_view(case, pathway):
     generic content. Hidden scenarios, answers, exploits, cohort variants and evaluator rules are
     never included."""
     meta = case_meta(case)
+    el = scenario_eligibility(case, pathway)
     base = {
         "case_id": case.id, "scenario_version": case.scenario_version,
         "scenario_ref": getattr(case, "scenario_ref", None),
@@ -137,6 +138,11 @@ def case_scope_view(case, pathway):
         "assigned_at": _s(case.assigned_at), "started_at": _s(case.started_at),
         "submitted_at": _s(case.submitted_at),
         "instructions_available": meta is not None,
+        # candidate-safe eligibility (never exposes hidden truth): is this case ready to be worked
+        # and submitted, and if not, an accurate reason.
+        "submittable": bool(el["ok"]),
+        "availability_status": el["status"],
+        "availability_reason": el["reason"],
     }
     if meta is None:
         base.update({
@@ -164,6 +170,27 @@ def _case_required_kinds(case):
     if not meta:
         return set()
     return {r["kind"] for r in meta.get("evidence_requirements", []) if r.get("required")}
+
+
+# --- scenario eligibility (fail-closed) -----------------------------------------------------
+def scenario_eligibility(case, pathway):
+    """Fail-closed eligibility of THIS case's scenario assignment for final submission. A missing/
+    unknown/unsupported-version/unapproved/wrong-pathway/revoked/incomplete scenario is NOT
+    submittable (candidate-safe reason, no hidden truth)."""
+    import workbench_scenarios as sc
+    return sc.eligibility(getattr(case, "scenario_ref", None), case.scenario_version,
+                          pathway=pathway)
+
+
+def assert_submittable(case, pathway):
+    """Raise unless an approved, eligible scenario is assigned. Enforced before any finalization so a
+    case with no approved scenario can never be finalized merely because its requirement set is
+    empty."""
+    el = scenario_eligibility(case, pathway)
+    if not el["ok"]:
+        raise WorkbenchError("SCENARIO_NOT_SUBMITTABLE", 409,
+                             el.get("reason") or "this case is not ready for submission")
+    return True
 
 
 # --- candidate write authorization (shared by draft/evidence/submit) -------------------------
@@ -211,6 +238,27 @@ def _cohort_pathway_name(db, cohort_name):
     return pathways.normalize_pathway(co.pathway if co and co.pathway else pathways.DEFAULT_PATHWAY)
 
 
+# --- STRATA Board 2 contract preservation ---------------------------------------------------
+# The STRATA SOC qualification case (Board 2) has an ESTABLISHED submission contract in
+# siem/case_contract.py + case_routes.py: candidate citation verification against the candidate's
+# OWN authorized index, source-snapshot digest preservation, and an Ed25519-signed citation record
+# in CaseSubmission.evidence_record/evidence_sig, held to the 95% qualification standard. The generic
+# workbench receipt performs NONE of that, so it must never become an alternate way to finalize a
+# STRATA Board 2 qualification case. We detect such a case and refuse finalization here, directing it
+# to its authorized Board 2 workflow. PARALLAX keeps the versioned workbench receipt.
+STRATA_BOARD2 = 2
+
+
+def is_strata_board2(case, pathway):
+    """True when `case` is a STRATA Board 2 qualification case governed by the case_contract/
+    case_routes submission workflow (not the generic workbench receipt)."""
+    if pathways.normalize_pathway(pathway) != pathways.PATHWAY_STRATA:
+        return False
+    if int(getattr(case, "board", 0) or 0) != STRATA_BOARD2:
+        return False
+    return (case.plane == "qualification") or (case.workflow == "qualification")
+
+
 # --- evidence submission (reuses F2/F3/F4; candidate can never self-validate) -----------------
 def submit_evidence(db, store, case, candidate, pathway, fileobj, *, evidence_type,
                     declared_media_type=None, source_identity="candidate-upload"):
@@ -220,36 +268,46 @@ def submit_evidence(db, store, case, candidate, pathway, fileobj, *, evidence_ty
     if evidence_type not in allowed:
         raise WorkbenchError("EVIDENCE_TYPE_NOT_PERMITTED", 400,
                              f"{evidence_type} is not permitted for this pathway")
+    # PHASE 1 - stage: stream, hash and validate the bytes WITHOUT publishing them. The final
+    # content-addressed key is now known, so we can take the per-object lock BEFORE the bytes become
+    # visible in the store. Nothing is persisted on a malformed/oversized/unsupported upload.
     try:
-        acq = ep.acquire(store, fileobj, evidence_type=evidence_type, case_id=case.id,
-                         candidate_id=candidate.id, cohort=candidate.cohort, pathway=pathway,
-                         source_identity=source_identity, declared_media_type=declared_media_type,
-                         retention_class="active_assessment")
+        staged = ep.stage(store, fileobj, evidence_type=evidence_type, case_id=case.id,
+                          candidate_id=candidate.id, cohort=candidate.cohort, pathway=pathway,
+                          source_identity=source_identity, declared_media_type=declared_media_type,
+                          retention_class="active_assessment")
     except ep.AcquisitionError as e:
-        # malformed / oversized / unsupported media -> safe, explicit failure; nothing persisted
         raise WorkbenchError(e.code, 400, e.message)
-    art = acq["artifact"]
-    # candidate-submitted evidence is ALWAYS needs_review + unscanned; a candidate cannot promote it
-    art["validation_state"] = "needs_review"
-    key = art.get("object_key")
-    newly_created = bool((acq.get("put") or {}).get("created"))
+
+    from siem import forensic_jobs_db as fjdb
+    key = staged.object_key
+    published_new = False
     try:
-        # join the F4 per-object locking protocol across the reference insert (dedup-safe; blocks a
-        # concurrent sweep/delete), then persist EvidenceArtifact + CustodyEvent + BlobReference
-        # atomically in one transaction.
-        from siem import forensic_jobs_db as fjdb
+        # PHASE 2 - publish + reference under ONE lock: take the per-object advisory lock first, then
+        # publish the bytes and register EvidenceArtifact + CustodyEvent + BlobReference, all while
+        # holding the lock (released on commit). A concurrent sweep/managed_delete must take the same
+        # lock, so it either runs entirely before publication (object absent -> nothing to delete) or
+        # entirely after our reference commits (reference present -> object preserved); it can never
+        # observe a published-but-unreferenced object. Dedup-safe and cross-tenant isolated.
         if key:
             fjdb._xact_lock_text(db, key)
+        acq = staged.publish()                    # atomic publish (or content-addressed dedup hit)
+        art = acq["artifact"]
+        # candidate-submitted evidence is ALWAYS needs_review + unscanned; a candidate cannot promote it
+        art["validation_state"] = "needs_review"
+        published_new = bool((acq.get("put") or {}).get("created"))
         _persist_artifact(db, art, backend="filesystem")
         _persist_custody(db, acq["custody"])
         _persist_blobref(db, art)
         db.session.commit()
     except Exception as e:  # noqa
         # reference-safe rollback: drop the pending rows; delete the object ONLY if this upload
-        # newly created it AND no committed reference remains (a dedup hit onto another artifact's
-        # bytes is never deleted). Shared evidence is always preserved.
+        # newly published it AND no committed reference remains (a dedup hit onto another artifact's
+        # bytes is never deleted). Shared evidence is always preserved. If publication never
+        # happened, the staged bytes are simply discarded (never published).
         db.session.rollback()
-        if newly_created and key:
+        staged.discard()
+        if published_new and key:
             _safe_sweep(db, store, key)
         raise WorkbenchError("EVIDENCE_PERSIST_FAILED", 500, f"{type(e).__name__}: {e}")
     return art
@@ -373,6 +431,18 @@ def finalize_submission(db, store, case, candidate, pathway):
     receipt lives in its OWN columns (wb_receipt*), never STRATA's evidence_record/evidence_sig.
     Duplicate final submission -> 409."""
     from models import EvidenceArtifact
+    # A STRATA Board 2 qualification case is finalized ONLY through its authorized Board 2 workflow
+    # (citation verification + signed citation record via case_contract.py). The generic workbench
+    # receipt must never bypass that technical verification, so refuse it here.
+    if is_strata_board2(case, pathway):
+        raise WorkbenchError(
+            "STRATA_BOARD2_CONTRACT_REQUIRED", 409,
+            "This STRATA Board 2 qualification case is finalized through its authorized SOC "
+            "submission workflow, which verifies and preserves your cited evidence. It cannot be "
+            "finalized from the generic workbench.")
+    # A valid, approved, eligible scenario must be assigned before a case can be finalized
+    # (fail-closed: a missing scenario is never treated as a scenario with no requirements).
+    assert_submittable(case, pathway)
     sub = _submission(db, case, candidate)
     if sub is None:
         raise WorkbenchError("NO_DRAFT", 400, "there is no draft to submit")
@@ -422,19 +492,34 @@ def finalize_submission(db, store, case, candidate, pathway):
     return sub, {"record": record, "signature": sig}
 
 
-def submission_readiness(db, case, candidate, payload, evidence_vms):
-    """A truthful checklist of what is / isn't ready for final submission (no fabricated status)."""
+def submission_readiness(db, case, candidate, payload, evidence_vms, pathway=None):
+    """A truthful checklist of what is / isn't ready for final submission (no fabricated status).
+    Scenario eligibility is checked first and fail-closed: an unavailable/unapproved scenario makes
+    the package not-ready regardless of findings/evidence."""
+    if pathway is None:
+        pathway = resolve_pathway(db, candidate)
+    el = scenario_eligibility(case, pathway)
+    strata_b2 = is_strata_board2(case, pathway)
     findings = payload.get("findings") or []
     refs = set(payload.get("evidence_refs") or [])
     req = _case_required_kinds(case)
     have_types = {e["evidence_type"] for e in evidence_vms if e["evidence_id"] in refs}
     missing = [k for k in req if k != et.EV_TECHNICAL_REPORT and k not in have_types]
     items = [
+        {"label": "An approved investigation scenario is assigned", "ok": bool(el["ok"])},
         {"label": "At least one technical finding recorded", "ok": bool(findings)},
-        {"label": "Required evidence attached to the package", "ok": not missing},
+        {"label": "Required evidence attached to the package", "ok": el["ok"] and not missing},
         {"label": "Evidence references selected", "ok": bool(refs)},
     ]
-    return {"checks": items, "ready": all(i["ok"] for i in items), "missing_evidence": missing}
+    out = {"checks": items, "ready": all(i["ok"] for i in items), "missing_evidence": missing,
+           "scenario_ok": bool(el["ok"]), "scenario_status": el["status"]}
+    if not el["ok"]:
+        out["scenario_reason"] = el["reason"]
+    if strata_b2:
+        # the workbench never finalizes a STRATA Board 2 case; it has its own authorized workflow
+        out["ready"] = False
+        out["external_workflow"] = "strata_board2"
+    return out
 
 
 def verify_receipt(sub, db=None):

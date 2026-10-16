@@ -35,9 +35,8 @@ ADMIN = {"role": "admin", "id": "admin-pg"}
 
 
 def _pg_or_skip():
-    url = os.environ.get("DATABASE_URL", "")
-    if "postgresql" not in url:
-        pytest.skip("PostgreSQL DATABASE_URL not set; F4.1 real-DB tests skipped")
+    if not _pgtest.resolve_test_url():
+        pytest.skip("RANGER_TEST_DATABASE_URL not set; F4.1 real-DB tests skipped (fail-closed)")
 
 
 class FakeProcessor:
@@ -577,10 +576,16 @@ def test_f41_persistence_pg():
 
 
 def test_f41_pg_isolation_guard():
+    # these are pure-logic demonstrations (no DB needed) that the test-environment authorization
+    # boundary refuses unsafe targets before any destructive act.
     assert _pgtest.assert_production_like_rejected()
+    assert _pgtest.assert_remote_server_rejected()
+    assert _pgtest.assert_missing_authorization_fails_closed()
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://postgres:pg@127.0.0.1:5432/ranger_test_f41")
+    os.environ.setdefault("RANGER_TEST_DATABASE_URL",
+                          "postgresql+psycopg2://postgres@127.0.0.1:5432/ranger_test_sentinel")
     os.environ.setdefault("RANGER_TEST_ALLOW_DB_MUTATION", "1")
+    _pgtest.provision_sentinel()
     test_f41_persistence_pg()

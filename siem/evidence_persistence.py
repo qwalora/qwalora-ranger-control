@@ -72,14 +72,38 @@ def verify_custody_chain(events) -> bool:
 
 
 # --- secure acquisition ------------------------------------------------------
-def acquire(store, fileobj, *, evidence_type, case_id, candidate_id, cohort, pathway,
-            source_identity, actor="ranger-server", declared_media_type=None,
-            max_bytes=None, retention_class="default"):
-    """Stream an upload into the store with server-side hashing/sniffing/validation, build the
-    typed EvidenceArtifact envelope (unscanned -> needs_review), and emit the first custody
-    event. Returns {artifact, put, custody}. Raises AcquisitionError on anything unsafe.
+class StagedAcquisition:
+    """A hashed-but-unpublished acquisition. The content hash (hence the object key) is known, but
+    the bytes are NOT yet visible in the store. `publish()` publishes the bytes and returns the same
+    {artifact, put, custody} dict `acquire()` returns; `discard()` drops the staged bytes.
 
-    The declared_media_type is advisory only; the authoritative type is sniffed from bytes."""
+    This lets a caller take the per-object lock BEFORE the bytes become visible and HOLD it across
+    publication + durable-reference registration, so a concurrent sweep/delete can never observe a
+    published-but-unreferenced object (F5.1 correction 2)."""
+
+    def __init__(self, staged, builder):
+        self._staged = staged
+        self._builder = builder
+        self.object_key = staged.key
+        self.sha256 = staged.sha256
+        self.published = False
+
+    def publish(self):
+        put = self._staged.commit()          # atomic publish (or content-addressed dedup hit)
+        self.published = True
+        return self._builder(put)
+
+    def discard(self):
+        if not self.published:
+            self._staged.discard()
+
+
+def stage(store, fileobj, *, evidence_type, case_id, candidate_id, cohort, pathway,
+          source_identity, actor="ranger-server", declared_media_type=None,
+          max_bytes=None, retention_class="default"):
+    """Stream + hash + sniff + validate an upload WITHOUT publishing it, returning a
+    StagedAcquisition. Raises AcquisitionError on anything unsafe (nothing is published). The
+    declared_media_type is advisory only; the authoritative type is sniffed from bytes."""
     spec = et.EVIDENCE_TYPES.get(evidence_type)
     if spec is None:
         raise AcquisitionError("UNSUPPORTED_EVIDENCE_TYPE", f"unknown type {evidence_type!r}")
@@ -88,26 +112,47 @@ def acquire(store, fileobj, *, evidence_type, case_id, candidate_id, cohort, pat
     cap = max_bytes or spec["max_bytes"] or store_mod._DEFAULT_MAX
     allowed = spec["media"]
     try:
-        put = store.put_stream(fileobj, max_bytes=cap, allowed_media_types=allowed)
+        staged = store.stage_stream(fileobj, max_bytes=cap, allowed_media_types=allowed)
     except store_mod.StorageError as e:
-        # malformed/truncated/oversized/unsupported -> safe, explicit failure; nothing persisted
+        # malformed/truncated/oversized/unsupported -> safe, explicit failure; nothing staged
         raise AcquisitionError(e.code, e.message)
 
-    blob = et.blob_ref("blob/" + put.sha256, put.sha256, put.media_type, put.size,
-                       provenance={"acquired": _iso(), "source_identity": source_identity})
-    art = et.new_artifact(evidence_type=evidence_type, case_id=case_id, candidate_id=candidate_id,
-                          cohort=cohort, pathway=pathway, source_identity=source_identity,
-                          content_hash=put.sha256, blob=blob, validation_state="needs_review")
-    art["object_key"] = put.key
-    art["scan_state"] = put.scan_state          # unscanned until an approved scan policy runs
-    art["retention_class"] = retention_class
-    art["acquisition_ts"] = _iso()
-    cev = custody_event("acquire", evidence_id=art["evidence_id"], actor=actor,
-                        candidate_id=candidate_id, cohort=cohort, pathway=pathway,
-                        detail={"object_key": put.key, "sha256": put.sha256, "size": put.size,
-                                "media_type": put.media_type, "declared_media_type": declared_media_type,
-                                "scan_state": put.scan_state})
-    return {"artifact": art, "put": put.as_dict(), "custody": cev}
+    def _builder(put):
+        blob = et.blob_ref("blob/" + put.sha256, put.sha256, put.media_type, put.size,
+                           provenance={"acquired": _iso(), "source_identity": source_identity})
+        art = et.new_artifact(evidence_type=evidence_type, case_id=case_id, candidate_id=candidate_id,
+                              cohort=cohort, pathway=pathway, source_identity=source_identity,
+                              content_hash=put.sha256, blob=blob, validation_state="needs_review")
+        art["object_key"] = put.key
+        art["scan_state"] = put.scan_state      # unscanned until an approved scan policy runs
+        art["retention_class"] = retention_class
+        art["acquisition_ts"] = _iso()
+        cev = custody_event("acquire", evidence_id=art["evidence_id"], actor=actor,
+                            candidate_id=candidate_id, cohort=cohort, pathway=pathway,
+                            detail={"object_key": put.key, "sha256": put.sha256, "size": put.size,
+                                    "media_type": put.media_type,
+                                    "declared_media_type": declared_media_type,
+                                    "scan_state": put.scan_state})
+        return {"artifact": art, "put": put.as_dict(), "custody": cev}
+
+    return StagedAcquisition(staged, _builder)
+
+
+def acquire(store, fileobj, *, evidence_type, case_id, candidate_id, cohort, pathway,
+            source_identity, actor="ranger-server", declared_media_type=None,
+            max_bytes=None, retention_class="default"):
+    """Stream an upload into the store with server-side hashing/sniffing/validation, build the
+    typed EvidenceArtifact envelope (unscanned -> needs_review), and emit the first custody
+    event. Returns {artifact, put, custody}. Raises AcquisitionError on anything unsafe.
+
+    One-shot staging + publication for callers that do not need to hold a lock across publication;
+    the concurrency-sensitive workbench upload uses stage()/publish() instead."""
+    st = stage(store, fileobj, evidence_type=evidence_type, case_id=case_id,
+               candidate_id=candidate_id, cohort=cohort, pathway=pathway,
+               source_identity=source_identity, actor=actor,
+               declared_media_type=declared_media_type, max_bytes=max_bytes,
+               retention_class=retention_class)
+    return st.publish()
 
 
 # --- secure retrieval (server-side authorization) ----------------------------
