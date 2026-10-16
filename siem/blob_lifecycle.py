@@ -127,23 +127,35 @@ def managed_delete(store, refs, artifact, *, reason, now=None):
     custody}. A shared object is preserved for the remaining references (physical=False)."""
     ok, why = ep.can_delete(artifact, reason=reason, now=now)
     if not ok:
+        # retention requirement (protected class / unexpired window) blocks deletion entirely;
+        # nothing is released so a concurrent reader still resolves the object.
         return {"ok": False, "physical": False, "reason": why, "custody": None}
     key = artifact.get("object_key")
     release_reference(refs, key, artifact["evidence_id"], reason=reason, now=now)
     phys_ok, phys_why = safe_to_physically_delete(refs, key)
     physical = False
+    storage_error = None
     if phys_ok:
-        store.delete(key, authorized_reason=reason)
-        physical = True
+        # Partial-failure safety: if the object store fails to remove the bytes, the LOGICAL
+        # release still stands and the object simply becomes an orphan for a later sweep; we never
+        # claim a physical delete that did not happen, and we never crash the caller.
+        try:
+            store.delete(key, authorized_reason=reason)
+            physical = True
+        except Exception as e:  # noqa
+            storage_error = f"{type(e).__name__}: {e}"
     cev = ep.custody_event("retain", evidence_id=artifact["evidence_id"], actor="ranger-server",
                            candidate_id=artifact.get("candidate_id"), cohort=artifact.get("cohort"),
                            pathway=artifact.get("pathway"),
                            detail={"action": "deleted", "reason": reason,
                                    "physical_delete": physical,
-                                   "preserved_for": ("other_references" if not physical else None),
-                                   "detail": phys_why})
-    return {"ok": True, "physical": physical,
-            "reason": ("physically_deleted" if physical else "logically_released_object_preserved"),
+                                   "preserved_for": ("other_references" if not physical and not storage_error
+                                                     else None),
+                                   "storage_error": storage_error, "detail": phys_why})
+    return {"ok": True, "physical": physical, "storage_error": storage_error,
+            "reason": ("physically_deleted" if physical
+                       else "storage_delete_failed_orphan_pending_sweep" if storage_error
+                       else "logically_released_object_preserved"),
             "custody": cev}
 
 

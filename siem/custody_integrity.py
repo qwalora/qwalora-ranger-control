@@ -114,11 +114,23 @@ BROKEN = "broken_chain"
 NO_CHECKPOINT = "no_checkpoint"
 FORGED_CHECKPOINT = "forged_checkpoint"
 
+# Honest statement of what the checkpoint IS: it lives in the same database as the mutable custody
+# history and is signed with the same server key, so it is NOT an independently protected anchor. It
+# raises the bar for truncation/rewrite by anyone without the signing key; it is not external proof.
+ANCHOR_INDEPENDENCE = "not_independent_same_store_same_key"
+
 
 def assess(rows, latest_checkpoint) -> dict:
-    """Compare the live chain (rows) against its latest checkpoint. Detects truncation of the most
-    recent events (live count < anchored count) and head rewrites (same count, different head), in
-    addition to the chain's own rewrite/break detection. Returns {status, detail, live, anchored}."""
+    """Compare the live chain against its latest checkpoint. Detects truncation of the most recent
+    events (live count < anchored) and head rewrites (same count, different head), plus the chain's
+    own rewrite/break detection. The result always carries `anchor_independence` so callers never
+    mistake a same-store checkpoint for an independent trust anchor."""
+    out = _assess(rows, latest_checkpoint)
+    out["anchor_independence"] = ANCHOR_INDEPENDENCE
+    return out
+
+
+def _assess(rows, latest_checkpoint) -> dict:
     v = verify_rows(rows)
     live = {"count": v["count"], "head": v.get("head"), "chain_ok": v["ok"], "reason": v["reason"]}
     if not v["ok"]:
