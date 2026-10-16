@@ -19,7 +19,7 @@
           <div class="m"><div class="mk">Professional role</div><div class="mv">{{ vm.role_title }}</div></div>
           <div class="m {% if vm.avail.available %}mw-env-ok{% else %}mw-env-pending{% endif %}">
             <div class="mk">Environment</div>
-            <div class="mv">{% if vm.avail.available %}<span class="pill pill-ok"><span class="dot"></span>Ready</span>{% else %}<span class="pill pill-amber"><span class="dot"></span>{{ ic('lock','ic ic-sm') }} Pending</span>{% endif %}</div>
+            <div class="mv">{% if vm.avail.available %}<span class="pill pill-ok"><span class="dot"></span>Ready</span>{% else %}<span class="pill pill-amber"><span class="dot"></span>{{ ic('lock','ic ic-sm') }} Unavailable</span>{% endif %}</div>
           </div>
           <div class="m"><div class="mk">Mission version</div><div class="mv">v{{ vm.pkg.version }} · approved</div></div>
           <div class="m"><div class="mk">Objective standard</div><div class="mv">{{ vm.pkg.pass_bar }}%</div></div>

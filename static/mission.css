@@ -3,7 +3,11 @@
    surface (.mw-shell) instead of .card, so that cap is not in play here and is not overridden
    globally. Branding, tokens, typography and spacing are reused from app.css. */
 
-.mw{max-width:1040px;margin:0 auto;padding:26px 20px 64px}
+/* .mw is a flex item of the global .page (a column flexbox), whose default min-width:auto would
+   pin it to its min-content width and overflow narrow viewports. min-width:0 (plus width:100%)
+   lets it shrink to the viewport; the tablist scrolls internally rather than widening the page. */
+.mw{width:100%;max-width:1040px;min-width:0;margin:0 auto;padding:26px 20px 64px}
+.mw-shell,.mw-head,.mw-panels,.mw-panel,.mw-meta,.mw-grid2,.mw-refs{min-width:0}
 .mw-back{display:inline-flex;align-items:center;gap:7px;color:var(--dim);font-size:12.5px;
   text-decoration:none;margin-bottom:12px}
 .mw-back:hover{color:#fff}
@@ -29,8 +33,9 @@
 
 /* ---- accessible tabs (no-JS, radio-driven; keyboard arrow navigation is native to radios) ---- */
 .mw-radio{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-.mw-tablist{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);
-  overflow-x:auto;scrollbar-width:thin}
+.mw-tablist{display:flex;flex-wrap:nowrap;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line);
+  min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+  scrollbar-width:thin}
 .mw-tab{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 15px;
   border:1px solid transparent;border-bottom:none;border-radius:10px 10px 0 0;cursor:pointer;
   font:600 13px/1 var(--f);color:var(--mut);white-space:nowrap;transform:translateY(1px)}

@@ -210,8 +210,8 @@ def test_presentation_preserves_all_sections_and_substance():
 def test_presentation_environment_truthful_for_range_boards():
     for board in (5, 6):
         html = _render(board).data.decode()
-        # overview status and the environment-tab banner both show pending / not available
-        assert "Pending" in html
+        # overview status reads "Unavailable" (not "Pending") and the env tab says not yet available
+        assert "Unavailable" in html and "Pending" not in html
         assert "not yet available" in html.lower(), f"board {board} must show range unavailable"
     # a dataset board shows ready, no false pending
     html1 = _render(1).data.decode()
