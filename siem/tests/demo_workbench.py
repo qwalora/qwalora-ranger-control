@@ -45,12 +45,16 @@ def _login(client, cand_id=None, admin=None, admin_login=None):
         s["csrf"] = "t"
 
 
-def _shot(client, path, name):
+def _shot(client, path, name, width=1320, height=1000):
     """Render a real page and screenshot it with Playwright (CSS inlined; fonts fall back)."""
     r = client.get(path)
     html = r.data.decode("utf-8", "replace")
-    css = open(os.path.join(ROOT, "static", "app.css")).read()
-    html = re.sub(r'<link rel="stylesheet"[^>]*>', f"<style>{css}</style>", html)
+    # inline BOTH stylesheets (app.css + workbench.css) so file:// rendering is faithful; the live
+    # app serves both via /static, this is only for the offline screenshot.
+    app_css = open(os.path.join(ROOT, "static", "app.css")).read()
+    wb_css = open(os.path.join(ROOT, "static", "workbench.css")).read()
+    html = re.sub(r'<link[^>]*app\.css[^>]*>', f"<style>{app_css}</style>", html)
+    html = re.sub(r'<link[^>]*workbench\.css[^>]*>', f"<style>{wb_css}</style>", html)
     out_html = os.path.join(os.environ["RANGER_EVIDENCE_DIR"], name + ".html")
     os.makedirs(os.path.dirname(out_html), exist_ok=True)
     open(out_html, "w").write(html)
@@ -60,7 +64,7 @@ def _shot(client, path, name):
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:
             b = pw.chromium.launch()
-            pg = b.new_page(viewport={"width": 1180, "height": 900}, device_scale_factor=2)
+            pg = b.new_page(viewport={"width": width, "height": height}, device_scale_factor=2)
             pg.goto("file://" + out_html)
             pg.wait_for_timeout(250)
             pg.screenshot(path=png, full_page=True)
@@ -106,7 +110,7 @@ def run():
     # a synthetic PARALLAX test case is assigned (+ one piece of authorized evidence to review)
     case = Case(candidate_id=cand.id, board=1, cohort="2026-P", plane="qualification",
                 workflow="qualification", seed="HIDDEN_TRUTH_SEED", scenario_version=1,
-                index_name="wb-demo", status="assigned")
+                index_name="wb-demo", status="assigned", scenario_ref="parallax-agent-authz")
     db.session.add(case); db.session.commit()
     store = wc.evidence_store()
     provided = wc.submit_evidence(db, store, case, cand, "parallax", io.BytesIO(AGENT_TRACE),
@@ -156,6 +160,7 @@ def run():
         "approach": "Trace-based characterization of agent authorization + data access",
         "evidence_refs": refs})
     _shot(client, f"/workbench/case/{case.id}", "case")
+    _shot(client, f"/workbench/case/{case.id}", "case_mobile", width=390, height=1600)
 
     # 7-8. candidate submits the package; Ranger records an immutable signed receipt
     pathway = wc.resolve_pathway(db, cand)

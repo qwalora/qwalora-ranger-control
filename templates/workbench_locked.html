@@ -1,23 +1,17 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
 {% block title %}Workbench · Access{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="/workbench">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-  </div></header>
-  <div class="page-main">
-    <div class="card" style="max-width:560px">
-      <div class="card-head"><span class="eyebrow"><span class="d"></span>Workbench</span><h1 class="t">Access not granted</h1></div>
-      <div class="card-body">
-        <div class="verify-banner vb-warn">{{ ic('lock','ic') }}<div>
-          <b>Your account is not an admitted Ranger candidate</b>
-          <span>A GitHub sign-in is not admission. Your current status is <b>{{ status }}</b>. An administrator admits candidates and assigns investigations; the workbench opens once you are admitted to a cohort.</span>
-        </div></div>
-      </div>
-    </div>
+{% set wb_ctx='Workbench' %}
+{% include "_wb_top.html" %}
+  <div style="max-width:620px;margin:40px auto 0">
+    <div class="wb-card"><div class="b">
+      <div class="wb-eyebrow"><span class="dot"></span>Workbench access</div>
+      <div class="ttl" style="font-size:20px">Access not granted</div>
+      <div class="wb-note warn" style="margin-top:16px">{{ ic('lock','ic') }}<div>
+        <b>Your account is not an admitted Ranger candidate</b>
+        A GitHub sign-in is not admission. Your current status is <b>{{ status }}</b>. An administrator admits candidates and assigns investigations; the workbench opens once you are admitted to a cohort.</div></div>
+    </div></div>
   </div>
-</div>
+{% include "_wb_bottom.html" %}
 {% endblock %}

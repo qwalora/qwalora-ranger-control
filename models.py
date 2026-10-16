@@ -74,6 +74,15 @@ def ensure_schema(db):
             ("seq", "INTEGER"),
             ("record_json", "TEXT"),
         ],
+        "case_submissions": [
+            # F5.1: workbench receipt kept distinct from STRATA's evidence_record/evidence_sig.
+            ("wb_receipt", "TEXT"),
+            ("wb_receipt_sig", "TEXT"),
+            ("wb_receipt_version", "INTEGER"),
+        ],
+        "cases": [
+            ("scenario_ref", "VARCHAR(60)"),   # F5.1: approved candidate-safe scenario metadata ref
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -888,6 +897,10 @@ class Case(db.Model):
     index_name = db.Column(db.String(200), nullable=False)   # the candidate's authorized index
     seed = db.Column(db.String(64), nullable=False)          # reproducibility key (truth recomputed from this)
     scenario_version = db.Column(db.Integer, nullable=False, default=1)
+    # F5.1: reference to APPROVED, candidate-safe scenario metadata (scope/objectives/requirements).
+    # Resolves, with scenario_version, to a versioned entry in workbench_scenarios; NEVER holds truth.
+    # When unset/unknown, the candidate sees an accurate "instructions not available" state.
+    scenario_ref = db.Column(db.String(60), nullable=True)
     rubric_version = db.Column(db.Integer, nullable=False, default=2)
     attempt = db.Column(db.Integer, nullable=False, default=1)
     # Lifecycle state (see case_contract.CASE_STATES / CASE_TRANSITIONS).
@@ -926,8 +939,14 @@ class CaseSubmission(db.Model):
     payload = db.Column(db.Text, nullable=True)            # JSON: candidate-authored submission
     validation = db.Column(db.Text, nullable=True)         # JSON: {errors, warnings}
     verification = db.Column(db.Text, nullable=True)       # JSON: per-citation verdicts (server-side)
-    evidence_record = db.Column(db.Text, nullable=True)    # JSON: preserved, hashed cited events
-    evidence_sig = db.Column(db.Text, nullable=True)       # Ed25519 over the evidence record (integrity/origin, NOT correctness)
+    evidence_record = db.Column(db.Text, nullable=True)    # JSON: preserved, hashed cited events (STRATA preserved-citation; siem/case_contract.py)
+    evidence_sig = db.Column(db.Text, nullable=True)       # Ed25519 over the evidence record (STRATA; integrity/origin, NOT correctness)
+    # F5.1: the WORKBENCH submission receipt is a DISTINCT, versioned contract kept in its OWN
+    # additive columns so it never collides with or overwrites STRATA's preserved-citation
+    # evidence_record/evidence_sig. STRATA verification is unchanged.
+    wb_receipt = db.Column(db.Text, nullable=True)         # JSON: workbench_submission_receipt record
+    wb_receipt_sig = db.Column(db.Text, nullable=True)     # Ed25519 over the workbench receipt
+    wb_receipt_version = db.Column(db.Integer, nullable=True)  # workbench receipt contract version
     # SHADOW enterprise grade: recorded for comparison only; never used for clearance.
     shadow_score = db.Column(db.Float, nullable=True)
     shadow_breakdown = db.Column(db.Text, nullable=True)   # JSON: per-component scores

@@ -18,6 +18,8 @@ os.environ.setdefault("DEFAULT_COHORT", "2026-P")
 os.environ["RANGER_EVIDENCE_DIR"] = os.path.join(ROOT, "instance", "wb_test_evidence")
 
 import json as _json
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _pgtest  # noqa: E402
 import workbench_core as wc  # noqa: E402
 
 P = F = 0
@@ -54,6 +56,10 @@ def _client_for(client, cand_id=None, admin=None, admin_login=None):
 
 
 def run():
+    # the authz matrix always runs on an isolated in-memory SQLite db, NEVER on a provided/shared
+    # database; the PG concurrency test (below) uses a disposable database of its own.
+    _real_db = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
     import app as appmod
     from models import db, Candidate, Cohort, Case
     application = appmod.create_app()
@@ -78,14 +84,14 @@ def run():
                      status="pending", current_board=1)
     db.session.add_all([A, B, Sc, Pend]); db.session.commit()
     caseA = Case(candidate_id=A.id, board=1, cohort="2026-P", plane="qualification",
-                 workflow="qualification", seed="SECRET_SEED_XYZ", scenario_version=1, index_name="wb-a")
+                 workflow="qualification", seed="SECRET_SEED_XYZ", scenario_version=1, index_name="wb-a", scenario_ref="parallax-agent-authz")
     caseB = Case(candidate_id=B.id, board=1, cohort="2026-P", plane="qualification",
-                 workflow="qualification", seed="SECRET_SEED_B", scenario_version=1, index_name="wb-b")
+                 workflow="qualification", seed="SECRET_SEED_B", scenario_version=1, index_name="wb-b", scenario_ref="parallax-agent-authz")
     caseS = Case(candidate_id=Sc.id, board=2, cohort="2026-S", plane="qualification",
-                 workflow="qualification", seed="SECRET_SEED_S", scenario_version=1, index_name="wb-s")
+                 workflow="qualification", seed="SECRET_SEED_S", scenario_version=1, index_name="wb-s", scenario_ref="strata-soc-triage")
     db.session.add_all([caseA, caseB, caseS]); db.session.commit()
     aid, bid, sid, pid = A.id, B.id, Sc.id, Pend.id
-    cA, cB = caseA.id, caseB.id
+    cA, cB, cS = caseA.id, caseB.id, caseS.id
 
     client = application.test_client()
 
@@ -164,7 +170,7 @@ def run():
                   "evidence_refs": [evA.evidence_id]}], "evidence_refs": [evA.evidence_id], "notes": []})
     sub, receipt = wc.finalize_submission(db, store, Case.query.get(cA), A, pathway)
     check("11: submission produces a signed receipt that verifies",
-          sub.submission_status == "submitted" and wc.verify_receipt(sub))
+          sub.submission_status == "submitted" and wc.verify_receipt(sub, db))
 
     # 12. duplicate submission -> 409 ALREADY_SUBMITTED
     try:
@@ -218,19 +224,101 @@ def run():
           client.get("/workbench").status_code == 404
           and client.get(f"/workbench/case/{cA}").status_code == 404)
 
+    _flags(RANGER_WORKBENCH=1, RANGER_WORKBENCH_CASE_ACCESS=1, RANGER_WORKBENCH_EVIDENCE_SUBMIT=1,
+           RANGER_WORKBENCH_ASSESSMENT_VISIBILITY=1)
+    from models import BlobReference, CaseSubmission
+    from sqlalchemy import text as _text
+
+    # 18. uploaded evidence gets a durable, reference-counted BlobReference (F4 lifecycle)
+    br = BlobReference.query.filter_by(object_key=evA.object_key, evidence_id=evA.evidence_id,
+                                       active=True).count()
+    check("18: uploaded evidence has a durable active BlobReference (F4 lifecycle)", br == 1)
+
+    # 19. signed receipt binds the payload: tampered findings invalidate verification
+    subA = wc._submission(db, Case.query.get(cA), A)
+    orig_payload = subA.payload
+    tampered = _json.loads(orig_payload); tampered["findings"][0]["claim"] = "TAMPERED CLAIM"
+    db.session.execute(_text("UPDATE case_submissions SET payload=:p WHERE id=:id"),
+                       {"p": _json.dumps(tampered), "id": subA.id}); db.session.commit()
+    db.session.expire_all()
+    check("19: tampered findings invalidate the signed receipt",
+          wc.verify_receipt(wc._submission(db, Case.query.get(cA), A), db) is False)
+    db.session.execute(_text("UPDATE case_submissions SET payload=:p WHERE id=:id"),
+                       {"p": orig_payload, "id": subA.id}); db.session.commit(); db.session.expire_all()
+    check("19: restoring the original payload makes the receipt verify again",
+          wc.verify_receipt(wc._submission(db, Case.query.get(cA), A), db) is True)
+
+    # 20. substituted/altered evidence content invalidates verification
+    orig_hash = evA.content_hash
+    db.session.execute(_text("UPDATE evidence_artifacts SET content_hash=:h WHERE evidence_id=:e"),
+                       {"h": "0" * 64, "e": evA.evidence_id}); db.session.commit(); db.session.expire_all()
+    check("20: altered evidence content hash invalidates the signed receipt",
+          wc.verify_receipt(wc._submission(db, Case.query.get(cA), A), db) is False)
+    db.session.execute(_text("UPDATE evidence_artifacts SET content_hash=:h WHERE evidence_id=:e"),
+                       {"h": orig_hash, "e": evA.evidence_id}); db.session.commit(); db.session.expire_all()
+
+    # 21. the workbench receipt NEVER touches STRATA's evidence_record/evidence_sig
+    subA = wc._submission(db, Case.query.get(cA), A)
+    check("21: workbench receipt uses its own columns; STRATA evidence_record/sig untouched",
+          subA.wb_receipt and subA.wb_receipt_sig and subA.evidence_record is None
+          and subA.evidence_sig is None)
+
+    # 22. a legacy STRATA preserved-citation record remains independently verifiable
+    import signing as _sg
+    from siem import case_contract as cc
+    strata_rec = {"type": "preserved_citations", "case_id": cS, "candidate_id": sid,
+                  "citations": [{"event_id": "e1", "sha256": "a" * 64}]}
+    strata_sig = _sg.sign(strata_rec)
+    stra_sub = CaseSubmission(case_id=cS, candidate_id=sid, attempt=1, submission_status="submitted",
+                              evidence_record=_json.dumps(strata_rec), evidence_sig=strata_sig)
+    db.session.add(stra_sub); db.session.commit()
+    check("22: legacy STRATA signed evidence record still verifies via case_contract",
+          cc.verify_evidence_record(strata_rec, stra_sub.evidence_sig) is True)
+
+    # 23. candidate evidence stays needs_review/unscanned after final submission (no self-validation)
+    db.session.expire_all()
+    evA2 = EvidenceArtifact.query.filter_by(evidence_id=evA.evidence_id).first()
+    check("23: submitted evidence remains needs_review/unscanned (no candidate self-validation)",
+          evA2.validation_state == "needs_review" and evA2.scan_state == "unscanned")
+
+    # 24. writes to a finalized case are rejected (no remediation policy)
+    _client_for(client, aid)
+    wr = client.post(f"/workbench/case/{cA}/draft", data={"csrf": "t", "action": "save"})
+    check("24: a write to a finalized case is rejected without a remediation policy",
+          "CASE_FINALIZED" in wr.headers.get("Location", "") or wr.status_code in (409, 302))
+
+    # 25. unavailable (revoked/closed) case is non-disclosing 404 on write
+    db.session.execute(_text("UPDATE cases SET status='revoked' WHERE id=:id"), {"id": cB})
+    db.session.commit()
+    _client_for(client, bid)
+    wrv = client.post(f"/workbench/case/{cB}/draft", data={"csrf": "t", "action": "save"})
+    check("25: a revoked/unavailable case rejects writes with a non-disclosing 404",
+          wrv.status_code == 404)
+
     ctx.pop()
 
+    os.environ["DATABASE_URL"] = _real_db or "sqlite:///:memory:"
     pg_ok = _pg_concurrency_test()
     print("\n%d passed, %d failed%s" % (P, F, "" if pg_ok is None else ""))
     return F == 0
 
 
 def _pg_concurrency_test():
-    """Concurrent final submission on real PostgreSQL: exactly one succeeds, the other gets 409."""
-    url = os.environ.get("DATABASE_URL", "")
-    if "postgresql" not in url:
-        print("SKIP concurrent-submission race (PostgreSQL DATABASE_URL not set)")
+    """Concurrent final submission on real PostgreSQL: exactly one succeeds, the other gets 409.
+    Runs in a DISPOSABLE test database (no destructive ops on the provided/shared database)."""
+    disp = _pgtest.make_disposable_or_none()
+    if disp is None:
+        print("SKIP concurrent-submission race (no isolated disposable PostgreSQL; set "
+              "RANGER_TEST_ALLOW_DB_MUTATION and a postgres DATABASE_URL)")
         return None
+    _new_url, _cleanup = disp
+    try:
+        return _pg_concurrency_body()
+    finally:
+        _cleanup()
+
+
+def _pg_concurrency_body():
     import app as appmod
     from models import db, Candidate, Cohort, Case
     application = appmod.create_app()
@@ -239,11 +327,7 @@ def _pg_concurrency_test():
         db.create_all()
         from models import ensure_schema
         ensure_schema(db)
-        for t in ("case_submissions", "evidence_artifacts", "custody_events", "cases"):
-            try:
-                db.session.execute(db.text(f"DELETE FROM {t}")); db.session.commit()
-            except Exception:
-                db.session.rollback()
+        # fresh disposable database: no destructive cleanup of shared tables needed
         if not Cohort.query.filter_by(name="2026-P").first():
             db.session.add(Cohort(name="2026-P", pathway="parallax", status="active"))
         c = Candidate.query.filter_by(github_id="gid-pg").first()
@@ -253,7 +337,8 @@ def _pg_concurrency_test():
             db.session.add(c)
         db.session.commit()
         case = Case(candidate_id=c.id, board=1, cohort="2026-P", plane="qualification",
-                    workflow="qualification", seed="S", scenario_version=1, index_name="wb-pg")
+                    workflow="qualification", seed="S", scenario_version=1, index_name="wb-pg",
+                    scenario_ref="parallax-agent-authz")
         db.session.add(case); db.session.commit()
         store = wc.evidence_store()
         acq = __import__("siem.evidence_persistence", fromlist=["ep"]).acquire(
@@ -289,6 +374,51 @@ def _pg_concurrency_test():
     dups = results.count("ALREADY_SUBMITTED")
     check("PG: exactly one of 5 concurrent final submissions succeeds; the rest get 409",
           oks == 1 and dups == 4)
+
+    # PG: two candidates upload IDENTICAL evidence bytes -> one shared, deduplicated object with a
+    # distinct active BlobReference each; cross-tenant isolation holds; deleting one preserves the
+    # shared bytes for the other (F4 reference-counted lifecycle through the workbench upload path).
+    from models import BlobReference, Candidate as C2, Cohort as Co2, Case as K2, EvidenceArtifact
+    from siem import forensic_jobs_db as fjdb
+    with application.app_context():
+        if not Co2.query.filter_by(name="2026-P").first():
+            db.session.add(Co2(name="2026-P", pathway="parallax", status="active"))
+        cx = C2(handle="cand-x", name="X", email="x@e", cohort="2026-P", github_id="gid-x",
+                status="active", current_board=1)
+        cy = C2(handle="cand-y", name="Y", email="y@e", cohort="2026-P", github_id="gid-y",
+                status="active", current_board=1)
+        db.session.add_all([cx, cy]); db.session.commit()
+        kx = K2(candidate_id=cx.id, board=1, cohort="2026-P", plane="qualification",
+                workflow="qualification", seed="x", scenario_version=1, index_name="kx",
+                scenario_ref="parallax-agent-authz")
+        ky = K2(candidate_id=cy.id, board=1, cohort="2026-P", plane="qualification",
+                workflow="qualification", seed="y", scenario_version=1, index_name="ky",
+                scenario_ref="parallax-agent-authz")
+        db.session.add_all([kx, ky]); db.session.commit()
+        store = wc.evidence_store()
+        same = AGENT_TRACE  # identical bytes -> dedup
+        ax = wc.submit_evidence(db, store, kx, cx, "parallax", io.BytesIO(same),
+                                evidence_type="agent_trace")
+        ay = wc.submit_evidence(db, store, ky, cy, "parallax", io.BytesIO(same),
+                                evidence_type="agent_trace")
+        shared_key = ax["object_key"]
+        refs = BlobReference.query.filter_by(object_key=shared_key, active=True).count()
+        check("PG: identical uploads from two candidates dedup to one object with two references",
+              ax["object_key"] == ay["object_key"] and refs == 2 and store.exists(shared_key))
+        # cross-tenant isolation: candidate Y cannot read candidate X's evidence
+        try:
+            wc.retrieve_evidence(db, store, cy, "parallax", ax["evidence_id"])
+            cross = False
+        except wc.WorkbenchError as e:
+            cross = e.http == 404
+        check("PG: cross-candidate evidence access fails closed (404)", cross)
+        # deleting X's reference preserves the shared bytes for Y
+        art_x = {"evidence_id": ax["evidence_id"], "object_key": shared_key,
+                 "retention_class": "default"}
+        res = fjdb.SqlBlobLifecycle(db, store).managed_delete(art_x, reason="withdrew")
+        check("PG: deleting one candidate's reference preserves the shared evidence object",
+              res["physical"] is False and store.exists(shared_key)
+              and EvidenceArtifact.query.filter_by(evidence_id=ay["evidence_id"]).first() is not None)
     return True
 
 

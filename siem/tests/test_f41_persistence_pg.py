@@ -19,6 +19,8 @@ os.environ.setdefault("SECRET_KEY", "f41-pg")
 os.environ.setdefault("DEFAULT_COHORT", "2026-A")
 
 import pytest  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _pgtest  # noqa: E402
 
 from siem import artifact_store as stmod          # noqa: E402
 from siem import evidence_types as et             # noqa: E402
@@ -85,13 +87,7 @@ def _fresh_schema(application):
         db.create_all()
         from models import ensure_schema
         ensure_schema(db)
-        # clean the F4 tables for a deterministic run
-        for t in ("forensic_jobs", "blob_references", "custody_events", "evidence_artifacts",
-                  "trusted_fixtures"):
-            try:
-                db.session.execute(db.text(f"DELETE FROM {t}")); db.session.commit()
-            except Exception:
-                db.session.rollback()
+        # disposable database: no destructive cleanup of shared tables is needed
         # candidates satisfy the evidence_artifacts.candidate_id FK on PostgreSQL
         for cid, handle in ((1, "pg-c1"), (2, "pg-c2")):
             if not Candidate.query.get(cid):
@@ -128,8 +124,7 @@ def _acquire_source(application, store, raw, *, evidence_type=et.EV_MEDIA_IMAGE,
         return a["evidence_id"], a["content_hash"]
 
 
-def test_f41_persistence_pg():
-    _pg_or_skip()
+def _run_f41():
     application = _app()
     _fresh_schema(application)
     from models import db, ForensicJob, EvidenceArtifact, BlobReference
@@ -575,6 +570,17 @@ def _now_iso():
 CANCEL_JOB_ID = [None]
 
 
+def test_f41_persistence_pg():
+    _pg_or_skip()
+    with _pgtest.isolated_pg_database():
+        _run_f41()
+
+
+def test_f41_pg_isolation_guard():
+    assert _pgtest.assert_production_like_rejected()
+
+
 if __name__ == "__main__":
-    os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://postgres:pg@127.0.0.1:5432/ranger_f41")
+    os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://postgres:pg@127.0.0.1:5432/ranger_test_f41")
+    os.environ.setdefault("RANGER_TEST_ALLOW_DB_MUTATION", "1")
     test_f41_persistence_pg()

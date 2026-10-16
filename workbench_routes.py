@@ -60,13 +60,23 @@ def register(app, candidate_model, db, helpers=None):
         from models import EvidenceArtifact
         evidence_pending = EvidenceArtifact.query.filter_by(
             candidate_id=c.id, validation_state="needs_review").count()
+        flags = wc.flags_snapshot()
+        # raw internal flags are shown only to admins/developers, never to ordinary candidates
+        show_dev_flags = bool(session.get("admin")) or wc._flag_on("RANGER_WORKBENCH_SHOW_FLAGS")
+        # candidate-facing availability (friendly labels), not raw deployment configuration
+        availability = [
+            {"label": "Case access", "on": flags["case_access"]},
+            {"label": "Evidence submission", "on": flags["evidence_submit"]},
+            {"label": "Assessment status", "on": flags["assessment_visibility"]},
+        ]
         vm = {
             "candidate": {"handle": c.handle, "name": c.name, "cohort": c.cohort,
                           "status": c.status},
             "pathway": pathway,
             "pathway_brand": __import__("pathways").branding(pathway).get("name") or pathway.upper(),
-            "flags": wc.flags_snapshot(),
+            "flags": flags, "show_dev_flags": show_dev_flags, "availability": availability,
             "cases": [wc.case_scope_view(cs, pathway) for cs in cases],
+            "case_access": flags["case_access"],
             "evidence_pending": evidence_pending,
             "qualification": _qualification_view(pathway),
         }
@@ -89,15 +99,19 @@ def register(app, candidate_model, db, helpers=None):
         sub = wc._submission(db, case, c)
         import json as _json
         payload = _json.loads(sub.payload) if (sub and sub.payload) else {}
+        scope = wc.case_scope_view(case, pathway)
+        evidence = [_evidence_vm(e) for e in wc.candidate_evidence(db, c, case.id)]
+        readiness = wc.submission_readiness(db, case, c, payload, evidence)
         vm = {
-            "case": wc.case_scope_view(case, pathway),
+            "case": scope,
             "pathway": pathway,
             "flags": wc.flags_snapshot(),
-            "evidence": [_evidence_vm(e) for e in wc.candidate_evidence(db, c, case.id)],
+            "evidence": evidence,
             "permitted_evidence_types": wc.permitted_evidence_types(pathway),
             "payload": payload,
+            "readiness": readiness,
             "submission": _submission_vm(sub),
-            "receipt_ok": wc.verify_receipt(sub) if sub else False,
+            "receipt_ok": wc.verify_receipt(sub, db) if sub else False,
             "status": wc.assessment_status_view(case, sub, pathway),
             "locked": bool(sub and sub.submission_status != "draft"),
             "err": request.args.get("err"),
@@ -111,9 +125,9 @@ def register(app, candidate_model, db, helpers=None):
         if resp is not None:
             return resp
         try:
-            case = wc.own_case(db, c, cid)
+            case, _pw = wc.authorize_case_write(db, c, cid, action="draft")
         except wc.WorkbenchError as e:
-            abort(e.http)
+            return abort(e.http) if e.http == 404 else _err_redirect(cid, e.code)
         import json as _json
         sub = wc._submission(db, case, c)
         payload = _json.loads(sub.payload) if (sub and sub.payload) else {}
@@ -156,8 +170,7 @@ def register(app, candidate_model, db, helpers=None):
         if resp is not None:
             return resp
         try:
-            case = wc.own_case(db, c, cid)
-            pathway = wc.resolve_pathway(db, c)
+            case, pathway = wc.authorize_case_write(db, c, cid, action="evidence")
             f = request.files.get("file")
             if f is None or not f.filename:
                 raise wc.WorkbenchError("NO_FILE", 400, "no file provided")
@@ -167,7 +180,7 @@ def register(app, candidate_model, db, helpers=None):
                                declared_media_type=f.mimetype,
                                source_identity=f"candidate:{c.id}")
         except wc.WorkbenchError as e:
-            return _err_redirect(cid, e.code)
+            return abort(e.http) if e.http == 404 else _err_redirect(cid, e.code)
         return redirect(url_for("workbench_case", cid=cid))
 
     @app.get("/workbench/case/<int:cid>/evidence/<eid>/download")
@@ -195,12 +208,15 @@ def register(app, candidate_model, db, helpers=None):
         if resp is not None:
             return resp
         try:
-            case = wc.own_case(db, c, cid)
-            pathway = wc.resolve_pathway(db, c)
+            case, pathway = wc.authorize_case_write(db, c, cid, action="submit")
+            # explicit, server-enforced confirmation that finalization is immutable
+            if not request.form.get("confirm"):
+                raise wc.WorkbenchError("CONFIRM_REQUIRED", 400,
+                                        "please confirm that final submission is immutable")
             store = wc.evidence_store()
             wc.finalize_submission(db, store, case, c, pathway)
         except wc.WorkbenchError as e:
-            return _err_redirect(cid, e.code)
+            return abort(e.http) if e.http == 404 else _err_redirect(cid, e.code)
         return redirect(url_for("workbench_case", cid=cid))
 
     # ---- reviewer views (scoped; no superuser bypass) ----------------------
@@ -246,10 +262,10 @@ def register(app, candidate_model, db, helpers=None):
             abort(404)   # outside the reviewer's scope -> never reveal it exists
         import json as _json
         payload = _json.loads(s.payload) if s.payload else {}
-        receipt = _json.loads(s.evidence_record) if s.evidence_record else None
+        receipt = _json.loads(s.wb_receipt) if s.wb_receipt else None
         vm = {"sid": s.id, "case_id": s.case_id, "candidate_id": s.candidate_id,
               "cohort": case.cohort, "pathway": co, "status": s.submission_status,
-              "payload": payload, "receipt": receipt, "receipt_ok": wc.verify_receipt(s),
+              "payload": payload, "receipt": receipt, "receipt_ok": wc.verify_receipt(s, db),
               "evidence": [_evidence_vm(e) for e in
                            wc.candidate_evidence_by_case(db, s.candidate_id, s.case_id)]}
         return render_template("workbench_review_detail.html", vm=vm)
@@ -289,7 +305,7 @@ def _submission_vm(sub):
         return None
     return {"id": sub.id, "status": sub.submission_status, "attempt": sub.attempt,
             "submitted_at": wc._s(sub.submitted_at),
-            "has_receipt": bool(sub.evidence_record and sub.evidence_sig)}
+            "has_receipt": bool(sub.wb_receipt and sub.wb_receipt_sig)}
 
 
 def _parse_json_field(raw, default):

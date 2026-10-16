@@ -1,34 +1,34 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
 {% block title %}Review · Workbench{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="/workbench/review/submissions">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-  </div></header>
-  <div class="page-main" style="max-width:960px">
-    <div class="card">
-      <div class="card-head"><span class="eyebrow"><span class="d"></span>Reviewer · scope {{ scope|join(', ') }}</span><h1 class="t">Submitted investigations</h1>
-        <p class="mut" style="margin:6px 0 0;font-size:13px">You see only submissions in your authorized cohort(s). Scope is enforced server-side.</p>
-      </div>
-      <div class="card-body">
-        {% if rows %}
-        <div class="record">
-          {% for r in rows %}
-          <a class="rec-row" href="/workbench/review/submission/{{ r.sid }}" style="text-decoration:none;grid-template-columns:auto 1fr auto auto auto">
-            <span class="rec-pip">{{ ic('inbox','ic ic-sm') }}</span>
-            <span class="rec-id">Submission #{{ r.sid }} · Case #{{ r.case_id }} <span class="dim mono" style="font-weight:400">cand {{ r.candidate_id }}</span></span>
-            <span class="rec-meta">{{ r.cohort }} · {{ r.pathway|upper }}</span>
-            <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ r.status }}</span>
-            <span class="dim mono" style="font-size:11px">{{ r.submitted_at }}</span>
-          </a>
-          {% endfor %}
-        </div>
-        {% else %}<div class="rec-row" style="opacity:.7">{{ ic('inbox','ic ic-sm') }}<span class="rec-meta">No submissions in your authorized scope.</span></div>{% endif %}
-      </div>
-    </div>
+{% set wb_active='review' %}{% set wb_ctx='Reviewer' %}{% set wb_review_nav=true %}
+{% include "_wb_top.html" %}
+
+  <div class="wb-head">
+    <div class="wb-eyebrow"><span class="dot"></span>Reviewer · scope {{ scope|join(', ') }}</div>
+    <h1 class="wb-h1">Submitted investigations</h1>
+    <p class="wb-lede">You see only submissions in your authorized cohort(s). Scope is enforced server-side; authorization boundaries are separate from candidates.</p>
   </div>
-</div>
+
+  <div class="wb-card"><div class="b">
+    {% if rows %}
+    <div class="wb-tbl">
+      <div class="wb-tr head" style="grid-template-columns:28px minmax(0,1.4fr) 1fr auto auto"><span></span><span>Submission</span><span class="c3">Cohort · pathway</span><span>Status</span><span>Submitted</span></div>
+      {% for r in rows %}
+      <a class="wb-tr" href="/workbench/review/submission/{{ r.sid }}" style="grid-template-columns:28px minmax(0,1.4fr) 1fr auto auto;text-decoration:none;color:inherit">
+        <span class="ic">{{ ic('inbox','ic ic-sm') }}</span>
+        <span class="nm">Submission #{{ r.sid }} · Case #{{ r.case_id }}<span class="id">candidate {{ r.candidate_id }}</span></span>
+        <span class="mt c3">{{ r.cohort }} · {{ r.pathway|upper }}</span>
+        <span class="wb-pill violet"><span class="d"></span>{{ r.status }}</span>
+        <span class="mt">{{ r.submitted_at }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="wb-empty">{{ ic('inbox','ic ic-sm') }} No submissions in your authorized scope.</div>
+    {% endif %}
+  </div></div>
+
+{% include "_wb_bottom.html" %}
 {% endblock %}

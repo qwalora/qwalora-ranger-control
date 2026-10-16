@@ -116,61 +116,102 @@ def own_case(db, candidate, case_id):
     return case
 
 
+def case_meta(case):
+    """APPROVED, candidate-safe scenario metadata for THIS case (by scenario_ref + version), or
+    None when no approved instructions are assigned. Never contains truth."""
+    import workbench_scenarios as sc
+    return sc.get(getattr(case, "scenario_ref", None), case.scenario_version)
+
+
 def case_scope_view(case, pathway):
-    """A truth-safe projection of a case: WHAT must be established, never HOW. Hidden scenarios,
-    expected answers, exploit solutions, cohort variants and evaluator rules are never included."""
-    return {
-        "case_id": case.id,
-        "scenario_version": case.scenario_version,
-        "rubric_version": case.rubric_version,
-        "pathway": pathway,
-        "plane": case.plane,
-        "workflow": case.workflow,
-        "status": case.status,
-        "assigned_at": _s(case.assigned_at),
-        "started_at": _s(case.started_at),
+    """A truth-safe projection of a case using its APPROVED per-case scenario metadata. When no
+    approved instructions are assigned, returns an accurate 'not available' state rather than
+    generic content. Hidden scenarios, answers, exploits, cohort variants and evaluator rules are
+    never included."""
+    meta = case_meta(case)
+    base = {
+        "case_id": case.id, "scenario_version": case.scenario_version,
+        "scenario_ref": getattr(case, "scenario_ref", None),
+        "rubric_version": case.rubric_version, "pathway": pathway, "plane": case.plane,
+        "workflow": case.workflow, "status": case.status,
+        "assigned_at": _s(case.assigned_at), "started_at": _s(case.started_at),
         "submitted_at": _s(case.submitted_at),
-        # authorized, non-revealing scope statements only
-        "authorized_scope": _scope_text(pathway),
-        "technical_objectives": _objectives(pathway),
-        "evidence_requirements": _evidence_requirements(pathway),
-        "permitted_actions": ["review_permitted_evidence", "record_findings", "submit_typed_evidence",
-                              "prepare_submission", "submit_investigation_package"],
-        "submission_conditions": "all required findings recorded and at least one validated-eligible "
-                                 "evidence reference attached; submission is immutable once final",
+        "instructions_available": meta is not None,
     }
+    if meta is None:
+        base.update({
+            "title": None,
+            "authorized_scope": None, "technical_objectives": [], "permitted_operations": [],
+            "environment_interfaces": [], "evidence_requirements": [],
+            "submission_conditions": None, "assessment_boundaries": None,
+            "unavailable_reason": "Approved case instructions have not been assigned for this case."})
+        return base
+    base.update({
+        "title": meta.get("title"),
+        "authorized_scope": meta.get("authorized_scope"),
+        "technical_objectives": meta.get("technical_objectives", []),
+        "permitted_operations": meta.get("permitted_operations", []),
+        "environment_interfaces": meta.get("environment_interfaces", []),
+        "evidence_requirements": meta.get("evidence_requirements", []),
+        "submission_conditions": meta.get("submission_conditions"),
+        "assessment_boundaries": meta.get("assessment_boundaries"),
+    })
+    return base
 
 
-def _scope_text(pathway):
-    if pathways.normalize_pathway(pathway) == pathways.PATHWAY_PARALLAX:
-        return ("Investigate the provided AI-agent execution evidence within the authorized "
-                "environment. Establish, with evidence, what the agent was authorized to do and "
-                "what it actually did. Do not attempt to access systems outside the authorized scope.")
-    return ("Investigate the authorized telemetry within your assigned environment and establish, "
-            "with evidence, the nature and scope of the activity. Stay within the authorized scope.")
+def _case_required_kinds(case):
+    meta = case_meta(case)
+    if not meta:
+        return set()
+    return {r["kind"] for r in meta.get("evidence_requirements", []) if r.get("required")}
 
 
-def _objectives(pathway):
-    if pathways.normalize_pathway(pathway) == pathways.PATHWAY_PARALLAX:
-        return ["Characterize the agent's authorization decisions from the evidence",
-                "Identify any data-access boundary that was crossed, with supporting references",
-                "Assess the security significance of the observed behavior",
-                "State the limitations of your analysis"]
-    return ["Reconstruct the activity timeline from authorized telemetry",
-            "Establish affected assets and scope with supporting evidence",
-            "Assess security significance", "State limitations"]
+# --- candidate write authorization (shared by draft/evidence/submit) -------------------------
+UNAVAILABLE_CASE_STATES = ("closed", "withdrawn", "expired", "revoked", "canceled")
+FINALIZED_CASE_STATES = ("submitted", "under_review", "evaluated")
 
 
-def _evidence_requirements(pathway):
-    if pathways.normalize_pathway(pathway) == pathways.PATHWAY_PARALLAX:
-        return [{"kind": "agent_trace", "required": True,
-                 "note": "a schema-valid agent/model execution trace supporting your claims"},
-                {"kind": "technical_report", "required": True,
-                 "note": "your written findings package"}]
-    return [{"kind": "technical_report", "required": True, "note": "your written findings package"}]
+def remediation_allowed():
+    return _flag_on("RANGER_WORKBENCH_REMEDIATION")
 
 
-# --- evidence submission (reuses F2/F3; candidate can never self-validate) -------------------
+def _require_write_flags(action):
+    if not _flag_on(FLAG_WORKBENCH):
+        raise WorkbenchError("WORKBENCH_DISABLED", 404, "not found")
+    if not _flag_on(FLAG_CASE_ACCESS):
+        raise WorkbenchError("CASE_ACCESS_DISABLED", 404, "not found")
+    if action == "evidence" and not _flag_on(FLAG_EVIDENCE_SUBMIT):
+        raise WorkbenchError("EVIDENCE_SUBMIT_DISABLED", 404, "not found")
+
+
+def authorize_case_write(db, candidate, case_id, *, action):
+    """Single server-side gate for every candidate WRITE (draft/evidence/submit). Enforces flags,
+    admission, ownership, cohort+pathway match, case lifecycle validity, and finalization rules.
+    Every unauthorized/unavailable resource returns a NON-DISCLOSING 404. Returns (case, pathway)."""
+    _require_write_flags(action)
+    if candidate is None or candidate.status != "active":
+        raise WorkbenchError("NOT_ADMITTED", 403, "not admitted")
+    case = own_case(db, candidate, case_id)                 # 404 if not owner / not found
+    pathway = resolve_pathway(db, candidate)
+    # cohort + pathway assignment must match (never serve a case from another cohort/pathway)
+    if (case.cohort or "") != (candidate.cohort or ""):
+        raise WorkbenchError("CASE_NOT_FOUND", 404, "no such case")
+    if pathways.normalize_pathway(case.cohort and _cohort_pathway_name(db, case.cohort)) != pathway:
+        raise WorkbenchError("CASE_NOT_FOUND", 404, "no such case")
+    if case.status in UNAVAILABLE_CASE_STATES:
+        raise WorkbenchError("CASE_UNAVAILABLE", 404, "no such case")
+    if case.status in FINALIZED_CASE_STATES and not remediation_allowed():
+        raise WorkbenchError("CASE_FINALIZED", 409, "this investigation is already final")
+    return case, pathway
+
+
+def _cohort_pathway_name(db, cohort_name):
+    from models import Cohort
+    co = Cohort.query.filter_by(name=cohort_name).first() if cohort_name else None
+    return pathways.normalize_pathway(co.pathway if co and co.pathway else pathways.DEFAULT_PATHWAY)
+
+
+# --- evidence submission (reuses F2/F3/F4; candidate can never self-validate) -----------------
 def submit_evidence(db, store, case, candidate, pathway, fileobj, *, evidence_type,
                     declared_media_type=None, source_identity="candidate-upload"):
     if not _flag_on(FLAG_EVIDENCE_SUBMIT):
@@ -190,10 +231,36 @@ def submit_evidence(db, store, case, candidate, pathway, fileobj, *, evidence_ty
     art = acq["artifact"]
     # candidate-submitted evidence is ALWAYS needs_review + unscanned; a candidate cannot promote it
     art["validation_state"] = "needs_review"
-    _persist_artifact(db, art, backend="filesystem")
-    _persist_custody(db, acq["custody"])
-    db.session.commit()
+    key = art.get("object_key")
+    newly_created = bool((acq.get("put") or {}).get("created"))
+    try:
+        # join the F4 per-object locking protocol across the reference insert (dedup-safe; blocks a
+        # concurrent sweep/delete), then persist EvidenceArtifact + CustodyEvent + BlobReference
+        # atomically in one transaction.
+        from siem import forensic_jobs_db as fjdb
+        if key:
+            fjdb._xact_lock_text(db, key)
+        _persist_artifact(db, art, backend="filesystem")
+        _persist_custody(db, acq["custody"])
+        _persist_blobref(db, art)
+        db.session.commit()
+    except Exception as e:  # noqa
+        # reference-safe rollback: drop the pending rows; delete the object ONLY if this upload
+        # newly created it AND no committed reference remains (a dedup hit onto another artifact's
+        # bytes is never deleted). Shared evidence is always preserved.
+        db.session.rollback()
+        if newly_created and key:
+            _safe_sweep(db, store, key)
+        raise WorkbenchError("EVIDENCE_PERSIST_FAILED", 500, f"{type(e).__name__}: {e}")
     return art
+
+
+def _safe_sweep(db, store, object_key):
+    from siem import forensic_jobs_db as fjdb
+    try:
+        fjdb.SqlBlobLifecycle(db, store).sweep_object(object_key, reason="upload_rollback")
+    except Exception:
+        db.session.rollback()
 
 
 def candidate_evidence(db, candidate, case_id=None):
@@ -250,9 +317,61 @@ def save_draft(db, case, candidate, payload):
     return sub
 
 
+WB_RECEIPT_CONTRACT_VERSION = 2   # v2 binds evidence content hashes + full payload hash
+
+
+def _evidence_binding(db, refs):
+    """Immutable binding for each referenced evidence: id -> {content_hash, version, type}.
+    A substituted artifact, altered content hash, or version change breaks the receipt."""
+    from models import EvidenceArtifact
+    out = {}
+    rows = EvidenceArtifact.query.filter(EvidenceArtifact.evidence_id.in_(refs or [""])).all()
+    by_id = {e.evidence_id: e for e in rows}
+    for r in sorted(refs):
+        e = by_id.get(r)
+        if e is None:
+            continue
+        out[r] = {"content_hash": e.content_hash, "version": e.version, "type": e.evidence_type}
+    return out
+
+
+def _payload_core(payload):
+    """The candidate-authored content the receipt binds, excluding volatile metadata
+    (submission_version), so the bound hash is stable across the version bump at finalize."""
+    p = _sanitize_payload(payload)
+    p.pop("submission_version", None)
+    return p
+
+
+def _build_receipt(db, case, candidate, pathway, sub, payload, refs):
+    findings = payload.get("findings") or []
+    binding = _evidence_binding(db, refs)
+    version = int(payload.get("submission_version", 0)) + 1
+    record = {
+        "type": "workbench_submission_receipt",
+        "contract_version": WB_RECEIPT_CONTRACT_VERSION,
+        "case_id": case.id, "candidate_id": candidate.id, "cohort": candidate.cohort,
+        "pathway": pathway, "attempt": sub.attempt, "submission_version": version,
+        "scenario_ref": getattr(case, "scenario_ref", None),
+        "scenario_version": case.scenario_version,
+        # bind the FULL submitted payload (minus volatile metadata) and the findings specifically
+        "payload_hash": hashlib.sha256(signing.canonical(_payload_core(payload))).hexdigest(),
+        "findings_hash": hashlib.sha256(signing.canonical(findings)).hexdigest(),
+        "findings_count": len(findings),
+        "evidence_refs": sorted(refs),
+        # bind each referenced evidence's immutable content hash + version (substitution-proof)
+        "evidence_binding": binding,
+        "submitted_ts": _iso(),
+    }
+    record["receipt_hash"] = hashlib.sha256(signing.canonical(record)).hexdigest()
+    return record, signing.sign(record), version
+
+
 def finalize_submission(db, store, case, candidate, pathway):
-    """Validate references + required fields, then produce an IMMUTABLE signed submission receipt.
-    Reuses CaseSubmission (no new table). Duplicate final submission -> 409."""
+    """Validate references + required fields, then produce an IMMUTABLE signed submission receipt
+    bound to the submitted payload AND to each referenced evidence's content hash + version. The
+    receipt lives in its OWN columns (wb_receipt*), never STRATA's evidence_record/evidence_sig.
+    Duplicate final submission -> 409."""
     from models import EvidenceArtifact
     sub = _submission(db, case, candidate)
     if sub is None:
@@ -271,35 +390,28 @@ def finalize_submission(db, store, case, candidate, pathway):
     if bad:
         raise WorkbenchError("INVALID_EVIDENCE_REFS", 400,
                              f"evidence references not owned by this case: {bad[:5]}")
-    req_kinds = {r["kind"] for r in _evidence_requirements(pathway) if r.get("required")}
+    # required evidence comes from the APPROVED per-case scenario metadata (not generic pathway)
+    req_kinds = _case_required_kinds(case)
     have_kinds = {e.evidence_type for e in EvidenceArtifact.query.filter(
         EvidenceArtifact.evidence_id.in_(refs or [""])).all()}
-    # technical_report is satisfied by the written findings package itself
     missing = [k for k in req_kinds if k != et.EV_TECHNICAL_REPORT and k not in have_kinds]
     if missing:
         raise WorkbenchError("MISSING_REQUIRED_EVIDENCE", 400,
                              f"required evidence not attached: {missing}")
 
-    version = int(payload.get("submission_version", 0)) + 1
-    findings_hash = hashlib.sha256(signing.canonical(findings)).hexdigest()
-    ts = _iso()
-    record = {"type": "workbench_submission_receipt", "contract_version": 1,
-              "case_id": case.id, "candidate_id": candidate.id, "cohort": candidate.cohort,
-              "pathway": pathway, "attempt": sub.attempt, "submission_version": version,
-              "evidence_refs": sorted(refs), "findings_count": len(findings),
-              "findings_hash": findings_hash, "submitted_ts": ts}
-    record["receipt_hash"] = hashlib.sha256(signing.canonical(record)).hexdigest()
-    sig = signing.sign(record)
+    record, sig, version = _build_receipt(db, case, candidate, pathway, sub, payload, refs)
     payload["submission_version"] = version
+    ts = record["submitted_ts"]
 
-    # ATOMIC, concurrency-safe transition: only the first caller flips draft -> submitted. A second
-    # concurrent final submission matches zero rows and is rejected (no double submission).
+    # ATOMIC, concurrency-safe transition: only the first caller flips draft -> submitted. The
+    # receipt is written to its OWN columns; STRATA's evidence_record/evidence_sig are NOT touched.
     from sqlalchemy import text
     res = db.session.execute(text(
-        "UPDATE case_submissions SET submission_status='submitted', submitted_at=:ts, "
-        "payload=:p, evidence_record=:er, evidence_sig=:es "
+        "UPDATE case_submissions SET submission_status='submitted', submitted_at=:ts, payload=:p, "
+        "wb_receipt=:wr, wb_receipt_sig=:ws, wb_receipt_version=:wv "
         "WHERE id=:id AND submission_status='draft'"),
-        {"ts": ts, "p": json.dumps(payload), "er": json.dumps(record), "es": sig, "id": sub.id})
+        {"ts": ts, "p": json.dumps(payload), "wr": json.dumps(record), "ws": sig,
+         "wv": WB_RECEIPT_CONTRACT_VERSION, "id": sub.id})
     if res.rowcount != 1:
         db.session.rollback()
         raise WorkbenchError("ALREADY_SUBMITTED", 409, "this investigation was already submitted")
@@ -310,18 +422,59 @@ def finalize_submission(db, store, case, candidate, pathway):
     return sub, {"record": record, "signature": sig}
 
 
-def verify_receipt(sub):
-    if not sub or not sub.evidence_record or not sub.evidence_sig:
+def submission_readiness(db, case, candidate, payload, evidence_vms):
+    """A truthful checklist of what is / isn't ready for final submission (no fabricated status)."""
+    findings = payload.get("findings") or []
+    refs = set(payload.get("evidence_refs") or [])
+    req = _case_required_kinds(case)
+    have_types = {e["evidence_type"] for e in evidence_vms if e["evidence_id"] in refs}
+    missing = [k for k in req if k != et.EV_TECHNICAL_REPORT and k not in have_types]
+    items = [
+        {"label": "At least one technical finding recorded", "ok": bool(findings)},
+        {"label": "Required evidence attached to the package", "ok": not missing},
+        {"label": "Evidence references selected", "ok": bool(refs)},
+    ]
+    return {"checks": items, "ready": all(i["ok"] for i in items), "missing_evidence": missing}
+
+
+def verify_receipt(sub, db=None):
+    """Integrity verification (NOT correctness). A receipt verifies only if its signature is valid,
+    its self-hash matches, AND it still binds the CURRENT submitted payload and the CURRENT evidence
+    content hashes/versions. Modified findings, substituted or altered evidence, or changed metadata
+    all break verification. `db` is optional; when given, the live evidence binding is re-checked."""
+    if not sub or not sub.wb_receipt or not sub.wb_receipt_sig:
         return False
     try:
-        record = json.loads(sub.evidence_record)
+        record = json.loads(sub.wb_receipt)
     except Exception:
         return False
+    # 1. self-hash + signature
     expect = hashlib.sha256(signing.canonical(
         {k: record.get(k) for k in record if k != "receipt_hash"})).hexdigest()
     if record.get("receipt_hash") != expect:
         return False
-    return signing.verify(record, sub.evidence_sig)
+    if not signing.verify(record, sub.wb_receipt_sig):
+        return False
+    # 2. still bound to the CURRENT submitted payload (tampered findings/payload -> fail)
+    try:
+        payload = json.loads(sub.payload or "{}")
+    except Exception:
+        return False
+    if record.get("payload_hash") != hashlib.sha256(
+            signing.canonical(_payload_core(payload))).hexdigest():
+        return False
+    if record.get("findings_hash") != hashlib.sha256(
+            signing.canonical(payload.get("findings") or [])).hexdigest():
+        return False
+    # 3. identity binding
+    if record.get("case_id") != sub.case_id or record.get("candidate_id") != sub.candidate_id:
+        return False
+    # 4. evidence binding still matches live content hashes + versions (substitution/alteration -> fail)
+    if db is not None:
+        live = _evidence_binding(db, record.get("evidence_refs") or [])
+        if live != (record.get("evidence_binding") or {}):
+            return False
+    return True
 
 
 # --- assessment status (policy-authorized; never leaks truth) -------------------------------
@@ -394,6 +547,20 @@ def _persist_artifact(db, art, *, backend):
 def _persist_custody(db, signed):
     from models import CustodyEvent
     db.session.add(CustodyEvent(**ep.custody_row(signed)))
+
+
+def _persist_blobref(db, art):
+    """Register the F4 reference-counted BlobReference for an uploaded artifact (dedup-safe; one
+    reference per (object_key, evidence_id)). Keeps cross-candidate/cross-cohort isolation."""
+    from models import BlobReference
+    key = art.get("object_key")
+    if not key:
+        return
+    if BlobReference.query.filter_by(object_key=key, evidence_id=art["evidence_id"]).first():
+        return
+    db.session.add(BlobReference(object_key=key, evidence_id=art["evidence_id"],
+                                 candidate_id=art.get("candidate_id"), cohort=art.get("cohort"),
+                                 pathway=art.get("pathway"), active=True))
 
 
 def _artifact_dict(row):
