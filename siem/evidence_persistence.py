@@ -38,13 +38,15 @@ def _iso(ts=None):
 
 # --- signed, append-only chain of custody ------------------------------------
 def custody_event(kind, *, evidence_id, actor, candidate_id=None, cohort=None, pathway=None,
-                  detail=None, parent_hash=None):
+                  detail=None, parent_hash=None, seq=None):
     """Build an immutable, signed custody event. Returns {record, signature}. The record hashes
-    its own content; the next event references it via parent_hash, forming a tamper-evident chain."""
+    its own content (including its 0-based `seq`, so each event commits to its chain position); the
+    next event references it via parent_hash, forming a tamper-evident chain. `seq` lets a
+    separately-protected checkpoint detect truncation of the latest events (F4 correction C)."""
     rec = {"kind": kind, "evidence_id": evidence_id, "actor": actor,
            "candidate_id": candidate_id, "cohort": cohort,
            "pathway": pathways.normalize_pathway(pathway) if pathway else None,
-           "detail": detail or {}, "ts": _iso(), "parent_hash": parent_hash}
+           "detail": detail or {}, "ts": _iso(), "seq": seq, "parent_hash": parent_hash}
     rec["record_hash"] = hashlib.sha256(signing.canonical(rec)).hexdigest()
     return {"record": rec, "signature": signing.sign(rec)}
 
@@ -146,7 +148,7 @@ def issue_access_grant(store, artifact, *, requester, operation="get", ttl_secon
 
 # --- derived artifacts (no overwrite of the source) --------------------------
 def persist_derived(store, parent_artifact, derived_bytes, *, evidence_type, transform,
-                    tool_version, actor="forensic-tool", max_bytes=None):
+                    tool_version, actor="forensic-tool", max_bytes=None, seq=None):
     """Store a derived artifact's bytes as a NEW object and envelope that references the parent.
     The parent (source) is never overwritten. Emits a signed `derive` custody event recording the
     transformation type + tool version + derived hash. Returns {artifact, put, custody}."""
@@ -169,7 +171,7 @@ def persist_derived(store, parent_artifact, derived_bytes, *, evidence_type, tra
                         candidate_id=parent_artifact.get("candidate_id"),
                         cohort=parent_artifact.get("cohort"), pathway=parent_artifact.get("pathway"),
                         detail={"parent": parent_artifact["evidence_id"], "transform": transform,
-                                "tool_version": tool_version, "derived_hash": put.sha256})
+                                "tool_version": tool_version, "derived_hash": put.sha256}, seq=seq)
     return {"artifact": art, "put": put.as_dict(), "custody": cev}
 
 
@@ -231,10 +233,14 @@ def delete_evidence(store, artifact, *, reason, now=None):
 
 
 def custody_row(signed_event):
-    """Project a signed custody event into kwargs for the models.CustodyEvent row."""
+    """Project a signed custody event into kwargs for the models.CustodyEvent row. Persists the
+    exact ts + seq + full signed record (record_json) so the chain re-verifies from the DB and a
+    checkpoint can detect truncation (F4 correction C); older rows without these remain valid."""
     r = signed_event["record"]
     return {"evidence_id": r["evidence_id"], "kind": r["kind"], "actor": r.get("actor"),
             "candidate_id": r.get("candidate_id"), "cohort": r.get("cohort"),
             "pathway": r.get("pathway"), "detail": json.dumps(r.get("detail") or {}),
             "record_hash": r["record_hash"], "parent_hash": r.get("parent_hash"),
-            "signature": signed_event["signature"]}
+            "signature": signed_event["signature"],
+            "ts": r.get("ts"), "seq": r.get("seq"),
+            "record_json": json.dumps(signed_event, separators=(",", ":"), sort_keys=True)}

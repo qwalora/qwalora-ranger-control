@@ -68,8 +68,12 @@ EVIDENCE_TYPES = {
     EV_PROVENANCE_MANIFEST: {"blob": True, "media": {"application/json", "application/c2pa",
                                                      "application/octet-stream"},
                              "max_bytes": 25 * MB},
-    EV_MODEL_TRACE:         {"blob": False, "media": None, "max_bytes": 25 * MB},
-    EV_AGENT_TRACE:         {"blob": False, "media": None, "max_bytes": 25 * MB},
+    # F4: traces are preserved as retrievable content-addressed objects so an independent verifier
+    # can fetch the EXACT source bytes and re-run the (schema-validated, no-exec) parser over them.
+    EV_MODEL_TRACE:         {"blob": True, "media": {"application/json", "application/jsonl",
+                                                     "text/plain"}, "max_bytes": 25 * MB},
+    EV_AGENT_TRACE:         {"blob": True, "media": {"application/json", "application/jsonl",
+                                                     "text/plain"}, "max_bytes": 25 * MB},
     EV_TOOL_AUTHORIZATION:  {"blob": False, "media": None, "max_bytes": None},
     EV_API_EXECUTION:       {"blob": False, "media": None, "max_bytes": None},
     EV_CONFIG_SYSTEM_STATE: {"blob": False, "media": None, "max_bytes": 25 * MB},
