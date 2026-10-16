@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Candidate Workbench · Qwalora Ranger{% endblock %}
+{% block body %}
+{% set wb_active='overview' %}{% set wb_ctx='Workbench' %}{% set wb_dev=vm.show_dev_flags %}
+{% include "_wb_top.html" %}
+
+  <div class="wb-head">
+    <div class="wb-eyebrow"><span class="dot"></span>{{ vm.pathway_brand }} · Cohort {{ vm.candidate.cohort }} · {{ vm.candidate.status }}</div>
+    <h1 class="wb-h1">Candidate Workbench</h1>
+    <p class="wb-lede">Independent technical investigation console. Build evidence-backed conclusions from authorized observations; outcomes are independently verified.</p>
+    <div class="wb-stats">
+      <div class="wb-stat"><div class="k">Pathway</div><div class="v">{{ ic('layers','ic ic-sm') }} {{ vm.pathway|upper }}</div></div>
+      <div class="wb-stat"><div class="k">Cohort</div><div class="v">{{ ic('users','ic ic-sm') }} {{ vm.candidate.cohort }}</div></div>
+      <div class="wb-stat"><div class="k">Assigned</div><div class="v">{{ ic('shield','ic ic-sm') }} {{ vm.cases|length }}</div></div>
+      <div class="wb-stat accent"><div class="k">Evidence in review</div><div class="v">{{ ic('inbox','ic ic-sm') }} {{ vm.evidence_pending }}</div></div>
+    </div>
+  </div>
+
+  <div class="wb-grid">
+    <!-- qualification + availability -->
+    <div class="wb-brief" style="display:flex;flex-direction:column;gap:20px">
+      <div class="wb-card"><div class="b">
+        <div class="wb-lbl">Qualification</div>
+        {% if vm.qualification.active %}
+        <div class="wb-note ok" style="margin-top:10px">{{ ic('shield','ic') }}<div><b>Active</b>{{ vm.qualification.statement }}</div></div>
+        {% else %}
+        <div class="wb-note warn" style="margin-top:10px">{{ ic('lock','ic') }}<div><b>Inactive</b>{{ vm.qualification.statement }}</div></div>
+        {% endif %}
+      </div></div>
+      <div class="wb-card"><div class="b">
+        <div class="wb-lbl">Available to you</div>
+        <div class="wb-chips" style="margin-top:12px">
+          {% for a in vm.availability %}<span class="wb-chip {{ '' if a.on else 'off' }}"><span class="dot"></span>{{ a.label }}</span>{% endfor %}
+        </div>
+        {% if vm.show_dev_flags %}
+        <div class="wb-lbl" style="margin-top:18px">Environment flags (dev)</div>
+        <div class="wb-chips" style="margin-top:10px">
+          {% for k,v in vm.flags.items() %}<span class="wb-chip {{ '' if v else 'off' }}"><span class="dot"></span>{{ k }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </div></div>
+    </div>
+
+    <!-- assigned investigations -->
+    <div class="wb-ops">
+      <div class="wb-card"><div class="b">
+        <div class="ttl">{{ ic('shield','ic ic-sm') }} Assigned investigations</div>
+        <p class="sub">Open an investigation to review authorized evidence and build your package.</p>
+        <div style="margin-top:16px">
+        {% if not vm.case_access %}
+          <div class="wb-empty">{{ ic('lock','ic ic-sm') }} Case access is not enabled in this environment.</div>
+        {% elif vm.cases %}
+          <div class="wb-cases">
+          {% for c in vm.cases %}
+            <a class="wb-case" href="/workbench/case/{{ c.case_id }}">
+              <span class="wb-tr .ic">{{ ic('shield','ic') }}</span>
+              <span class="cid">{{ c.title or ('Case #' ~ c.case_id) }}<small>#{{ c.case_id }} · v{{ c.scenario_version }}</small><div class="cmeta">{{ c.pathway|upper }} · {{ c.plane }}{% if not c.instructions_available %} · instructions pending{% endif %}</div></span>
+              <span class="wb-pill {{ 'ok' if c.status=='submitted' else 'violet' }}"><span class="d"></span>{{ c.status }}</span>
+              <span class="wb-dl">{{ ic('arrow','ic ic-sm') }}</span>
+            </a>
+          {% endfor %}
+          </div>
+        {% else %}
+          <div class="wb-empty">{{ ic('inbox','ic ic-sm') }} No investigations are currently assigned to you.</div>
+        {% endif %}
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+{% include "_wb_bottom.html" %}
+{% endblock %}

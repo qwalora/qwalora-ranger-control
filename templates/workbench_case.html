@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}{{ vm.case.title or ('Case #' ~ vm.case.case_id) }} · Workbench{% endblock %}
+{% block body %}
+{% set wb_active='overview' %}{% set wb_ctx='Investigation' %}{% set wb_dev=false %}
+{% include "_wb_top.html" %}
+
+  <a class="wb-back" href="/workbench">{{ ic('arrow','ic ic-sm') }} Back to overview</a>
+
+  {% if vm.err %}
+  <div class="wb-note warn" style="margin-bottom:16px">{{ ic('flag','ic') }}<div><b>Action not completed</b>{{ vm.err }}</div></div>
+  {% endif %}
+
+  <div class="wb-grid">
+    <!-- LEFT: case brief -->
+    <div class="wb-brief">
+      <div class="wb-card"><div class="b">
+        <div class="wb-eyebrow" style="color:var(--orange,#f96702)"><span class="dot"></span>{{ vm.pathway|upper }} · {{ vm.case.plane }}</div>
+        <div class="ttl" style="font-size:19px">{{ vm.case.title or ('Case #' ~ vm.case.case_id) }}</div>
+        <p class="sub">#{{ vm.case.case_id }} · scenario v{{ vm.case.scenario_version }}</p>
+        <div style="margin-top:10px"><span class="wb-pill {{ 'ok' if vm.case.status=='submitted' else 'violet' }}"><span class="d"></span>{{ vm.case.status }}</span></div>
+
+        {% if not vm.case.instructions_available %}
+        <div class="wb-note info wb-section">{{ ic('clock','ic') }}<div><b>Instructions not available</b>{{ vm.case.unavailable_reason }}</div></div>
+        {% else %}
+        <div class="wb-section"><div class="wb-lbl">Authorized scope</div><p class="wb-brief .scope" style="color:var(--med);font-size:13px;line-height:1.55;margin:9px 0 0">{{ vm.case.authorized_scope }}</p></div>
+        <div class="wb-section"><div class="wb-lbl">Technical objectives</div>
+          <ul class="wb-list" style="margin-top:9px">{% for o in vm.case.technical_objectives %}<li>{{ o }}</li>{% endfor %}</ul></div>
+        <div class="wb-section"><div class="wb-lbl">Evidence requirements</div>
+          <div style="margin-top:6px">{% for r in vm.case.evidence_requirements %}
+            <div class="wb-req"><div class="wb-req-top"><span class="kind">{{ r.kind }}</span>{% if r.required %}<span class="wb-pill amber"><span class="d"></span>required</span>{% endif %}</div><span class="note">{{ r.note }}</span></div>
+          {% endfor %}</div></div>
+        <div class="wb-section"><div class="wb-lbl">Permitted operations</div>
+          <ul class="wb-list" style="margin-top:9px">{% for p in vm.case.permitted_operations %}<li>{{ p }}</li>{% endfor %}</ul></div>
+        <div class="wb-section"><div class="wb-lbl">Environment interfaces</div>
+          <div class="wb-chips" style="margin-top:9px">{% for e in vm.case.environment_interfaces %}<span class="wb-chip"><span class="dot" style="background:var(--violet)"></span>{{ e }}</span>{% endfor %}</div></div>
+        {% endif %}
+      </div></div>
+    </div>
+
+    <!-- RIGHT: investigation operations -->
+    <div class="wb-ops">
+
+      <!-- evidence repository -->
+      <div class="wb-card"><div class="b">
+        <div class="ttl">{{ ic('inbox','ic ic-sm') }} Evidence repository</div>
+        <p class="sub">Authorized evidence in your workspace. Submitted items are preserved and hashed; they are not validated by submission.</p>
+        <div class="wb-tbl" style="margin-top:14px">
+          <div class="wb-tr head"><span></span><span>Evidence</span><span class="c3">Type · size</span><span>Digest</span><span>State</span><span></span></div>
+          {% for e in vm.evidence %}
+          <div class="wb-tr">
+            <span class="ic">{{ ic('hash','ic ic-sm') }}</span>
+            <span class="nm">{{ e.evidence_type }}<span class="id">{{ e.evidence_id }}</span></span>
+            <span class="mt c3">{{ e.media_type or '—' }} · {{ e.bytes or 0 }}B</span>
+            <span class="mt">{{ e.sha256 }}…</span>
+            <span class="wb-pill {{ 'ok' if e.scan_state=='clean' else 'amber' }}"><span class="d"></span>{{ e.scan_state }}</span>
+            <a class="wb-dl" href="/workbench/case/{{ vm.case.case_id }}/evidence/{{ e.evidence_id }}/download" title="Download">{{ ic('arrow','ic ic-sm') }}</a>
+          </div>
+          {% else %}
+          <div class="wb-tr"><span class="ic">{{ ic('inbox','ic ic-sm') }}</span><span class="nm" style="color:var(--mut);font-weight:400">No evidence submitted yet.</span><span></span><span></span><span></span><span></span></div>
+          {% endfor %}
+        </div>
+        {% if vm.flags.evidence_submit and not vm.locked %}
+        <form method="post" action="/workbench/case/{{ vm.case.case_id }}/evidence" enctype="multipart/form-data" class="wb-g2" style="margin-top:14px;grid-template-columns:1fr 1fr auto;align-items:end">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}">
+          <label class="wb-field"><span>Evidence type</span><select class="wb-input" name="evidence_type">{% for t in vm.permitted_evidence_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}</select></label>
+          <label class="wb-field"><span>File</span><input class="wb-input" type="file" name="file" required style="padding-top:8px"></label>
+          <button class="wb-btn wb-btn-outline" type="submit">{{ ic('plus','ic ic-sm') }} Submit evidence</button>
+        </form>
+        {% endif %}
+      </div></div>
+
+      <!-- technical findings -->
+      <div class="wb-card"><div class="b">
+        <div class="ttl">{{ ic('edit','ic ic-sm') }} Technical findings</div>
+        <p class="sub">Multiple technically valid approaches are supported; there is no single expected answer.</p>
+        <div style="margin-top:14px">
+        {% for f in vm.payload.findings %}
+          <div class="wb-finding">
+            <div class="claim">{{ f.claim }}
+              {% if not vm.locked %}<form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="remove_finding"><input type="hidden" name="index" value="{{ loop.index0 }}"><button class="wb-btn wb-btn-light" style="height:30px;padding:0 10px;font-size:12px" type="submit">Remove</button></form>{% endif %}
+            </div>
+            <dl class="wb-fgrid">
+              {% if f.scope %}<dt>Scope</dt><dd>{{ f.scope }}</dd>{% endif %}
+              {% if f.methodology %}<dt>Methodology</dt><dd>{{ f.methodology }}</dd>{% endif %}
+              {% if f.observed_outcome %}<dt>Observed</dt><dd>{{ f.observed_outcome }}</dd>{% endif %}
+              {% if f.significance %}<dt>Significance</dt><dd>{{ f.significance }}</dd>{% endif %}
+              {% if f.remediation %}<dt>Remediation</dt><dd>{{ f.remediation }}</dd>{% endif %}
+              {% if f.limitations %}<dt>Limitations</dt><dd>{{ f.limitations }}</dd>{% endif %}
+              {% if f.evidence_refs %}<dt>Evidence</dt><dd class="mono">{{ f.evidence_refs|join(', ') }}</dd>{% endif %}
+            </dl>
+          </div>
+        {% else %}
+          <div class="wb-empty">{{ ic('edit','ic ic-sm') }} No findings recorded yet. Add your first finding below.</div>
+        {% endfor %}
+        </div>
+
+        {% if not vm.locked %}
+        <form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" class="wb-editor" style="margin-top:16px">
+          <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="add_finding">
+          <div class="wb-group"><span class="gl">Technical assertion</span>
+            <div class="wb-field" style="margin-bottom:10px"><span>Technical claim</span><input class="wb-input" name="claim" placeholder="What you established, in one line" required></div>
+            <div class="wb-g2"><label class="wb-field"><span>Relevant scope</span><input class="wb-input" name="scope"></label>
+              <label class="wb-field"><span>Observed outcome</span><input class="wb-input" name="observed_outcome"></label></div>
+          </div>
+          <div class="wb-group"><span class="gl">Evidence &amp; methodology</span>
+            <div class="wb-field" style="margin-bottom:10px"><span>Reproduction methodology</span><textarea class="wb-input" name="methodology" rows="3" placeholder="How the finding can be reproduced from the evidence"></textarea></div>
+            {% if vm.evidence %}<div class="wb-field"><span>Supporting evidence</span><div class="wb-checks">{% for e in vm.evidence %}<label><input type="checkbox" name="finding_evidence_refs" value="{{ e.evidence_id }}"> {{ e.evidence_type }} · {{ e.sha256 }}</label>{% endfor %}</div></div>{% endif %}
+          </div>
+          <div class="wb-group"><span class="gl">Analysis</span>
+            <div class="wb-field" style="margin-bottom:10px"><span>Security significance</span><textarea class="wb-input" name="significance" rows="2"></textarea></div>
+            <div class="wb-g2"><label class="wb-field"><span>Remediation (if relevant)</span><input class="wb-input" name="remediation"></label>
+              <label class="wb-field"><span>Limitations</span><input class="wb-input" name="limitations"></label></div>
+          </div>
+          <button class="wb-btn wb-btn-outline" type="submit" style="align-self:flex-start">{{ ic('plus','ic ic-sm') }} Add finding</button>
+        </form>
+        {% endif %}
+      </div></div>
+
+      <!-- notes + submission (dark) -->
+      <div class="wb-submit">
+        <div class="ttl" style="display:flex;align-items:center;gap:8px;margin-bottom:4px">{{ ic('shield','ic ic-sm') }} Investigation notes &amp; submission</div>
+        <div class="wb-submit-grid" style="margin-top:14px">
+          <div>
+            {% if not vm.locked %}
+            <form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" style="display:flex;flex-direction:column;gap:12px">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="save">
+              <label class="wb-field"><span>Investigation notes (one per line — kept separate from findings)</span><textarea class="wb-input" name="notes" rows="3" placeholder="Working notes; not treated as validated evidence">{{ vm.payload.notes|join('\n') if vm.payload.notes }}</textarea></label>
+              <label class="wb-field"><span>Overall approach</span><input class="wb-input" name="approach" value="{{ vm.payload.approach or '' }}"></label>
+              <div class="wb-field"><span>Package evidence references</span><div class="wb-checks">{% for e in vm.evidence %}<label><input type="checkbox" name="evidence_refs" value="{{ e.evidence_id }}" {% if e.evidence_id in vm.payload.evidence_refs %}checked{% endif %}> {{ e.evidence_type }} · {{ e.sha256 }}</label>{% endfor %}</div></div>
+              <button class="wb-btn wb-btn-ghost" type="submit" style="align-self:flex-start">Save draft</button>
+            </form>
+            {% else %}
+            <div class="wb-note ok">{{ ic('lock','ic') }}<div><b>Submitted · immutable</b>Signed receipt {{ 'verified' if vm.receipt_ok else 'unverified' }}. Submission is not qualification; the outcome is independently verified.</div></div>
+            {% endif %}
+          </div>
+
+          <div>
+            <div class="wb-lbl">Package readiness</div>
+            <div class="wb-ready" style="margin-top:10px">
+              {% for it in vm.readiness.checks %}
+              <div class="row {{ 'ok' if it.ok else '' }}"><span class="mk">{{ ic('arrow' if not it.ok else 'activity','ic ic-sm') }}</span>{{ it.label }}</div>
+              {% endfor %}
+            </div>
+            {% if not vm.locked %}
+            <form method="post" action="/workbench/case/{{ vm.case.case_id }}/submit" style="margin-top:14px;display:flex;flex-direction:column;gap:10px">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <label style="display:flex;gap:8px;align-items:flex-start;font-size:11.5px;color:#c2bde0"><input type="checkbox" name="confirm" value="1" required style="margin-top:2px;accent-color:var(--violet)"> I understand final submission is <b style="color:#fff">immutable</b> and produces a signed receipt. Self-attestation does not establish verified success.</label>
+              <button class="wb-btn wb-btn-primary" type="submit">{{ ic('shield','ic ic-sm') }} Submit investigation package</button>
+            </form>
+            {% endif %}
+            <div class="wb-lbl" style="margin-top:18px">Assessment status</div>
+            <div class="wb-chips" style="margin-top:9px">
+              <span class="wb-pill dark"><span class="d"></span>{{ vm.status.state }}</span>
+              {% if vm.status.qualification_active is defined %}<span class="wb-pill dark"><span class="d"></span>qualification {{ 'active' if vm.status.qualification_active else 'inactive' }}</span>{% endif %}
+            </div>
+            {% if vm.status.note %}<p style="color:#9a94c2;font-size:11.5px;margin:9px 0 0">{{ vm.status.note }}</p>{% endif %}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+{% include "_wb_bottom.html" %}
+{% endblock %}
