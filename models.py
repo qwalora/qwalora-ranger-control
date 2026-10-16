@@ -67,6 +67,13 @@ def ensure_schema(db):
             ("tool_version", "VARCHAR(60)"),
             ("retention_class", "VARCHAR(30) DEFAULT 'default'"),
         ],
+        "custody_events": [
+            # F4 correction (C): persist the exact record + timestamp + per-evidence sequence so
+            # the chain re-verifies from the DB and truncation is detectable against a checkpoint.
+            ("ts", "VARCHAR(40)"),
+            ("seq", "INTEGER"),
+            ("record_json", "TEXT"),
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -741,9 +748,122 @@ class CustodyEvent(db.Model):
     record_hash = db.Column(db.String(64), nullable=False)
     parent_hash = db.Column(db.String(64), nullable=True)
     signature = db.Column(db.Text, nullable=False)         # Ed25519 over the event record
+    # F4 correction (C): persist the exact signed record + its timestamp + per-evidence sequence
+    # so the chain can be re-verified from the DB (not only from an in-memory list) and so a
+    # separately-protected checkpoint can detect truncation of the latest events.
+    ts = db.Column(db.String(40), nullable=True)           # the record's own ISO timestamp
+    seq = db.Column(db.Integer, nullable=True)             # 0-based position in this evidence's chain
+    record_json = db.Column(db.Text, nullable=True)        # canonical signed record for exact re-verify
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    # F4.1: a per-evidence sequence position is unique, so two concurrent jobs appending to the same
+    # source chain can never both claim the same seq (the loser's INSERT is rejected). NULL seq
+    # (legacy rows) is exempt, as PostgreSQL treats NULLs as distinct.
+    __table_args__ = (db.UniqueConstraint("evidence_id", "seq", name="uq_custody_evidence_seq"),)
 
     KINDS = ("acquire", "verify", "derive", "access", "revoke", "retain", "quarantine")
+
+
+class CustodyCheckpoint(db.Model):
+    """F4 correction (C) - a separately-protected anchor over an evidence artifact's custody chain.
+
+    An internally-valid hash chain cannot by itself detect removal of its most recent events
+    (truncation): drop the last N rows and the remaining chain still verifies. This checkpoint
+    records, out of band from the events themselves, the chain head hash, the event COUNT, and the
+    head sequence, each signed, and itself chained (prev_checkpoint_hash) so checkpoints cannot be
+    silently rolled back either. Comparing the live chain against the latest checkpoint detects
+    truncation (fewer events than anchored) and head rewrites (same count, different head).
+
+    Honest limitation: checkpoints are signed with the same server Ed25519 key as the events, so an
+    attacker who holds that key could forge both. This protects against DB-level tampering/truncation
+    by anyone WITHOUT the signing key, and against accidental loss, between checkpoints. External
+    anchoring (e.g. a transparency log) is a future extension and needs no paid infra to add later."""
+    __tablename__ = "custody_checkpoints"
+    id = db.Column(db.Integer, primary_key=True)
+    evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    event_count = db.Column(db.Integer, nullable=False)       # number of events anchored
+    head_hash = db.Column(db.String(64), nullable=False)      # record_hash of the latest event
+    head_seq = db.Column(db.Integer, nullable=False)          # seq of the latest event
+    prev_checkpoint_hash = db.Column(db.String(64), nullable=True)  # chains checkpoints together
+    checkpoint_hash = db.Column(db.String(64), nullable=False)
+    ts = db.Column(db.String(40), nullable=False)
+    signature = db.Column(db.Text, nullable=False)            # Ed25519 over the checkpoint record
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
+class BlobReference(db.Model):
+    """F4 correction (B) - a reference from one evidence artifact to one content-addressed object.
+
+    Storage is content-addressed with de-duplication, so several artifacts (possibly across
+    candidates/cohorts) may point at the SAME blob/<sha256> object. Physical deletion must therefore
+    be reference-counted: revoking, quarantining or deleting one artifact releases only ITS reference,
+    and the underlying bytes are removed only when no active reference and no retention hold remains.
+    Each reference is scoped to its own candidate/cohort so logical revocation can be scoped without
+    touching another tenant's reference, and de-duplication never discloses that another tenant holds
+    the same bytes (authorization is always per-artifact; the dedup is invisible to callers)."""
+    __tablename__ = "blob_references"
+    id = db.Column(db.Integer, primary_key=True)
+    object_key = db.Column(db.String(128), nullable=False, index=True)   # blob/<sha256>
+    evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    candidate_id = db.Column(db.Integer, nullable=True, index=True)
+    cohort = db.Column(db.String(40), nullable=True, index=True)
+    pathway = db.Column(db.String(20), nullable=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    hold = db.Column(db.Boolean, nullable=False, default=False)   # legal/retention hold: blocks delete
+    released_at = db.Column(db.String(40), nullable=True)
+    release_reason = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    __table_args__ = (db.UniqueConstraint("object_key", "evidence_id", name="uq_blobref_obj_ev"),)
+
+
+class TrustedFixture(db.Model):
+    """F4.1 - an authenticated, administrator-approved synthetic-fixture registry.
+
+    The ONLY thing that may let media bypass the scan gate for development demonstrations is a
+    content hash registered here by an explicit administrative action. Trust is derived server-side
+    from this table keyed by the server-computed sha256; it is never taken from a job parameter,
+    submitted metadata, or any caller-controlled flag. Real candidate uploads are never registered."""
+    __tablename__ = "trusted_fixtures"
+    id = db.Column(db.Integer, primary_key=True)
+    sha256 = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note = db.Column(db.String(300), nullable=True)
+    approved_by = db.Column(db.String(120), nullable=False)   # admin principal that approved it
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
+class ForensicJob(db.Model):
+    """F4 - a persistent, auditable bounded-forensic-processing job.
+
+    Admin-controlled only (no general candidate execution, no always-on workers). One job runs one
+    authorized operation over one source EvidenceArtifact inside the OS-enforced sandbox and persists
+    its derived evidence + signed custody. The lifecycle is explicit and restart-recoverable: a crash
+    while `running` is reclaimed by the next admin-triggered sweep, not by an unrestricted daemon."""
+    __tablename__ = "forensic_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    operation = db.Column(db.String(40), nullable=False)
+    source_evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    case_id = db.Column(db.Integer, nullable=True, index=True)
+    candidate_id = db.Column(db.Integer, nullable=True, index=True)
+    cohort = db.Column(db.String(40), nullable=True, index=True)
+    pathway = db.Column(db.String(20), nullable=True)
+    params = db.Column(db.Text, nullable=True)                # JSON validated params
+    idempotency_key = db.Column(db.String(80), nullable=True, unique=True, index=True)
+    state = db.Column(db.String(20), nullable=False, default="queued", index=True)
+    requested_by = db.Column(db.String(120), nullable=True)   # admin principal
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=1)
+    claimed_at = db.Column(db.String(40), nullable=True)
+    started_at = db.Column(db.String(40), nullable=True)
+    finished_at = db.Column(db.String(40), nullable=True)
+    worker_token = db.Column(db.String(64), nullable=True)    # atomic-claim guard
+    wall_ms = db.Column(db.Integer, nullable=True)
+    error_code = db.Column(db.String(60), nullable=True)
+    error_detail = db.Column(db.Text, nullable=True)
+    result_manifest = db.Column(db.Text, nullable=True)       # JSON reproducible manifest
+    derived_evidence_ids = db.Column(db.Text, nullable=True)  # JSON list
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    STATES = ("queued", "running", "succeeded", "failed", "canceled", "quarantined")
 
 
 class Case(db.Model):
