@@ -36,6 +36,10 @@ FOUNDATION_VERSION = "valyria-1"   # the persistent Valyria enterprise foundatio
 # contracts. Today only the SOC environment is implemented.
 from pathways import PATHWAY_STRATA, PATHWAY_PARALLAX  # stable ids, not marketing names
 ENVIRONMENT_SOC_OPENSEARCH = "soc-opensearch"
+# S4: the seed-dataset environment behind STRATA boards 1/3/4 (triage, detection, IR). These are
+# graded in-process against a seeded dataset rather than a live cluster, so their inventory is the
+# dataset generator's own capability surface, not the OpenSearch topology.
+ENVIRONMENT_SOC_DATASET = "soc-dataset"
 # Declared, not implemented (future PARALLAX environment types):
 ENVIRONMENT_MEDIA_FORENSICS = "media-forensics"   # deepfake audio/video forensics
 ENVIRONMENT_LLM_REDTEAM = "llm-redteam"           # LLM/agent security, prompt injection
@@ -94,11 +98,22 @@ def build_inventory(environment_type: str = ENVIRONMENT_SOC_OPENSEARCH) -> dict:
     Only the SOC/OpenSearch environment is implemented today; other environment types
     (future AI-track specializations) raise so nothing silently claims support it does
     not have."""
+    if environment_type == ENVIRONMENT_SOC_DATASET:
+        return _build_soc_dataset_inventory()
     if environment_type != ENVIRONMENT_SOC_OPENSEARCH:
         raise NotImplementedError(
             f"environment_type {environment_type!r} is declared but not implemented; "
-            f"only {ENVIRONMENT_SOC_OPENSEARCH!r} has a capability inventory today")
+            f"only {ENVIRONMENT_SOC_OPENSEARCH!r} and {ENVIRONMENT_SOC_DATASET!r} "
+            f"have a capability inventory today")
     return _build_soc_opensearch_inventory()
+
+
+def _build_soc_dataset_inventory() -> dict:
+    """Minimal inventory for the seed-dataset boards (1/3/4). The board-typed payload validators
+    (soc-triage / detection-engineering / ir-forensics) validate structural fields directly and do
+    not resolve capability refs against this inventory, so it records only the environment id."""
+    return {"environment_type": ENVIRONMENT_SOC_DATASET, "id": "strata-dataset-1",
+            "capabilities": {}, "families": [], "hosts": [], "identities": []}
 
 
 def _build_soc_opensearch_inventory() -> dict:

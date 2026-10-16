@@ -435,6 +435,37 @@ class AdminUser(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
 
+class ScenarioBinding(db.Model):
+    """S3/S4 - the durable, version-pinned binding of a candidate's qualification attempt to a
+    specific APPROVED scenario catalog entry and variant. This is the reproducibility + no-repeat
+    anchor for the cohort-aware portfolio system: it records the selected spec_id, spec_version,
+    immutable content_hash, structural variant, incident family (for reuse cooldown) and seed. The
+    hidden truth is NEVER stored here; it is recomputed from (variant, seed) server-side at grade
+    time. One binding per (candidate, board, attempt) makes assignment idempotent; the (github_id,
+    board, variant_id) history enforces no-repeat for a returning candidate.
+
+    Additive table: created by create_all offline. A production deployment needs a one-off migration
+    to add it; this is reported as a release gate and is not applied here."""
+    __tablename__ = "scenario_bindings"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    github_id = db.Column(db.String(64), nullable=False, index=True)   # person key (no-repeat)
+    board = db.Column(db.Integer, nullable=False, index=True)
+    cohort = db.Column(db.String(40), nullable=False, index=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    spec_id = db.Column(db.String(80), nullable=False)
+    spec_version = db.Column(db.Integer, nullable=False, default=1)
+    content_hash = db.Column(db.String(64), nullable=False)
+    variant_id = db.Column(db.String(60), nullable=False)
+    family = db.Column(db.String(60), nullable=True)      # for scenario-family reuse cooldown
+    seed = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="bound")   # bound | completed
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("candidate_id", "board", "attempt",
+                                          name="uq_binding_per_attempt"),)
+
+
 class Notification(db.Model):
     """A candidate-facing event: promotion, a report decision, a lab becoming
     ready. Shown on the ranger's dashboard and, when SMTP is configured, emailed."""

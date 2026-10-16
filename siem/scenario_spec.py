@@ -242,3 +242,59 @@ def _validate_soc_investigation(payload: dict, inv: dict) -> list:
 
 
 register_payload_validator("soc-investigation", _validate_soc_investigation)
+
+
+# --- S4 board-typed payloads (triage / detection / IR) -----------------------
+# These extend the ScenarioSpec with board-specific typed payloads rather than forking the generator
+# or creating a parallel platform. Each validates that the candidate-visible brief exists, the admin
+# layer declares the structural content that makes the variant material, and evaluator_only references
+# truth by generation (never embeds answers).
+def _require(payload, errors, admin_field):
+    cv = payload.get("candidate_visible") or {}
+    admin = payload.get("admin") or {}
+    if not str(cv.get("business_context") or "").strip():
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.candidate_visible.business_context",
+                           "a candidate-safe business context brief is required"))
+    if not admin.get(admin_field):
+        errors.append(_err("MISSING_MANDATORY_FIELD", f"payload.admin.{admin_field}",
+                           f"the admin layer must declare {admin_field!r}"))
+    ev = payload.get("evaluator_only") or {}
+    if ev and not ev.get("protected_truth_ref"):
+        errors.append(_err("MISSING_TRUTH_REF", "payload.evaluator_only",
+                           "evaluator_only must reference truth generation, not embed answers"))
+    return admin
+
+
+def _validate_soc_triage(payload, inv):
+    errors = []
+    admin = _require(payload, errors, "technique_pool")
+    if not admin.get("variant_id"):
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.variant_id",
+                           "a structural variant id is required"))
+    return errors
+
+
+def _validate_detection_engineering(payload, inv):
+    errors = []
+    admin = _require(payload, errors, "technique_set")
+    if len(admin.get("technique_set") or []) < 4:
+        errors.append(_err("INSUFFICIENT_COVERAGE", "payload.admin.technique_set",
+                           "a detection-engineering variant must cover at least 4 techniques"))
+    return errors
+
+
+def _validate_ir_forensics(payload, inv):
+    errors = []
+    admin = _require(payload, errors, "kill_chain")
+    if not admin.get("initial_access"):
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.initial_access",
+                           "an IR variant must declare its initial-access technique"))
+    if not admin.get("persistence"):
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.persistence",
+                           "an IR variant must declare its persistence mechanism"))
+    return errors
+
+
+register_payload_validator("soc-triage", _validate_soc_triage)
+register_payload_validator("detection-engineering", _validate_detection_engineering)
+register_payload_validator("ir-forensics", _validate_ir_forensics)

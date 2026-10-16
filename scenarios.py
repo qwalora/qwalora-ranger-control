@@ -54,20 +54,29 @@ def _mkuser(login, host):
     return host.split(".")[0] + "\\" + login.split(".")[0]
 
 
-def generate_board1(seed):
-    r = _random.Random("board1:" + str(seed))
+def generate_board1(seed, variant=None):
+    """Seed-deterministic SOC triage alert portfolio. When `variant` (an approved structural
+    variant from siem/board_variants) is supplied, the technique pool, benign look-alike pool and
+    true-positive density come from the variant, so two cohorts on different variants face materially
+    different triage challenges (different attack behaviors, FP patterns and technique distributions),
+    not renamed hosts. variant=None preserves the original behavior exactly."""
+    v = variant or {}
+    tp_pool = v.get("tp_techniques") or _TP_TECHNIQUES
+    benign_pool = v.get("benign") or _BENIGN
+    lo, hi = v.get("tp_count", (4, 7))
+    r = _random.Random("board1:%s:%s" % (v.get("id", ""), seed))
     n = r.randint(12, 16)
     attacker_user = r.choice(_USERS)
     attacker_src = r.choice(_HOSTS)
     base = _dt.datetime(2026, 3, r.randint(1, 20), r.randint(0, 5), r.randint(0, 59))
-    tp_count = r.randint(4, 7)
+    tp_count = r.randint(lo, hi)
 
     alerts = []
     for i in range(n):
         aid = "ALRT-%04d" % (1000 + i)
         ts = (base + _dt.timedelta(minutes=r.randint(0, 600))).isoformat()
         if i < tp_count:
-            tid, tname, tmpl = r.choice(_TP_TECHNIQUES)
+            tid, tname, tmpl = r.choice(tp_pool)
             dst = r.choice([h for h in _HOSTS if h != attacker_src])
             raw = tmpl.format(n=r.randint(18, 45), m=r.randint(6, 20), src=attacker_src,
                               dst=dst, user=attacker_user, d=r.randint(0, 9))
@@ -79,7 +88,7 @@ def generate_board1(seed):
         else:
             victim = r.choice(_USERS)
             dst = r.choice(_HOSTS)
-            raw = r.choice(_BENIGN).format(user=victim, dst=dst, d=r.randint(0, 9))
+            raw = r.choice(benign_pool).format(user=victim, dst=dst, d=r.randint(0, 9))
             key = {"verdict": "false_positive", "severity": "low",
                    "technique": None, "iocs": []}
             signal = "Routine activity"
@@ -87,7 +96,7 @@ def generate_board1(seed):
         alerts.append({"id": aid, "timestamp": ts, "host": host,
                        "signal": signal, "raw": raw, "_key": key})
     r.shuffle(alerts)
-    return {"board": 1, "cohort_theme": "sevenkingdoms.local",
+    return {"board": 1, "cohort_theme": "sevenkingdoms.local", "variant": v.get("id"),
             "attacker": {"src": attacker_src, "user": attacker_user},  # for the key only
             "alerts": alerts}
 
@@ -350,6 +359,13 @@ _B3_TNAME = {
     "T1053.005": "Scheduled-task persistence",
     "T1071.001": "Web C2 beaconing",
     "T1048.003": "Exfiltration over DNS",
+    # expanded catalog (S4) - enables detection-engineering variants with different technique sets
+    "T1003.002": "SAM hive dump via reg save",
+    "T1136.001": "Local account creation",
+    "T1562.001": "Disable security tooling",
+    "T1490": "Inhibit system recovery (shadow delete)",
+    "T1552.001": "Credential search in files",
+    "T1569.002": "Service execution (sc create)",
 }
 
 
@@ -391,6 +407,25 @@ def _b3_mal(r, tech):
     elif tech == "T1048.003":
         e.update(event_type="dns", domain=dom,
                  command="240 TXT queries to %s, high-entropy labels, ~3MB over 20m" % dom)
+    elif tech == "T1003.002":
+        e.update(image="reg.exe", parent="cmd.exe",
+                 command="reg.exe save HKLM\\SAM C:\\ProgramData\\%s.sav" % _b3_tok(r, 5))
+    elif tech == "T1136.001":
+        e.update(image="net.exe", parent="cmd.exe",
+                 command="net.exe user svc_%s P@ss%s /add" % (_b3_tok(r, 4), _b3_tok(r, 4)))
+    elif tech == "T1562.001":
+        e.update(image="powershell.exe", parent=r.choice(["cmd.exe", "explorer.exe"]),
+                 command="powershell.exe Set-MpPreference -DisableRealtimeMonitoring $true")
+    elif tech == "T1490":
+        e.update(image="vssadmin.exe", parent="cmd.exe",
+                 command="vssadmin.exe delete shadows /all /quiet")
+    elif tech == "T1552.001":
+        e.update(image="findstr.exe", parent="cmd.exe",
+                 command="findstr.exe /si password C:\\Users\\%s\\*.config" % _b3_tok(r, 4))
+    elif tech == "T1569.002":
+        e.update(image="sc.exe", parent="cmd.exe", dest=dst,
+                 command="sc.exe \\\\%s create %s binPath= c:\\%s.exe start= auto"
+                         % (dst, _b3_tok(r, 5), _b3_tok(r, 5)))
     return e
 
 
@@ -398,7 +433,7 @@ def _b3_mal(r, tech):
 # technique: they share the image but not the malicious command tokens, so an
 # image-only rule false-positives here and loses precision.
 def _b3_benign(r):
-    H, U, dst = r.choice(_B3_HOSTS), r.choice(_B3_USERS), r.choice(_B3_HOSTS)
+    H, U = r.choice(_B3_HOSTS), r.choice(_B3_USERS)
     choices = [
         {"event_type": "process", "image": "certutil.exe", "parent": "cmd.exe",
          "command": "certutil.exe -hashfile C:\\Users\\%s\\Downloads\\setup.exe SHA256" % U.split(".")[-1]},
@@ -422,6 +457,19 @@ def _b3_benign(r):
          "domain": "outlook.office365.com", "command": "HTTPS to outlook.office365.com"},
         {"event_type": "dns", "domain": "teams.microsoft.com", "command": "A query teams.microsoft.com"},
         {"event_type": "dns", "domain": "aka.ms", "command": "A query aka.ms"},
+        # near-misses for the expanded catalog: same image, legitimate command (no malicious tokens)
+        {"event_type": "process", "image": "reg.exe", "parent": "cmd.exe",
+         "command": "reg.exe query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion /v ProgramFilesDir"},
+        {"event_type": "process", "image": "net.exe", "parent": "cmd.exe",
+         "command": "net.exe user %USERNAME%"},
+        {"event_type": "process", "image": "powershell.exe", "parent": "explorer.exe",
+         "command": "powershell.exe Get-MpComputerStatus | Select RealTimeProtectionEnabled"},
+        {"event_type": "process", "image": "vssadmin.exe", "parent": "cmd.exe",
+         "command": "vssadmin.exe list shadows"},
+        {"event_type": "process", "image": "findstr.exe", "parent": "cmd.exe",
+         "command": "findstr.exe /i error C:\\Logs\\app.log"},
+        {"event_type": "process", "image": "sc.exe", "parent": "cmd.exe",
+         "command": "sc.exe query spooler"},
     ]
     e = {"event_type": "process", "host": H, "user": U, "image": "", "parent": "",
          "command": "", "dest": "", "domain": ""}
@@ -445,12 +493,17 @@ def _b3_corpus(r, techniques, k_per_tech, benign_count):
     return corpus
 
 
-def generate_board3(seed):
+def generate_board3(seed, variant=None):
     """The SHOWN requirements: one labeled sample per technique plus a benign
     baseline (with near-miss decoys). Grading uses a hidden holdout derived from
-    the same seed, so nothing secret lives in what the ranger receives."""
-    r = _random.Random("board3:shown:" + str(seed))
-    techniques = list(_B3_TECHNIQUES)
+    the same seed, so nothing secret lives in what the ranger receives.
+
+    When `variant` is supplied, the technique set to detect comes from the variant, so two cohorts
+    face different detection-engineering problems: a ruleset built for one cohort's techniques does
+    not automatically cover another's. variant=None preserves the original eight-technique set."""
+    v = variant or {}
+    r = _random.Random("board3:shown:%s:%s" % (v.get("id", ""), seed))
+    techniques = list(v.get("techniques") or _B3_TECHNIQUES)
     threats = []
     for tech in techniques:
         e = _b3_mal(r, tech)
@@ -463,7 +516,7 @@ def generate_board3(seed):
         e = _b3_benign(r)
         baseline.append({k: e[k] for k in ("event_type", "host", "user", "image",
                                            "parent", "command", "dest", "domain")})
-    return {"board": 3, "_seed": str(seed), "_techniques": techniques,
+    return {"board": 3, "_seed": str(seed), "_variant": v.get("id"), "_techniques": techniques,
             "cohort_theme": "corp.local", "threats": threats, "baseline": baseline}
 
 
@@ -482,8 +535,8 @@ def score_board3(scenario, submission):
     validation metrics and per-rule firing counts, never the holdout contents."""
     seed = scenario.get("_seed", "")
     techniques = scenario.get("_techniques", list(_B3_TECHNIQUES))
-    holdout = _b3_corpus(_random.Random("board3:holdout:" + seed), techniques,
-                         k_per_tech=4, benign_count=60)
+    holdout = _b3_corpus(_random.Random("board3:holdout:%s:%s" % (scenario.get("_variant", ""), seed)),
+                         techniques, k_per_tech=4, benign_count=60)
 
     rules = submission.get("rules") if isinstance(submission, dict) else None
     matchers, errors = _detect.compile_ruleset(rules or [])
@@ -560,38 +613,63 @@ def _b4_acct(u):
     return "corp\\" + u
 
 
-def generate_board4(seed):
-    r = _random.Random("board4:" + str(seed))
+# Default IR kill chain (legacy behavior) as a declarative template consumed by generate_board4.
+# Each step: (technique, event_type, host_role, acct_role, detail_template, is_persistence).
+# host_role in {pz,dst,third}; acct_role in {u1,u2}; the detail template may reference
+# {pz} {dst} {third} {u1} {u2} {u1acct} {u2acct} {c2} {tok}. A step whose host_role is `third` is
+# included only when the incident uses a third host.
+_B4_DEFAULT_CHAIN = [
+    ("T1059.001", "process", "pz", "u1",
+     "powershell.exe -nop -w hidden -enc JAB{tok}== on {pz}", False),
+    ("T1087.002", "process", "pz", "u1", 'net.exe group "Domain Admins" /domain on {pz}', False),
+    ("T1003.001", "process", "pz", "u1",
+     "rundll32.exe comsvcs.dll MiniDump lsass -> {tok}.dmp on {pz}", False),
+    ("T1021.002", "auth", "dst", "u2",
+     "ADMIN$ logon to {dst} as {u2acct} from {pz}, then service create", False),
+    ("T1053.005", "process", "dst", "u2",
+     "schtasks /create /ru SYSTEM /tn 'EdgeUpdateX' /tr powershell on {dst}", True),
+    ("T1021.002", "auth", "third", "u2", "ADMIN$ logon to {third} as {u2acct} from {dst}", False),
+    ("T1071.001", "network", "dst", "u2", "{dst} -> {c2}:443 HTTPS beacon every 60s, 8h", False),
+    ("T1048.003", "dns", "dst", "u2", "{dst} -> {c2} 200+ TXT lookups, ~2MB exfil", False),
+]
+
+
+def generate_board4(seed, variant=None):
+    """Seed-deterministic IR / forensics incident. When `variant` is supplied the initial-access
+    vector pool, the ordered kill chain (techniques, order, lateral pattern), the persistence
+    mechanism and whether a third host is involved all come from the variant, so two cohorts
+    investigate materially different incidents, not the same chain with renamed users. variant=None
+    reproduces the original incident shape. The ground-truth grading contract (patient zero, initial
+    access, scope, timeline, persistence) is unchanged."""
+    v = variant or {}
+    vectors = v.get("vectors") or _B4_VECTORS
+    chain = v.get("chain") or _B4_DEFAULT_CHAIN
+    r = _random.Random("board4:%s:%s" % (v.get("id", ""), seed))
     pz = r.choice(_B4_HOSTS)                                   # patient zero
     dst = r.choice([h for h in _B4_HOSTS if h != pz])         # lateral target
-    third = r.choice([h for h in _B4_HOSTS if h not in (pz, dst)]) if r.random() < 0.5 else None
+    use_third = v.get("use_third") if "use_third" in v else (r.random() < 0.5)
+    third = r.choice([h for h in _B4_HOSTS if h not in (pz, dst)]) if use_third else None
     u1 = r.choice(_B4_USERS)                                   # initial account
     u2 = r.choice(_B4_PRIV)                                    # escalated account
-    c2 = r.choice(_B4_C2)
-    vtid, vtname, vet, vtmpl = r.choice(_B4_VECTORS)
+    c2 = r.choice(v.get("c2_pool") or _B4_C2)
+    vtid, vtname, vet, vtmpl = r.choice(vectors)
     base = _dt.datetime(2026, 5, r.randint(1, 20), r.randint(1, 6), r.randint(0, 59))
 
-    # Ordered kill chain: (technique, event_type, host, account, detail, persistence?)
-    steps = [
-        (vtid, vet, pz, u1, vtmpl.format(tok=_b3_tok(r, 5), H=pz, U=u1, d=r.randint(2, 250)), False),
-        ("T1059.001", "process", pz, u1,
-         "powershell.exe -nop -w hidden -enc JAB%s== on %s" % (_b3_tok(r, 12), pz), False),
-        ("T1087.002", "process", pz, u1,
-         'net.exe group "Domain Admins" /domain on %s' % pz, False),
-        ("T1003.001", "process", pz, u1,
-         "rundll32.exe comsvcs.dll MiniDump lsass -> %s.dmp on %s" % (_b3_tok(r, 4), pz), False),
-        ("T1021.002", "auth", dst, u2,
-         "ADMIN$ logon to %s as %s from %s, then service create" % (dst, _b4_acct(u2), pz), False),
-        ("T1053.005", "process", dst, u2,
-         "schtasks /create /ru SYSTEM /tn 'EdgeUpdateX' /tr powershell on %s" % dst, True),
-        ("T1071.001", "network", dst, u2,
-         "%s -> %s:443 HTTPS beacon every 60s, 8h" % (dst, c2), False),
-        ("T1048.003", "dns", dst, u2,
-         "%s -> %s 200+ TXT lookups, ~2MB exfil" % (dst, c2), False),
-    ]
-    if third:
-        steps.insert(7, ("T1021.002", "auth", third, u2,
-                         "ADMIN$ logon to %s as %s from %s" % (third, _b4_acct(u2), dst), False))
+    _hosts = {"pz": pz, "dst": dst, "third": third}
+    _accts = {"u1": u1, "u2": u2}
+    fmt = {"pz": pz, "dst": dst, "third": third, "u1": u1, "u2": u2,
+           "u1acct": _b4_acct(u1), "u2acct": _b4_acct(u2), "c2": c2, "m": r.randint(6, 30)}
+
+    # Ordered kill chain: initial access from the vector pool, then the variant's chain.
+    steps = [(vtid, vet, pz, _b4_acct(u1),
+              vtmpl.format(tok=_b3_tok(r, 5), H=pz, U=u1, d=r.randint(2, 250)), False)]
+    for (tid, et, host_role, acct_role, tmpl, is_persist) in chain:
+        host = _hosts.get(host_role)
+        if host is None:               # a `third`-host step with no third host in this incident
+            continue
+        acct = _b4_acct(_accts.get(acct_role, u1))
+        detail = tmpl.format(tok=_b3_tok(r, 5), **fmt)
+        steps.append((tid, et, host, acct, detail, is_persist))
 
     affected_hosts = sorted({pz, dst} | ({third} if third else set()))
     affected_accounts = sorted({_b4_acct(u1), _b4_acct(u2)})

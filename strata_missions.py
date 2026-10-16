@@ -462,6 +462,38 @@ def get(board, version=None):
     return out
 
 
+def for_binding(binding, *, broker_mod=None):
+    """A scenario-AWARE mission package for a candidate's actual assignment. Overlays the approved,
+    candidate-safe variant context (cohort identity, pinned scenario version, variant title and
+    business context) onto the board mission, WITHOUT revealing the hidden incident family, truth,
+    ground-truth ids, attack sequence or intended detection gaps. Returns None when the board has no
+    mission package. `binding` is a models.ScenarioBinding."""
+    try:
+        from siem import board_variants as bv
+    except Exception:  # noqa: BLE001
+        bv = None
+    board = int(binding.board)
+    pkg = get(board)
+    if not pkg:
+        return None
+    out = dict(pkg)
+    out["cohort"] = binding.cohort
+    out["scenario_version"] = binding.spec_version
+    out["scenario_ref"] = binding.spec_id
+    out["variant_id"] = binding.variant_id
+    # candidate-safe variant framing (never the family/truth): the variant's own business_context is
+    # authored to describe the mission, not solve it.
+    if bv is not None:
+        vtitle = bv.title(board, binding.variant_id)
+        vctx = bv.business_context(board, binding.variant_id)
+        if vtitle:
+            out["title"] = vtitle
+        if vctx:
+            out["business_context"] = vctx
+    out["scenario_bound"] = True
+    return out
+
+
 def environment_availability(board, *, broker_mod=None, siem_live=None):
     """Compute REAL environment availability for a board's mission. Documentation existing never
     implies availability. Returns {"available", "state", "message"}.

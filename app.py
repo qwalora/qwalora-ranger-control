@@ -40,6 +40,7 @@ import githuboauth
 import program as P
 import scenarios
 import strata_missions
+import strata_assignment
 import notify
 import signing
 from broker import broker_status
@@ -706,6 +707,11 @@ def create_app():
              .order_by(ScenarioAssignment.id.desc()).first())
         return a.seed if a else None
 
+    def _strata_portfolios_on():
+        """S3/S4 cohort-portfolio integration flag (default OFF). When off, the seed-only legacy
+        dataset/grade path is used and nothing changes in production."""
+        return os.environ.get("RANGER_STRATA_PORTFOLIOS", "").strip().lower() in ("1", "true", "yes", "on")
+
     def _slots_used(host="primary"):
         """Isolated ranges currently holding a RAM slot on a host."""
         return (RangeRequest.query
@@ -1356,6 +1362,23 @@ def create_app():
         n = c.current_board
         if not scenarios.has_board(n):
             return jsonify(error="dataset for this board is not available yet", board=n), 501
+        # S3/S4 cohort portfolios (default OFF). When enabled, boards 1/3/4 serve the candidate's
+        # bound, approved variant's dataset instead of the single seed-only scenario. Qualification
+        # must not silently fall back to a generic scenario, so an exhausted/empty catalog is an
+        # explicit error, never the legacy path.
+        if _strata_portfolios_on() and n in (1, 3, 4):
+            try:
+                pf = strata_assignment.cohort_portfolio(db, c.cohort, n)
+                binding = strata_assignment.assign(db, c, n, portfolio=pf)
+                scen = strata_assignment.generate(binding)
+                view = strata_assignment.candidate_view(binding, scen)
+                _touch(c, n); db.session.commit()
+                return jsonify(ok=True, board=n, seed=binding.seed, kind=scenarios.kind(n),
+                               scenario_ref=binding.spec_id, scenario_version=binding.spec_version,
+                               variant=binding.variant_id, dataset=view), 200
+            except strata_assignment.AssignmentExhausted as e:
+                return jsonify(error="no approved scenario is available to assign", detail=str(e),
+                               board=n), 503
         seed = _current_seed(c)
         if not seed:
             _ensure_seed(c, n)
@@ -1388,6 +1411,26 @@ def create_app():
                 return jsonify(error="submission must be valid JSON"), 400
         if not isinstance(submission, dict):
             return jsonify(error="a submission object is required"), 400
+        # S3/S4: when portfolios are enabled, grade boards 1/3/4 against the candidate's PINNED
+        # bound variant+seed (never a generic scenario). Board 2 qualification is unchanged (it is
+        # graded via the signed-citation /case workflow, not here).
+        if _strata_portfolios_on() and n in (1, 3, 4):
+            from models import ScenarioBinding
+            binding = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
+                       .order_by(ScenarioBinding.attempt.desc()).first())
+            if binding is None:
+                return jsonify(error="no scenario is bound for this attempt; open your dataset first",
+                               board=n), 409
+            score, per_alert = strata_assignment.grade(binding, submission)
+            _record_objective(c, n, score)
+            _touch(c, n)
+            promoted = _evaluate_gate(c)
+            db.session.commit()
+            return jsonify(ok=True, board=n, kind=scenarios.kind(n), score=score,
+                           passed=score >= P.PASS_BAR, per_alert=per_alert, promoted=promoted,
+                           scenario_ref=binding.spec_id, scenario_version=binding.spec_version,
+                           current_board=c.current_board, status=c.status,
+                           note="Report approval is also required to clear the board."), 200
         seed = _current_seed(c)
         score, per_alert = scenarios.grade(n, seed, submission)
         _record_objective(c, n, score)
@@ -2780,7 +2823,18 @@ def create_app():
         if not c.is_active:
             abort(403)
         n = c.current_board
-        pkg = strata_missions.get(n)
+        # scenario-aware mission: when portfolios are enabled and this attempt is bound to an
+        # approved variant, overlay the variant's candidate-safe context (cohort, scenario version,
+        # business context) without revealing the hidden family or truth.
+        pkg = None
+        if _strata_portfolios_on():
+            from models import ScenarioBinding
+            binding = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
+                       .order_by(ScenarioBinding.attempt.desc()).first())
+            if binding is not None:
+                pkg = strata_missions.for_binding(binding)
+        if pkg is None:
+            pkg = strata_missions.get(n)
         if not pkg:
             abort(404)
         avail = strata_missions.environment_availability(n)
