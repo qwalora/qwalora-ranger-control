@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Candidate Workbench · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="/workbench">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+  </div></header>
+
+  <div class="page-main" style="max-width:1040px">
+    <div class="card">
+      <div class="card-head">
+        <span class="eyebrow"><span class="d"></span>{{ vm.pathway_brand }} · Cohort {{ vm.candidate.cohort }} · {{ vm.candidate.status }}</span>
+        <h1 class="t">Candidate Workbench</h1>
+        <p class="mut" style="margin:6px 0 0;font-size:13.5px">Independent technical investigation console. Build evidence-backed conclusions from authorized observations; outcomes are independently verified.</p>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
+
+        <div class="rowline" style="gap:14px;flex-wrap:wrap">
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ ic('layers','ic ic-sm') }} {{ vm.pathway|upper }}</span>
+          <span class="pill"><span class="dot"></span>{{ ic('users','ic ic-sm') }} {{ vm.candidate.cohort }}</span>
+          {% if vm.evidence_pending %}
+          <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('inbox','ic ic-sm') }} {{ vm.evidence_pending }} evidence awaiting review</span>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <span class="label">Qualification</span>
+          {% if vm.qualification.active %}
+          <div class="verify-banner vb-ok">{{ ic('shield','ic') }}<div><b>Active</b><span>{{ vm.qualification.statement }}</span></div></div>
+          {% else %}
+          <div class="verify-banner vb-warn">{{ ic('lock','ic') }}<div><b>Inactive</b><span>{{ vm.qualification.statement }}</span></div></div>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <span class="label">Assigned investigations</span>
+          {% if not vm.flags.case_access %}
+            <div class="rec-row rec-locked" style="opacity:.6">{{ ic('lock','ic ic-sm') }} <span class="rec-meta">Case access is not enabled in this environment.</span></div>
+          {% elif vm.cases %}
+            <div class="record">
+            {% for c in vm.cases %}
+              <a class="rec-row" href="/workbench/case/{{ c.case_id }}" style="text-decoration:none">
+                <span class="rec-pip">{{ ic('shield','ic ic-sm') }}</span>
+                <span class="rec-id">Case #{{ c.case_id }} <span class="dim mono" style="font-weight:400">v{{ c.scenario_version }}</span></span>
+                <span class="rec-meta">{{ c.pathway|upper }} · {{ c.plane }}</span>
+                <span class="pill {{ 'pill-ok' if c.status=='submitted' else 'pill-violet' }}"><span class="dot"></span>{{ c.status }}</span>
+              </a>
+            {% endfor %}
+            </div>
+          {% else %}
+            <div class="rec-row" style="opacity:.7">{{ ic('inbox','ic ic-sm') }} <span class="rec-meta">No investigations are currently assigned to you.</span></div>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <span class="label">Environment controls (development)</span>
+          <div class="rowline" style="gap:8px;flex-wrap:wrap">
+            {% for k,v in vm.flags.items() %}
+            <span class="pill {{ 'pill-ok' if v else '' }}" style="{% if not v %}opacity:.55{% endif %}"><span class="dot {{ 'dot-ok' if v else '' }}"></span>{{ k }}</span>
+            {% endfor %}
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <footer class="afoot" style="text-align:center;padding:18px;color:var(--dim);font-size:12px">Qwalora Ranger · Workbench (development)</footer>
+  </div>
+</div>
+{% endblock %}

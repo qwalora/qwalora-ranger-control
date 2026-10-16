@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Submission #{{ vm.sid }} · Review{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="/workbench/review/submissions">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+  </div></header>
+  <div class="page-main" style="max-width:960px">
+    <a class="btn btn-ghost btn-sm" href="/workbench/review/submissions" style="margin-bottom:14px">{{ ic('arrow','ic ic-sm') }} Submissions</a>
+    <div class="card">
+      <div class="card-head">
+        <span class="eyebrow"><span class="d"></span>{{ vm.pathway|upper }} · {{ vm.cohort }}</span>
+        <h1 class="t" style="font-size:22px">Submission #{{ vm.sid }} · Case #{{ vm.case_id }}</h1>
+        <div class="rowline" style="gap:8px;margin-top:8px">
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ vm.status }}</span>
+          <span class="pill {{ 'pill-ok' if vm.receipt_ok else 'pill-amber' }}"><span class="dot {{ 'dot-ok' if vm.receipt_ok else 'dot-amber' }}"></span>receipt {{ 'verified' if vm.receipt_ok else 'unverified' }}</span>
+        </div>
+      </div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+        <div class="field"><span class="label">Findings</span>
+          {% for f in vm.payload.findings %}
+          <div class="rcard" style="padding:12px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px">
+            <b style="font-size:13.5px">{{ f.claim }}</b>
+            <div class="dim" style="font-size:12px;margin-top:6px">{% if f.significance %}significance: {{ f.significance }}{% endif %}{% if f.evidence_refs %} · evidence: <span class="mono">{{ f.evidence_refs|join(', ') }}</span>{% endif %}</div>
+          </div>
+          {% else %}<p class="dim" style="font-size:12px">No findings.</p>{% endfor %}
+        </div>
+        <div class="field"><span class="label">Attached evidence</span>
+          <div class="record">
+          {% for e in vm.evidence %}
+            <div class="rec-row"><span class="rec-pip">{{ ic('hash','ic ic-sm') }}</span><span class="rec-id">{{ e.evidence_type }} <span class="dim mono" style="font-weight:400">{{ e.sha256 }}</span></span><span class="rec-meta">{{ e.media_type or '—' }}</span><span class="pill"><span class="dot"></span>{{ e.validation_state }}</span></div>
+          {% else %}<div class="rec-row" style="opacity:.7"><span class="rec-meta">No evidence attached.</span></div>{% endfor %}
+          </div>
+        </div>
+        {% if vm.receipt %}
+        <div class="field"><span class="label">Signed receipt</span>
+          <div class="tokenbox"><code>{{ vm.receipt.receipt_hash }}</code></div>
+          <p class="dim" style="font-size:11.5px;margin:6px 0 0">version {{ vm.receipt.submission_version }} · {{ vm.receipt.evidence_refs|length }} evidence ref(s) · submitted {{ vm.receipt.submitted_ts }}</p>
+        </div>
+        {% endif %}
+        <div class="verify-banner vb-warn">{{ ic('lock','ic') }}<div><b>Verification is independent</b><span>This package is candidate-submitted. Submission is not qualification; the outcome is established by authorized verification and reviewer adjudication, not by self-attestation.</span></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

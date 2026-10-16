@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}Case #{{ vm.case.case_id }} · Workbench{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="/workbench">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+  </div></header>
+
+  <div class="page-main" style="max-width:1120px">
+    <a class="btn btn-ghost btn-sm" href="/workbench" style="margin-bottom:14px">{{ ic('arrow','ic ic-sm') }} Workbench</a>
+
+    {% if vm.err %}
+    <div class="verify-banner vb-warn" style="margin-bottom:14px">{{ ic('flag','ic') }}<div><b>Action not completed</b><span>{{ vm.err }}</span></div></div>
+    {% endif %}
+
+    <div style="display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:18px;align-items:start">
+
+      <!-- LEFT: authorized scope (truth-safe) -->
+      <div class="card">
+        <div class="card-head">
+          <span class="eyebrow"><span class="d"></span>{{ vm.pathway|upper }} · {{ vm.case.plane }}</span>
+          <h1 class="t" style="font-size:20px">Case #{{ vm.case.case_id }}</h1>
+          <span class="pill {{ 'pill-ok' if vm.case.status=='submitted' else 'pill-violet' }}" style="margin-top:8px"><span class="dot"></span>{{ vm.case.status }}</span>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+          <div class="field"><span class="label">Authorized scope</span><p style="margin:0;font-size:13px;color:var(--med)">{{ vm.case.authorized_scope }}</p></div>
+          <div class="field"><span class="label">Technical objectives</span>
+            <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--med);display:flex;flex-direction:column;gap:5px">
+              {% for o in vm.case.technical_objectives %}<li>{{ o }}</li>{% endfor %}
+            </ul>
+          </div>
+          <div class="field"><span class="label">Evidence requirements</span>
+            <div class="record">
+            {% for r in vm.case.evidence_requirements %}
+              <div class="rec-row"><span class="rec-pip">{{ ic('layers','ic ic-sm') }}</span><span class="rec-id">{{ r.kind }}</span><span class="rec-meta">{{ r.note }}</span>{% if r.required %}<span class="pill pill-amber"><span class="dot dot-amber"></span>required</span>{% endif %}</div>
+            {% endfor %}
+            </div>
+          </div>
+          <div class="field"><span class="label">Permitted actions</span>
+            <div class="rowline" style="gap:6px;flex-wrap:wrap">{% for a in vm.case.permitted_actions %}<span class="pill" style="font-size:10.5px">{{ a }}</span>{% endfor %}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: workspace -->
+      <div style="display:flex;flex-direction:column;gap:18px">
+
+        <!-- evidence -->
+        <div class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+          <div class="rowline" style="justify-content:space-between"><span class="label" style="font-size:12.5px">{{ ic('inbox','ic ic-sm') }} Evidence</span><span class="dim mono" style="font-size:11px">{{ vm.evidence|length }} item(s)</span></div>
+          {% if vm.evidence %}
+          <div class="record">
+          {% for e in vm.evidence %}
+            <div class="rec-row" style="grid-template-columns:auto 1.2fr 1fr auto auto">
+              <span class="rec-pip">{{ ic('hash','ic ic-sm') }}</span>
+              <span class="rec-id">{{ e.evidence_type }} <span class="dim mono" style="font-weight:400">{{ e.sha256 }}</span></span>
+              <span class="rec-meta">{{ e.media_type or '—' }} · {{ e.bytes or 0 }}B</span>
+              <span class="pill {{ 'pill-ok' if e.scan_state=='clean' else 'pill-amber' }}"><span class="dot {{ 'dot-ok' if e.scan_state=='clean' else 'dot-amber' }}"></span>{{ e.scan_state }}</span>
+              <a class="btn btn-ghost btn-sm" href="/workbench/case/{{ vm.case.case_id }}/evidence/{{ e.evidence_id }}/download">{{ ic('arrow','ic ic-sm') }}</a>
+            </div>
+          {% endfor %}
+          </div>
+          {% else %}<div class="rec-row" style="opacity:.7">{{ ic('inbox','ic ic-sm') }}<span class="rec-meta">No evidence submitted yet.</span></div>{% endif %}
+
+          {% if vm.flags.evidence_submit and not vm.locked %}
+          <form method="post" action="/workbench/case/{{ vm.case.case_id }}/evidence" enctype="multipart/form-data" class="rowline" style="gap:8px;align-items:flex-end">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}">
+            <div class="field" style="flex:1"><span class="label">Evidence type</span>
+              <select class="input" name="evidence_type">{% for t in vm.permitted_evidence_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}</select>
+            </div>
+            <div class="field" style="flex:1"><span class="label">File</span><input class="input" type="file" name="file" required></div>
+            <button class="btn btn-outline" type="submit">{{ ic('plus','ic ic-sm') }} Submit evidence</button>
+          </form>
+          <p class="dim" style="font-size:11.5px;margin:0">Submitted evidence is preserved, hashed, and marked <b>needs review</b> / <b>unscanned</b>. It is not validated by submission and does not enter any decoding workflow automatically.</p>
+          {% elif vm.locked %}<p class="dim" style="font-size:11.5px;margin:0">Submission is final; evidence is locked.</p>{% endif %}
+        </div></div>
+
+        <!-- findings -->
+        <div class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+          <span class="label" style="font-size:12.5px">{{ ic('edit','ic ic-sm') }} Technical findings</span>
+          {% if vm.payload.findings %}
+          <div style="display:flex;flex-direction:column;gap:10px">
+          {% for f in vm.payload.findings %}
+            <div class="rcard" style="padding:12px 14px;border:1px solid var(--line);border-radius:10px">
+              <div class="rowline" style="justify-content:space-between"><b style="font-size:13.5px">{{ f.claim }}</b>
+                {% if not vm.locked %}<form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="remove_finding"><input type="hidden" name="index" value="{{ loop.index0 }}"><button class="btn btn-ghost btn-sm" type="submit">remove</button></form>{% endif %}
+              </div>
+              <div class="dim" style="font-size:12px;margin-top:6px;display:grid;grid-template-columns:auto 1fr;gap:3px 10px">
+                {% if f.scope %}<span>scope</span><span>{{ f.scope }}</span>{% endif %}
+                {% if f.methodology %}<span>method</span><span>{{ f.methodology }}</span>{% endif %}
+                {% if f.observed_outcome %}<span>observed</span><span>{{ f.observed_outcome }}</span>{% endif %}
+                {% if f.significance %}<span>significance</span><span>{{ f.significance }}</span>{% endif %}
+                {% if f.remediation %}<span>remediation</span><span>{{ f.remediation }}</span>{% endif %}
+                {% if f.limitations %}<span>limits</span><span>{{ f.limitations }}</span>{% endif %}
+                {% if f.evidence_refs %}<span>evidence</span><span class="mono">{{ f.evidence_refs|join(', ') }}</span>{% endif %}
+              </div>
+            </div>
+          {% endfor %}
+          </div>
+          {% else %}<p class="dim" style="font-size:12px;margin:0">No findings recorded yet. Multiple technically valid approaches are supported; there is no single expected answer.</p>{% endif %}
+
+          {% if not vm.locked %}
+          <form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" style="display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="add_finding">
+            <div class="field"><span class="label">Technical claim</span><input class="input" name="claim" placeholder="What you established" required></div>
+            <div class="rowline" style="gap:8px"><div class="field" style="flex:1"><span class="label">Relevant scope</span><input class="input" name="scope"></div><div class="field" style="flex:1"><span class="label">Security significance</span><input class="input" name="significance"></div></div>
+            <div class="field"><span class="label">Reproduction methodology</span><textarea class="input" name="methodology" rows="2"></textarea></div>
+            <div class="field"><span class="label">Observed outcome</span><textarea class="input" name="observed_outcome" rows="2"></textarea></div>
+            <div class="rowline" style="gap:8px"><div class="field" style="flex:1"><span class="label">Remediation (if relevant)</span><input class="input" name="remediation"></div><div class="field" style="flex:1"><span class="label">Limitations</span><input class="input" name="limitations"></div></div>
+            {% if vm.evidence %}
+            <div class="field"><span class="label">Supporting evidence</span>
+              <div class="rowline" style="gap:10px;flex-wrap:wrap">{% for e in vm.evidence %}<label class="dim" style="font-size:11.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" name="finding_evidence_refs" value="{{ e.evidence_id }}"> {{ e.evidence_type }} {{ e.sha256 }}</label>{% endfor %}</div>
+            </div>{% endif %}
+            <button class="btn btn-outline" type="submit" style="align-self:flex-start">{{ ic('plus','ic ic-sm') }} Add finding</button>
+          </form>
+          {% endif %}
+        </div></div>
+
+        <!-- notes + submission -->
+        <div class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+          {% if not vm.locked %}
+          <form method="post" action="/workbench/case/{{ vm.case.case_id }}/draft" style="display:flex;flex-direction:column;gap:8px">
+            <input type="hidden" name="csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="save">
+            <div class="field"><span class="label">Investigation notes (one per line)</span><textarea class="input" name="notes" rows="3">{{ vm.payload.notes|join('\n') if vm.payload.notes }}</textarea></div>
+            <div class="field"><span class="label">Overall approach</span><input class="input" name="approach" value="{{ vm.payload.approach or '' }}"></div>
+            <div class="field"><span class="label">Package evidence references</span>
+              <div class="rowline" style="gap:10px;flex-wrap:wrap">{% for e in vm.evidence %}<label class="dim" style="font-size:11.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" name="evidence_refs" value="{{ e.evidence_id }}" {% if e.evidence_id in vm.payload.evidence_refs %}checked{% endif %}> {{ e.evidence_type }} {{ e.sha256 }}</label>{% endfor %}</div>
+            </div>
+            <button class="btn btn-ghost" type="submit" style="align-self:flex-start">Save draft</button>
+          </form>
+          {% endif %}
+
+          <div class="field" style="border-top:1px solid var(--line);padding-top:12px">
+            <span class="label">Submission</span>
+            {% if vm.locked %}
+              <div class="verify-banner {{ 'vb-ok' if vm.receipt_ok else 'vb-warn' }}">{{ ic('lock','ic') }}<div><b>Submitted · immutable</b><span>Signed receipt {{ 'verified' if vm.receipt_ok else 'unverified' }}. Submission is not qualification; the outcome is independently verified.</span></div></div>
+            {% else %}
+              <form method="post" action="/workbench/case/{{ vm.case.case_id }}/submit" style="margin:0">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <button class="btn btn-primary" type="submit">{{ ic('shield','ic ic-sm') }} Submit investigation package</button>
+              </form>
+              <p class="dim" style="font-size:11.5px;margin:6px 0 0">Final submission is immutable and produces a signed receipt. Self-attestation does not establish verified technical success.</p>
+            {% endif %}
+          </div>
+
+          <div class="field">
+            <span class="label">Assessment status</span>
+            <div class="rowline" style="gap:8px;flex-wrap:wrap">
+              <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ vm.status.state }}</span>
+              {% if vm.status.qualification_active is defined %}<span class="pill" style="opacity:.7"><span class="dot"></span>qualification {{ 'active' if vm.status.qualification_active else 'inactive' }}</span>{% endif %}
+            </div>
+            {% if vm.status.note %}<p class="dim" style="font-size:11.5px;margin:6px 0 0">{{ vm.status.note }}</p>{% endif %}
+          </div>
+        </div></div>
+
+      </div>
+    </div>
+    <footer class="afoot" style="text-align:center;padding:18px;color:var(--dim);font-size:12px">Qwalora Ranger · Workbench (development)</footer>
+  </div>
+</div>
+{% endblock %}

@@ -2873,6 +2873,16 @@ def create_app():
     except Exception as e:  # noqa: BLE001
         app.logger.warning("case UI not registered: %s", e)
 
+    # F5 Candidate Workbench (/workbench). Behind the RANGER_WORKBENCH feature flag (routes 404
+    # when off) so production stays dark. Pathway-aware; reuses the candidate session, models,
+    # evidence contracts and signing. No production candidate access is authorized.
+    try:
+        import workbench_routes
+        workbench_routes.register(app, Candidate, db,
+                                  {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("workbench not registered: %s", e)
+
     return app
 
 
