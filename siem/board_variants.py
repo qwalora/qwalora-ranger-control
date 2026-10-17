@@ -272,8 +272,106 @@ VARIANTS = {
                            "chain": _B4_CHAIN_VPN_REGISTRY, "use_third": True},
         },
     },
+    # --- Board 5 (Raider): single-domain GOAD AD red-team families. Material diversity is in the
+    # attack PATH: which identities are roastable, which dangerous ACL edge is the escalation, and
+    # the pivot host - not reshuffled names. Any two families differ on >= 2 declared axes.
+    5: {
+        "b5-kerberoast-genericall": {
+            "title": "Raider: service-ticket path",
+            "difficulty": "standard",
+            "competencies": ["ad-recon", "kerberoast", "acl-abuse", "lateral-movement", "dcsync"],
+            "business_context": "An authorized adversarial assessment of a single Active Directory "
+                                "domain. Establish a foothold, escalate through a dangerous ACL edge, "
+                                "and reach domain dominance with cited, reproducible evidence.",
+            "diversity": {"escalation_edge": "GenericAll", "roastable": "service-accounts",
+                          "lateral": "castelblack", "initial_access": "password-spray"},
+            "gen_params": {"id": "b5-kerberoast-genericall",
+                           "svc_pool": ["sql_svc", "http_svc"],
+                           "asrep_pool": ["brandon.stark", "missandei", "jon.snow", "samwell.tarly"],
+                           "lateral_pool": ["castelblack"], "escalation_edge": "GenericAll"},
+        },
+        "b5-asrep-writedacl": {
+            "title": "Raider: pre-auth path",
+            "difficulty": "standard",
+            "competencies": ["ad-recon", "asrep-roast", "acl-abuse", "lateral-movement", "dcsync"],
+            "business_context": "An authorized adversarial assessment of a single Active Directory "
+                                "domain where pre-authentication weaknesses open the initial path to "
+                                "privilege. Escalate and reach domain dominance with evidence.",
+            "diversity": {"escalation_edge": "WriteDACL", "roastable": "asrep-users",
+                          "lateral": "meereen", "initial_access": "asrep-roast"},
+            "gen_params": {"id": "b5-asrep-writedacl",
+                           "svc_pool": ["backup_svc", "web_svc"],
+                           "asrep_pool": ["brandon.stark", "missandei"],
+                           "lateral_pool": ["meereen"], "escalation_edge": "WriteDACL"},
+        },
+        "b5-delegation-forcechange": {
+            "title": "Raider: delegation path",
+            "difficulty": "advanced",
+            "competencies": ["ad-recon", "kerberoast", "targeted-acl", "lateral-movement", "dcsync"],
+            "business_context": "An authorized adversarial assessment of a single Active Directory "
+                                "domain where a targeted account-control edge is the escalation. "
+                                "Reach domain dominance with cited, reproducible evidence.",
+            "diversity": {"escalation_edge": "ForceChangePassword", "roastable": "mixed-identities",
+                          "lateral": "castelblack", "initial_access": "targeted-kerberoast"},
+            "gen_params": {"id": "b5-delegation-forcechange",
+                           "svc_pool": ["sql_svc", "web_svc"],
+                           "asrep_pool": ["jon.snow", "samwell.tarly"],
+                           "lateral_pool": ["castelblack"], "escalation_edge": "ForceChangePassword"},
+        },
+    },
+    # --- Board 6 (Vanguard): multi-forest capstone families. Material diversity is in the trust
+    # TOPOLOGY to cross, where the crown jewels live, and the escalation technique. Every family is
+    # unique on all four declared axes.
+    6: {
+        "b6-child-parent-sidhistory": {
+            "title": "Vanguard: child-to-parent capstone",
+            "difficulty": "advanced",
+            "competencies": ["forest-recon", "trust-abuse", "sid-history", "forest-persistence",
+                             "cross-forest"],
+            "business_context": "An authorized multi-domain capstone. Own a child domain, abuse the "
+                                "child-to-parent trust to seize the forest, and establish defensible, "
+                                "evidence-backed conclusions across the estate.",
+            "diversity": {"trust_topology": "child-to-parent", "crown_location": "parent-dc",
+                          "escalation": "SID-history", "initial_access": "child-spray"},
+            "gen_params": {"id": "b6-child-parent-sidhistory", "forest2_host_pool": ["castelblack"],
+                           "trust_topology": "child-to-parent", "crown_location": "parent-dc",
+                           "escalation": "SID-history"},
+        },
+        "b6-crossforest-trustkey": {
+            "title": "Vanguard: cross-forest capstone",
+            "difficulty": "advanced",
+            "competencies": ["forest-recon", "trust-key", "cross-forest", "forest-persistence",
+                             "exfiltration"],
+            "business_context": "An authorized multi-forest capstone. Pivot across a forest trust to "
+                                "compromise a second forest and recover the crown jewels with cited, "
+                                "reproducible evidence.",
+            "diversity": {"trust_topology": "cross-forest", "crown_location": "forest2-dc",
+                          "escalation": "trust-key", "initial_access": "forest-roast"},
+            "gen_params": {"id": "b6-crossforest-trustkey", "forest2_host_pool": ["meereen"],
+                           "trust_topology": "cross-forest", "crown_location": "forest2-dc",
+                           "escalation": "trust-key"},
+        },
+        "b6-bidirectional-golden": {
+            "title": "Vanguard: forest-persistence capstone",
+            "difficulty": "advanced",
+            "competencies": ["forest-recon", "golden-ticket", "forest-persistence", "cross-forest",
+                             "exfiltration"],
+            "business_context": "An authorized multi-forest capstone emphasising forest-wide "
+                                "persistence and recovery analysis. Seize the forest, establish "
+                                "persistence, and defend your conclusions with evidence.",
+            "diversity": {"trust_topology": "bidirectional", "crown_location": "root-dc",
+                          "escalation": "golden-ticket", "initial_access": "kerberoast-first"},
+            "gen_params": {"id": "b6-bidirectional-golden",
+                           "forest2_host_pool": ["castelblack", "meereen"],
+                           "trust_topology": "bidirectional", "crown_location": "root-dc",
+                           "escalation": "golden-ticket"},
+        },
+    },
 }
 
+# Boards whose variants the catalog registers by default. Boards 5/6 are registered explicitly in
+# Part 2 once their catalog/spec/simulate arms land; adding them here before that would make the
+# default register_all() try to simulate a board it cannot build yet.
 PORTFOLIO_BOARDS = (1, 2, 3, 4)
 
 

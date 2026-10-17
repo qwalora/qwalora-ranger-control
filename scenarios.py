@@ -845,7 +845,7 @@ def _flags_for(board, seed):
     return out
 
 
-def placement_vars(n, seed):
+def placement_vars(n, seed, gp=None):
     """STRATA S6 (section 17): the PINNED range-placement config the qwalora_flags Ansible role must
     use for this seed, so a flag's ACL lock references the SAME account the approved scenario names -
     never the role's fixed defaults. The brief randomizes the kerberoast service account and the
@@ -854,14 +854,14 @@ def placement_vars(n, seed):
     gets the board-6 placement map (the role defaults to board 5). Keys match the role's var names
     (passed through broker templateVars). Returns None for non-flag boards."""
     if n == 5:
-        t = generate_board5(seed)["targets"]
+        t = generate_board5(seed, gp)["targets"]
         return {"qwalora_flags_board": 5,
                 "qwalora_svc_account": t["kerberoast_account"],
                 "qwalora_asrep_account": t["asrep_user"],
                 "qwalora_dc_hostnames": list(_B5_DCS),
                 "qwalora_domain": _B5_DOMAIN}
     if n == 6:
-        generate_board6(seed)  # deterministic; validates the seed resolves
+        generate_board6(seed, gp)  # deterministic; validates the seed resolves
         return {"qwalora_flags_board": 6,
                 "qwalora_dc_hostnames": list(_B6_DCS),
                 "qwalora_domain": _B6_PARENT}
@@ -915,19 +915,32 @@ def _score_flags(scenario, submission):
 _FLAG_OBJECTIVES[5] = _B5_OBJECTIVES
 
 
-def generate_board5(seed):
+def generate_board5(seed, gp=None):
+    """Board 5 (Raider) world. S6 section 14: when a family's gen_params is supplied the world varies
+    MATERIALLY (which identities are roastable, which dangerous ACL edge is the escalation, which host
+    is the pivot), not just which names a seed happens to pick. gp=None keeps the legacy single-world
+    behaviour byte-for-byte (full account pools, generic edge) so the seed-only path is unchanged."""
     r = _random.Random("board5:" + str(seed))
-    svc = r.choice(_B5_SVC_ACCTS)
-    asrep_user = r.choice(_B5_ASREP_USERS)
-    lateral_host = r.choice(_B5_SERVERS)
+    gp = gp or {}
+    svc_pool = list(gp.get("svc_pool") or _B5_SVC_ACCTS)
+    asrep_pool = list(gp.get("asrep_pool") or _B5_ASREP_USERS)
+    lateral_pool = list(gp.get("lateral_pool") or _B5_SERVERS)
+    edge = gp.get("escalation_edge")   # e.g. GenericAll | WriteDACL | ForceChangePassword
+    svc = r.choice(svc_pool)
+    asrep_user = r.choice(asrep_pool)
+    lateral_host = r.choice(lateral_pool)
     fill = {"domain": _B5_DOMAIN, "svc": svc, "asrep_user": asrep_user, "lateral_host": lateral_host}
-    objectives = [{"id": oid, "name": name, "technique": tech,
-                   "hint": hint.format(**fill), "points": pts}
-                  for (oid, name, tech, hint, pts) in _B5_OBJECTIVES]
+    objectives = []
+    for (oid, name, tech, hint, pts) in _B5_OBJECTIVES:
+        h = hint.format(**fill)
+        if oid == "aclabuse" and edge:
+            h = ("Find and abuse a %s edge to escalate privileges. The flag is the proof of the "
+                 "takeover." % edge)
+        objectives.append({"id": oid, "name": name, "technique": tech, "hint": h, "points": pts})
     return {"board": 5, "cohort_theme": _B5_DOMAIN,
             "targets": {"domain": _B5_DOMAIN, "dcs": _B5_DCS, "servers": _B5_SERVERS,
                         "kerberoast_account": svc, "asrep_user": asrep_user,
-                        "lateral_host": lateral_host},
+                        "lateral_host": lateral_host, "escalation_edge": edge},
             "objectives": objectives,
             "_flags": _flags_for(5, seed)}
 
@@ -976,21 +989,38 @@ _B6_OBJECTIVES = [
 _FLAG_OBJECTIVES[6] = _B6_OBJECTIVES
 
 
-def generate_board6(seed):
+def generate_board6(seed, gp=None):
+    """Board 6 (Vanguard) multi-forest capstone. S6 section 14: a family's gen_params varies the
+    MATERIAL structure (trust topology to cross, which DC holds the crown jewels, the escalation
+    technique across the trust), so two families are genuinely different investigations rather than a
+    reskin. gp=None keeps the legacy single-world behaviour unchanged."""
     r = _random.Random("board6:" + str(seed))
+    gp = gp or {}
     child_dc = "winterfell"
     parent_dc = "kingslanding"
     forest2_dc = "braavos"
-    forest2_host = r.choice(_B6_SERVERS)
+    forest2_pool = list(gp.get("forest2_host_pool") or _B6_SERVERS)
+    forest2_host = r.choice(forest2_pool)
+    trust_topology = gp.get("trust_topology")   # child-to-parent | cross-forest | bidirectional
+    crown_location = gp.get("crown_location")    # parent-dc | forest2-dc | root-dc
+    escalation = gp.get("escalation")            # SID-history | trust-key | golden-ticket
     fill = {"parent": _B6_PARENT, "child": _B6_CHILD, "forest2": _B6_FOREST2,
             "child_dc": child_dc, "parent_dc": parent_dc, "forest2_dc": forest2_dc}
-    objectives = [{"id": oid, "name": name, "technique": tech,
-                   "hint": hint.format(**fill), "points": pts}
-                  for (oid, name, tech, hint, pts) in _B6_OBJECTIVES]
+    objectives = []
+    for (oid, name, tech, hint, pts) in _B6_OBJECTIVES:
+        h = hint.format(**fill)
+        if oid == "trust_abuse" and escalation:
+            h = ("Cross the %s trust using %s. The flag proves the crossing."
+                 % (trust_topology or "domain", escalation))
+        elif oid == "crown" and crown_location:
+            h = ("Exfiltrate the designated crown-jewel secret from the %s. The flag is that secret."
+                 % crown_location)
+        objectives.append({"id": oid, "name": name, "technique": tech, "hint": h, "points": pts})
     return {"board": 6, "cohort_theme": _B6_PARENT,
             "targets": {"domain": _B6_PARENT, "parent": _B6_PARENT, "child": _B6_CHILD,
                         "forest2": _B6_FOREST2, "dcs": _B6_DCS, "servers": _B6_SERVERS,
-                        "forest2_host": forest2_host},
+                        "forest2_host": forest2_host, "trust_topology": trust_topology,
+                        "crown_location": crown_location, "escalation": escalation},
             "objectives": objectives,
             "_flags": _flags_for(6, seed)}
 
