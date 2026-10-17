@@ -36,6 +36,7 @@ FOUNDATION_VERSION = "valyria-1"   # the persistent Valyria enterprise foundatio
 # contracts. Today only the SOC environment is implemented.
 from pathways import PATHWAY_STRATA, PATHWAY_PARALLAX  # stable ids, not marketing names
 ENVIRONMENT_SOC_OPENSEARCH = "soc-opensearch"
+ENVIRONMENT_GOAD_RANGE = "goad-range"   # S6: isolated GOAD AD red-team ranges (boards 5/6)
 # S4: the seed-dataset environment behind STRATA boards 1/3/4 (triage, detection, IR). These are
 # graded in-process against a seeded dataset rather than a live cluster, so their inventory is the
 # dataset generator's own capability surface, not the OpenSearch topology.
@@ -100,6 +101,8 @@ def build_inventory(environment_type: str = ENVIRONMENT_SOC_OPENSEARCH) -> dict:
     not have."""
     if environment_type == ENVIRONMENT_SOC_DATASET:
         return _build_soc_dataset_inventory()
+    if environment_type == ENVIRONMENT_GOAD_RANGE:
+        return _build_goad_inventory()
     if environment_type != ENVIRONMENT_SOC_OPENSEARCH:
         raise NotImplementedError(
             f"environment_type {environment_type!r} is declared but not implemented; "
@@ -114,6 +117,25 @@ def _build_soc_dataset_inventory() -> dict:
     not resolve capability refs against this inventory, so it records only the environment id."""
     return {"environment_type": ENVIRONMENT_SOC_DATASET, "id": "strata-dataset-1",
             "capabilities": {}, "families": [], "hosts": [], "identities": []}
+
+
+def _build_goad_inventory() -> dict:
+    """Deterministic capability inventory for the isolated GOAD ranges (boards 5/6). It records the
+    domains, DCs, member servers and the service / AS-REP identities the GOAD blueprint seeds, so a
+    board-5/6 spec's referenced accounts and hosts can be checked for feasibility, and so the range
+    attestation can later compare an expected VM inventory. No secrets or flags are recorded here."""
+    return {
+        "environment_type": ENVIRONMENT_GOAD_RANGE, "id": "strata-goad-1",
+        "domains": ["sevenkingdoms.local", "north.sevenkingdoms.local", "essos.local"],
+        "dcs": ["kingslanding", "winterfell", "braavos"],
+        "servers": ["castelblack", "meereen"],
+        "hosts": ["kingslanding", "winterfell", "braavos", "castelblack", "meereen"],
+        "identities": {
+            "service_accounts": ["sql_svc", "http_svc", "backup_svc", "web_svc"],
+            "asrep_users": ["brandon.stark", "missandei", "jon.snow", "samwell.tarly"],
+        },
+        "capabilities": {}, "families": [],
+    }
 
 
 def _build_soc_opensearch_inventory() -> dict:

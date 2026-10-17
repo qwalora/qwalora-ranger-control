@@ -27,8 +27,10 @@ from siem import scenario_pipeline as sp
 from siem import enterprise, detection, case_contract
 
 PATHWAY = "strata"
-SPEC_TYPE = {1: "soc-triage", 2: "soc-investigation", 3: "detection-engineering", 4: "ir-forensics"}
-ENVIRONMENT = {1: "soc-dataset", 2: "soc-opensearch", 3: "soc-dataset", 4: "soc-dataset"}
+SPEC_TYPE = {1: "soc-triage", 2: "soc-investigation", 3: "detection-engineering", 4: "ir-forensics",
+             5: "goad-redteam", 6: "goad-capstone"}
+ENVIRONMENT = {1: "soc-dataset", 2: "soc-opensearch", 3: "soc-dataset", 4: "soc-dataset",
+               5: "goad-range", 6: "goad-range"}
 CALIBRATION_SEED = "calib-seed-v1"   # fixed seed for deterministic calibration/simulation
 
 
@@ -63,6 +65,20 @@ def build_spec(board, variant_id):
         admin["kill_chain"] = v["diversity"]["chain"]
         admin["initial_access"] = v["diversity"]["initial_access"]
         admin["persistence"] = v["diversity"]["persistence"]
+    elif board == 5:
+        d = v["diversity"]
+        admin["escalation_edge"] = d["escalation_edge"]
+        admin["roastable"] = d["roastable"]
+        admin["lateral_target"] = d["lateral"]
+        admin["initial_access"] = d["initial_access"]
+        admin["service_accounts"] = list(gp.get("svc_pool", []))
+        admin["asrep_users"] = list(gp.get("asrep_pool", []))
+    elif board == 6:
+        d = v["diversity"]
+        admin["trust_topology"] = d["trust_topology"]
+        admin["crown_location"] = d["crown_location"]
+        admin["escalation"] = d["escalation"]
+        admin["initial_access"] = d["initial_access"]
     spec = {
         "spec_id": spec_id_for(board, variant_id), "spec_version": sspec.SCENARIO_SPEC_VERSION,
         "pathway": PATHWAY, "environment_type": ENVIRONMENT[board], "spec_type": SPEC_TYPE[board],
@@ -194,15 +210,17 @@ def simulate(board, variant_id, seed=CALIBRATION_SEED):
 
 
 def _gen(board, seed, gp):
-    return {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4}[board](seed, gp)
+    return {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4,
+            5: sc.generate_board5, 6: sc.generate_board6}[board](seed, gp)
 
 
 def _public(board, scen):
-    return {1: sc.public_board1, 3: sc.public_board3, 4: sc.public_board4}[board](scen)
+    return {1: sc.public_board1, 3: sc.public_board3, 4: sc.public_board4,
+            5: sc.public_board5, 6: sc.public_board6}[board](scen)
 
 
 def _public_items(board, pub):
-    return pub.get("alerts") or pub.get("threats") or []
+    return pub.get("alerts") or pub.get("threats") or pub.get("objectives") or []
 
 
 def _correct(board, scen):
@@ -212,15 +230,23 @@ def _correct(board, scen):
         return board4_correct(scen)
     if board == 3:
         return board3_ruleset(scen["_techniques"])
+    if board in (5, 6):
+        # the reference-correct submission for a flag board is the full set of planted flags
+        return {"flags": dict(scen["_flags"])}
     return {}
 
 
 def _empty(board):
-    return {"alerts": []} if board in (1, 4) else {"rules": []}
+    if board in (1, 4):
+        return {"alerts": []}
+    if board in (5, 6):
+        return {"flags": {}}
+    return {"rules": []}
 
 
 def _score(board, scen, sub):
-    return {1: sc.score_board1, 3: sc.score_board3, 4: sc.score_board4}[board](scen, sub)
+    return {1: sc.score_board1, 3: sc.score_board3, 4: sc.score_board4,
+            5: sc.score_board5, 6: sc.score_board6}[board](scen, sub)
 
 
 def _repro_equal(board, a, b):
@@ -261,6 +287,16 @@ def _calibrate_other(board, scen, gp):
     elif board == 3:
         techs = len(scen["_techniques"]); score = techs * 1.1
         vec = {"techniques_to_detect": techs}
+    elif board in (5, 6):
+        # GOAD red-team difficulty: number of objectives in the attack path, distinct techniques,
+        # and (board 6) the cross-trust/forest stages. Boards 5/6 are advanced by construction.
+        objs = scen.get("objectives", [])
+        techs = len({t for o in objs for t in str(o.get("technique", "")).replace("/", " ").split()})
+        trust_stage = 2 if board == 6 else 0
+        score = len(objs) * 0.9 + techs * 0.2 + trust_stage
+        vec = {"objectives": len(objs), "techniques": techs, "board": board,
+               "escalation": scen.get("targets", {}).get("escalation_edge")
+               or scen.get("targets", {}).get("escalation")}
     else:  # board 4
         tl = len(scen["truth"]["timeline"]); hosts = len(scen["truth"]["affected_hosts"])
         accts = len(scen["truth"]["affected_accounts"])
@@ -406,7 +442,7 @@ def entry_family(entry):
     attack theme / detection domain / initial access)."""
     d = json.loads(entry.diversity or "{}")
     return d.get("objective") or d.get("attack_theme") or d.get("detection_domain") \
-        or d.get("initial_access")
+        or d.get("escalation_edge") or d.get("trust_topology") or d.get("initial_access")
 
 
 def register_all(db, boards=bv.PORTFOLIO_BOARDS):

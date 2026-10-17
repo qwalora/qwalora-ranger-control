@@ -767,13 +767,29 @@ def create_app():
             # live range.
             tvars = None
             if scenarios.kind(rr.board) == "flags":
-                seed = _current_seed(c)
+                # Under cohort governance (S6 section 14), an isolated board is pinned to an approved
+                # ScenarioBinding: plant the flags for the BINDING's seed and the family's pinned
+                # gen_params, so the range the candidate faces matches exactly what the grader scores
+                # and the ACL locks reference the family's approved accounts. Fall back to the legacy
+                # per-candidate seed when no binding governs this attempt.
+                seed = None
+                gp = None
+                if _strata_portfolios_on():
+                    from models import ScenarioBinding
+                    _b = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=rr.board)
+                          .order_by(ScenarioBinding.attempt.desc()).first())
+                    if _b is not None:
+                        seed = _b.seed
+                        from siem import board_variants as _bv
+                        try:
+                            gp = _bv.gen_params(rr.board, _b.variant_id)
+                        except Exception:  # noqa: BLE001
+                            gp = None
+                if not seed:
+                    seed = _current_seed(c)
                 if seed:
-                    # Hand the range its per-seed flags AND the pinned placement config, so flag ACL
-                    # locks reference the SAME accounts the approved scenario names (never the role's
-                    # fixed defaults) and the correct board placement map is applied (S6 section 17).
                     tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
-                    pv = scenarios.placement_vars(rr.board, seed)
+                    pv = scenarios.placement_vars(rr.board, seed, gp)
                     if pv:
                         tvars.update(pv)
             broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
@@ -1473,7 +1489,7 @@ def create_app():
         # bound, approved variant's dataset instead of the single seed-only scenario. Qualification
         # must not silently fall back to a generic scenario, so an exhausted/empty catalog is an
         # explicit error, never the legacy path.
-        if _strata_portfolios_on() and n in (1, 3, 4):
+        if _strata_portfolios_on() and n in (1, 3, 4, 5, 6):
             try:
                 pf = strata_assignment.resolve_portfolio(db, c.cohort, n, required=True)
                 binding = strata_assignment.assign(db, c, n, portfolio=pf, require_portfolio=True)
@@ -1535,7 +1551,7 @@ def create_app():
         # S3/S4: when portfolios are enabled, grade boards 1/3/4 against the candidate's PINNED
         # bound variant+seed (never a generic scenario). Board 2 qualification is unchanged (it is
         # graded via the signed-citation /case workflow, not here).
-        if _strata_portfolios_on() and n in (1, 3, 4):
+        if _strata_portfolios_on() and n in (1, 3, 4, 5, 6):
             from models import ScenarioBinding
             binding = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
                        .order_by(ScenarioBinding.attempt.desc()).first())
@@ -1543,16 +1559,21 @@ def create_app():
                 return jsonify(error="no scenario is bound for this attempt; open your dataset first",
                                board=n), 409
             score, per_alert = strata_assignment.grade(binding, submission)
-            _record_objective(c, n, score)
+            br = _record_objective(c, n, score)
             _touch(c, n)
             promoted = _evaluate_gate(c)
             db.session.commit()
+            # `passed` reflects the ACTUAL recorded award. On isolated boards (5/6) a correct score
+            # against a mock/unvalidated range is not an award (S6 attestation gate), so report truth.
+            note = "Report approval is also required to clear the board."
+            if P.is_isolated(n) and score >= P.PASS_BAR and not br.objective_passed:
+                note = ("Your submission scored at the bar, but this isolated board awards credit "
+                        "only against a validated live range. No objective credit was recorded.")
             return jsonify(ok=True, board=n, kind=scenarios.kind(n), score=score,
-                           passed=score >= P.PASS_BAR, per_alert=per_alert, promoted=promoted,
+                           passed=bool(br.objective_passed), per_alert=per_alert, promoted=promoted,
                            case_ref=_scenario_ref(c, n, binding.seed),
                            scenario_version=binding.spec_version,
-                           current_board=c.current_board, status=c.status,
-                           note="Report approval is also required to clear the board."), 200
+                           current_board=c.current_board, status=c.status, note=note), 200
         seed = _current_seed(c)
         score, per_alert = scenarios.grade(n, seed, submission)
         br = _record_objective(c, n, score)

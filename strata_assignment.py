@@ -313,7 +313,8 @@ def generate(binding, *, candidate_id=None):
     if board == 2:
         return enterprise.generate(candidate_id or binding.github_id, 2, seed,
                                    gp.get("profile", "B"), families=gp["families"])
-    return {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4}[board](seed, gp)
+    return {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4,
+            5: sc.generate_board5, 6: sc.generate_board6}[board](seed, gp)
 
 
 def candidate_view(binding, scenario):
@@ -327,7 +328,8 @@ def candidate_view(binding, scenario):
         from siem import schema as _schema
         events, _truth = scenario
         return {"board": 2, "events": _schema.project_candidate_events(events)}
-    return {1: sc.public_board1, 3: sc.public_board3, 4: sc.public_board4}[board](scenario)
+    return {1: sc.public_board1, 3: sc.public_board3, 4: sc.public_board4,
+            5: sc.public_board5, 6: sc.public_board6}[board](scenario)
 
 
 def grade(binding, submission):
@@ -337,8 +339,10 @@ def grade(binding, submission):
     if board == 2:
         raise AssignmentError("board 2 qualification is graded via the signed-citation workflow "
                               "(case_contract), not the generic grader")
-    scenario = {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4}[board](seed, gp)
-    return {1: sc.score_board1, 3: sc.score_board3, 4: sc.score_board4}[board](scenario, submission)
+    scenario = {1: sc.generate_board1, 3: sc.generate_board3, 4: sc.generate_board4,
+                5: sc.generate_board5, 6: sc.generate_board6}[board](seed, gp)
+    return {1: sc.score_board1, 3: sc.score_board3, 4: sc.score_board4,
+            5: sc.score_board5, 6: sc.score_board6}[board](scenario, submission)
 
 
 def board2_truth(binding, *, candidate_id=None):

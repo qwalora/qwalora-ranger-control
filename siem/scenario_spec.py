@@ -295,6 +295,44 @@ def _validate_ir_forensics(payload, inv):
     return errors
 
 
+def _validate_goad_redteam(payload, inv):
+    """Board 5 (Raider): a single-domain GOAD AD red-team family. The admin layer must declare the
+    structural attack-path axes (escalation edge, initial access) and the roastable service accounts,
+    and those accounts must be feasible against the GOAD inventory."""
+    errors = []
+    admin = _require(payload, errors, "escalation_edge")
+    if not admin.get("variant_id"):
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.variant_id",
+                           "a structural variant id is required"))
+    if not admin.get("initial_access"):
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.initial_access",
+                           "a Raider variant must declare its initial-access axis"))
+    svc = admin.get("service_accounts") or []
+    if not svc:
+        errors.append(_err("MISSING_MANDATORY_FIELD", "payload.admin.service_accounts",
+                           "a Raider variant must declare its roastable service accounts"))
+    known = set((inv.get("identities") or {}).get("service_accounts") or [])
+    bad = [a for a in svc if known and a not in known]
+    if bad:
+        errors.append(_err("INFEASIBLE_CAPABILITY", "payload.admin.service_accounts",
+                           f"service account(s) {bad} are not present in the GOAD range inventory"))
+    return errors
+
+
+def _validate_goad_capstone(payload, inv):
+    """Board 6 (Vanguard): a multi-forest capstone family. The admin layer must declare the trust
+    topology to cross, where the crown jewels live, and the escalation technique."""
+    errors = []
+    admin = _require(payload, errors, "trust_topology")
+    for field in ("crown_location", "escalation", "initial_access"):
+        if not admin.get(field):
+            errors.append(_err("MISSING_MANDATORY_FIELD", f"payload.admin.{field}",
+                               f"a Vanguard variant must declare {field!r}"))
+    return errors
+
+
 register_payload_validator("soc-triage", _validate_soc_triage)
 register_payload_validator("detection-engineering", _validate_detection_engineering)
 register_payload_validator("ir-forensics", _validate_ir_forensics)
+register_payload_validator("goad-redteam", _validate_goad_redteam)
+register_payload_validator("goad-capstone", _validate_goad_capstone)

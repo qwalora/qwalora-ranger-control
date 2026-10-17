@@ -369,10 +369,9 @@ VARIANTS = {
     },
 }
 
-# Boards whose variants the catalog registers by default. Boards 5/6 are registered explicitly in
-# Part 2 once their catalog/spec/simulate arms land; adding them here before that would make the
-# default register_all() try to simulate a board it cannot build yet.
-PORTFOLIO_BOARDS = (1, 2, 3, 4)
+# Boards whose variants the catalog registers by default. Boards 5/6 (isolated GOAD) now have full
+# catalog/spec/simulate support, so they are governed like the rest.
+PORTFOLIO_BOARDS = (1, 2, 3, 4, 5, 6)
 
 
 def variants_for(board):
