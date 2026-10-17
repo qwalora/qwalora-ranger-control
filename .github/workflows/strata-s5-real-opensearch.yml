@@ -1,0 +1,153 @@
+name: STRATA S5.1 Real OpenSearch Validation
+
+# Provisions a DISPOSABLE real OpenSearch 2.17.1 node (Security plugin enabled) on a GitHub-hosted
+# runner, runs the full prepared S5.1 integration suite against the real siem.live.LiveCluster, and
+# fails the job if any test is skipped/failed/errored or did not run. A green result here means the
+# real integration tests actually executed and passed. It never means tests were skipped because the
+# infrastructure was unavailable.
+
+on:
+  push:
+    branches:
+      - feature/strata-s5-real-opensearch-validation
+  pull_request:
+    paths:
+      - 'siem/**'
+      - 'strata_*.py'
+      - 'app.py'
+      - 'models.py'
+      - 'case_routes.py'
+      - 'soc_gateway.py'
+      - 'requirements.txt'
+      - '.github/workflows/strata-s5-real-opensearch.yml'
+  workflow_dispatch: {}
+
+# Least privilege: the workflow only needs to read the repo.
+permissions:
+  contents: read
+
+# One active run per ref; cancel superseded runs.
+concurrency:
+  group: s5-1-real-opensearch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-opensearch:
+    name: Real OpenSearch 2.17.1 validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RANGER_ENV: test
+      RANGER_ALLOW_TEST_QUAL: "1"
+      RANGER_B2_PROFILE: B
+      RANGER_TEST_ALLOW_OS_MUTATION: "1"
+      RANGER_TEST_OPENSEARCH_URL: https://127.0.0.1:9200
+      RANGER_TEST_OPENSEARCH_USER: admin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Raise vm.max_map_count for OpenSearch
+        run: sudo sysctl -w vm.max_map_count=262144
+
+      - name: Generate and mask a temporary OpenSearch admin password
+        shell: bash
+        run: |
+          set -eo pipefail
+          # strong, unique, temporary: random body + guaranteed complexity classes
+          PW="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | cut -c1-24)Aa1!"
+          echo "::add-mask::$PW"
+          {
+            echo "OPENSEARCH_INITIAL_ADMIN_PASSWORD=$PW"
+            echo "RANGER_TEST_OPENSEARCH_PASSWORD=$PW"
+          } >> "$GITHUB_ENV"
+
+      - name: Pull OpenSearch 2.17.1 (fail the workflow if the image is unavailable)
+        run: docker pull opensearchproject/opensearch:2.17.1
+
+      - name: Bring up and verify the disposable node
+        run: siem/opensearch/run-local-opensearch-test.sh up
+
+      - name: Confirm the _ostest safety boundary accepts the node
+        run: |
+          python - <<'PY'
+          import siem.tests._ostest as o
+          ok, reason = o.authorization_status()
+          assert ok, f"_ostest refused the node (fail-closed): {reason}"
+          ver, dist = o.server_version(o.resolve_test_url())
+          print(f"authorized: {reason}; distribution={dist} version={ver}")
+          PY
+
+      - name: Run the real OpenSearch integration suite
+        id: pytest
+        shell: bash
+        run: |
+          set -eo pipefail
+          mkdir -p artifacts
+          python -m pytest siem/tests/test_strata_s5_real_opensearch.py \
+            -v -ra --durations=25 \
+            --junitxml=artifacts/real-opensearch.xml 2>&1 | tee artifacts/pytest-output.txt
+
+      - name: Gate - fail CI on zero / skipped / failed / errored / partial (mandatory)
+        if: always()
+        run: python siem/tests/ci_check_junit.py artifacts/real-opensearch.xml --min 12
+
+      - name: Collect sanitized evidence
+        if: always()
+        run: siem/opensearch/ci_evidence.sh
+
+      - name: Upload evidence artifacts (including on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5-1-real-opensearch-evidence
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Tear down the disposable node (always)
+        if: always()
+        run: siem/opensearch/run-local-opensearch-test.sh down || true
+
+  fast-regression:
+    name: Offline S5 + F5 regressions (informational, not a substitute)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: S5 acceptance + F5/workbench suites (offline; OpenSearch/PG skips allowed here)
+        run: |
+          python -m pytest \
+            siem/tests/test_strata_s5_board2.py \
+            siem/tests/test_strata_missions.py \
+            siem/tests/test_workbench.py \
+            siem/tests/test_scenario_eligibility.py \
+            siem/tests/test_case_routes.py \
+            siem/tests/test_case_contract.py \
+            siem/tests/test_mission_responsive.py \
+            siem/tests/test_strata_board2_compat.py \
+            -q -ra
