@@ -90,6 +90,10 @@ def ensure_schema(db):
             # F5 scenario_ref. S5 cohort cases carry this (not an F5 scenario-metadata identifier).
             ("case_ref", "VARCHAR(80)"),
         ],
+        "board_results": [
+            # S6: signed real-vs-mock range attestation for isolated boards (additive ALTER).
+            ("range_attestation", "TEXT"),
+        ],
         "cohort_scenario_plans": [
             # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
             # clobbers the admin `notes`. Added after the table shipped; a deployed DB needs this
@@ -382,6 +386,10 @@ class BoardResult(db.Model):
     objective_score = db.Column(db.Float, nullable=True)        # 0..100
     objective_passed = db.Column(db.Boolean, nullable=False, default=False)
     objective_sig = db.Column(db.Text, nullable=True)           # signed CI attestation
+    # S6: signed range attestation for ISOLATED boards (5/6). Records whether the objective was
+    # earned against a REAL validated Ludus range or a mock/simulated posture, so a simulated range
+    # can never yield an isolated-board objective award (fail-closed). NULL for non-isolated boards.
+    range_attestation = db.Column(db.Text, nullable=True)
     # Subjective channel (human report review).
     report_id = db.Column(db.Integer, db.ForeignKey("reports.id"), nullable=True)
     report_status = db.Column(db.String(20), nullable=True)

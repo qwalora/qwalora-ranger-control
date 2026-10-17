@@ -1163,6 +1163,15 @@ def create_app():
             if not ok:
                 app.logger.info("board2 promotion gate refused: %s", reason)
                 return False
+        # S6: isolated boards (5/6) require a valid, signed REAL-range attestation at the promotion
+        # boundary too (defense in depth). A mock/simulated range never clears an isolated board.
+        if P.is_isolated(n):
+            import strata_range_attestation as _ra
+            rr = _board_range(c, n)
+            real, _att = _ra.attest(c, n, rr, broker, cohort=c.cohort)
+            if not real:
+                app.logger.info("isolated board %s promotion gate refused: no real range attestation", n)
+                return False
         return _promote(c)
 
     # Board 2 (enterprise SOC investigation) is graded ONLY through the signed-citation case
@@ -1198,7 +1207,22 @@ def create_app():
                                "never the generic grader")
         br = _board_result(c, n)
         br.objective_score = float(score)
-        br.objective_passed = float(score) >= P.PASS_BAR
+        passed = float(score) >= P.PASS_BAR
+        # S6 fail-closed chokepoint: on ISOLATED boards (5 Raider / 6 Vanguard), an objective is
+        # awardable ONLY against a REAL, validated Ludus range. The broker's mock mode reports a
+        # range as 'deployed' unconditionally, so without this a simulated range could award credit.
+        # Record a signed real-vs-mock attestation and refuse the award unless the range is real.
+        if P.is_isolated(n):
+            import json as _json
+            import strata_range_attestation as _ra
+            rr = _board_range(c, n)
+            real, att = _ra.attest(c, n, rr, broker, cohort=c.cohort,
+                                   attempt=getattr(br, "attempt", 1),
+                                   scenario_ref=_scenario_ref(c, n))
+            br.range_attestation = _json.dumps(att)
+            if not real:
+                passed = False   # simulated/absent range never yields an isolated-board award
+        br.objective_passed = passed
         attest = {"kind": "objective", "handle": c.handle, "board": n,
                   "score": float(score), "passed": br.objective_passed,
                   "at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
@@ -1401,6 +1425,11 @@ def create_app():
         if int(board) == ENTERPRISE_CASE_BOARD:
             return jsonify(error="board 2 is graded via the signed-citation case workflow, not a "
                            "generic CI objective callback"), 409
+        if P.is_isolated(board):
+            # S6: boards 5/6 are graded through the attested isolated-range workflow. A raw numeric
+            # score over only the CI token must never drive an isolated-board objective award.
+            return jsonify(error="boards 5 and 6 are graded through the attested isolated-range "
+                           "workflow, not a generic CI objective callback"), 409
         _record_objective(c, board, score)
         promoted = _evaluate_gate(c) if board == c.current_board else False
         db.session.commit()
@@ -1505,15 +1534,22 @@ def create_app():
                            note="Report approval is also required to clear the board."), 200
         seed = _current_seed(c)
         score, per_alert = scenarios.grade(n, seed, submission)
-        _record_objective(c, n, score)
+        br = _record_objective(c, n, score)
         _touch(c, n)
         promoted = _evaluate_gate(c)
         db.session.commit()
+        # `passed` reflects the ACTUAL recorded objective award, not just the raw score. On isolated
+        # boards (5/6) a correct score against a mock/simulated range is NOT an award (see the S6
+        # attestation gate in _record_objective), so the candidate is told the truth here.
+        note = "Report approval is also required to clear the board."
+        if P.is_isolated(n) and score >= P.PASS_BAR and not br.objective_passed:
+            note = ("Your submission scored at the bar, but this isolated board awards credit only "
+                    "against a validated live range. No objective credit was recorded.")
         return jsonify(ok=True, board=n, kind=scenarios.kind(n),
-                       score=score, passed=score >= P.PASS_BAR,
+                       score=score, passed=bool(br.objective_passed),
                        per_alert=per_alert, promoted=promoted,
                        current_board=c.current_board, status=c.status,
-                       note="Report approval is also required to clear the board."), 200
+                       note=note), 200
 
     def _b2_qual_ui_on():
         """S5: the authorized Board 2 qualification route (default off -> 404). Even when on, a
