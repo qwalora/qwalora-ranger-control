@@ -14,8 +14,13 @@ qwalora_flags_dir: 'C:\ProgramData\ranger'
 # below if your installed badsectorlabs.ludus_goad version seeds different names.
 qwalora_goad_variant: 'GOAD'
 
-# Principals used when a flag must be readable only by a specific account. These
-# match the GOAD-seeded accounts; align with your ludus_goad version if renamed.
+# Principals used when a flag must be readable only by a specific account.
+# IMPORTANT: the Qwalora portal PINS these per seed and passes them via
+# templateVars at deploy time (scenarios.placement_vars -> qwalora_svc_account /
+# qwalora_asrep_account), so the ACL lock always references the SAME account the
+# approved scenario names. These values are only the standalone fallback for a
+# manual run; a portal-driven deploy overrides them. Keep them aligned with your
+# badsectorlabs.ludus_goad version for standalone use.
 qwalora_svc_account: 'sql_svc'
 qwalora_asrep_account: 'brandon.stark'
 

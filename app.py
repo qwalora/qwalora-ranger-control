@@ -769,7 +769,13 @@ def create_app():
             if scenarios.kind(rr.board) == "flags":
                 seed = _current_seed(c)
                 if seed:
+                    # Hand the range its per-seed flags AND the pinned placement config, so flag ACL
+                    # locks reference the SAME accounts the approved scenario names (never the role's
+                    # fixed defaults) and the correct board placement map is applied (S6 section 17).
                     tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
+                    pv = scenarios.placement_vars(rr.board, seed)
+                    if pv:
+                        tvars.update(pv)
             broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
                                     user_key=key, template_vars=tvars)
             status, range_id, detail = broker.deploy_range(c, user_key=key)

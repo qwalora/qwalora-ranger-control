@@ -845,6 +845,29 @@ def _flags_for(board, seed):
     return out
 
 
+def placement_vars(n, seed):
+    """STRATA S6 (section 17): the PINNED range-placement config the qwalora_flags Ansible role must
+    use for this seed, so a flag's ACL lock references the SAME account the approved scenario names -
+    never the role's fixed defaults. The brief randomizes the kerberoast service account and the
+    AS-REP user per seed; if the role kept its fixed defaults it would lock a flag to a non-existent
+    account and silently cost the ranger a point. It also pins the board number so a board-6 range
+    gets the board-6 placement map (the role defaults to board 5). Keys match the role's var names
+    (passed through broker templateVars). Returns None for non-flag boards."""
+    if n == 5:
+        t = generate_board5(seed)["targets"]
+        return {"qwalora_flags_board": 5,
+                "qwalora_svc_account": t["kerberoast_account"],
+                "qwalora_asrep_account": t["asrep_user"],
+                "qwalora_dc_hostnames": list(_B5_DCS),
+                "qwalora_domain": _B5_DOMAIN}
+    if n == 6:
+        generate_board6(seed)  # deterministic; validates the seed resolves
+        return {"qwalora_flags_board": 6,
+                "qwalora_dc_hostnames": list(_B6_DCS),
+                "qwalora_domain": _B6_PARENT}
+    return None
+
+
 def flags_for_board(n, seed):
     """The per-seed flag for each objective of a flag-capture board. Used by both
     the grader and the range provisioner (which plants these at deploy time), so
