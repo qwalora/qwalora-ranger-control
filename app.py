@@ -1140,7 +1140,13 @@ def create_app():
 
     def _evaluate_gate(c):
         """Promote if the current board's objective passed AND its report is
-        approved. Safe to call after either grade lands."""
+        approved. Safe to call after either grade lands.
+
+        Board 2 note: `objective_passed` for Board 2 is deliberately UNREACHABLE by default (see
+        ENTERPRISE_CASE_BOARD below). Board 2 therefore cannot currently be cleared or advanced to
+        Board 3 without the live Board 2 qualification milestone - this is a BLOCKING RELEASE
+        DEPENDENCY, not an oversight. The subjective review gate (report approval) can be satisfied
+        independently, but on its own it never clears a board; both halves are required here."""
         if not c.is_active:
             return False
         n = c.current_board
@@ -1152,14 +1158,34 @@ def create_app():
     # Board 2 (enterprise SOC investigation) is graded ONLY through the signed-citation case
     # workflow (case_contract via /case). The generic objective grader must never award Board 2
     # objective credit or drive its clearance gate, or it would bypass citation verification. This is
-    # the single server-side chokepoint; both candidate-facing grading routes also refuse Board 2
-    # up front.
+    # the single server-side chokepoint; both candidate-facing grading routes also refuse Board 2.
+    #
+    # BOARD 2 PROGRESSION, TRACED:
+    #   /case assigns a version-pinned Case (seed, index, scenario) -> candidate drafts, verifies
+    #   citations, and submits -> the submission's evidence is Ed25519-signed and preserved. A
+    #   reviewer may add feedback; the SHADOW grader (RANGER_SHADOW_GRADER, default off) may compute a
+    #   comparison score but NEVER writes an objective grade or clearance. No code path sets
+    #   BoardResult.objective_passed for Board 2. _evaluate_gate therefore never clears Board 2.
+    #
+    # This means a Board 2 candidate cannot yet legitimately pass and advance to Board 3. That live
+    # objective-award path is a BLOCKING RELEASE DEPENDENCY, intentionally deferred to the live Board
+    # 2 qualification milestone and kept default-off (there is deliberately no flag that turns it on
+    # here - the shadow grader is NOT silently promoted to live grading). Any future objective-award
+    # path MUST require, together: (1) an authenticated authorized reviewer/principal, (2) a verified
+    # Ed25519 signature over the preserved evidence record, (3) citations re-verified reference_valid
+    # against the candidate's PINNED authorized scenario index, (4) protected grading truth recomputed
+    # server-side from the pinned (scenario, seed) - never stored or exposed, (5) the real enterprise
+    # grader at the UNCHANGED 95% objective standard, and (6) the existing subjective review gate
+    # (report approval) still applied by _evaluate_gate.
     ENTERPRISE_CASE_BOARD = 2
 
     def _record_objective(c, n, score):
         if int(n) == ENTERPRISE_CASE_BOARD:
-            raise RuntimeError("board 2 objective credit must come from the signed-citation case "
-                               "workflow, not the generic grader")
+            # Fail-closed chokepoint: no generic path awards Board 2 objective credit. The live
+            # authorized path (above) is a release-gated dependency and is not implemented here.
+            raise RuntimeError("board 2 objective credit must come from the authorized "
+                               "signed-citation case-grading path (a release-gated dependency), "
+                               "never the generic grader")
         br = _board_result(c, n)
         br.objective_score = float(score)
         br.objective_passed = float(score) >= P.PASS_BAR
@@ -2608,6 +2634,7 @@ def create_app():
             if gid in _reviewer_ids():
                 session["admin"] = True
                 session["admin_login"] = login
+                session["admin_gid"] = gid   # bind governance authority to the authenticated id
                 session.pop("sponsor", None)
                 session.pop("sponsor_org", None)
                 return redirect(nxt or url_for("admin"))

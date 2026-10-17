@@ -636,5 +636,138 @@ def test_unauthorized_catalog_change_rejected():
         ctx.pop()
 
 
+# ============================================================================================
+# FINAL INTEGRATION CLOSURE regression tests
+# ============================================================================================
+
+# ---- Issue 1: Board 2 progression gate is a documented blocking release dependency -----------
+def test_issue1_board2_progression_gate_is_blocking_release_dependency():
+    """Trace + prove: a Board 2 candidate cannot be cleared/advanced by any default path. The
+    objective-award half is unreachable (release-gated); the subjective half alone never clears."""
+    application, db, ctx, _ = _app()
+    os.environ["RANGER_STRATA_PORTFOLIOS"] = "1"
+    os.environ["CI_TOKEN"] = "ci-secret"
+    try:
+        from models import BoardResult
+        client = application.test_client()
+        c = _cand(db, "b2prog", "2026-A", 2)
+        hdr = {"X-Candidate-Token": c.token}
+        # satisfy the SUBJECTIVE gate (report approved) so only the objective half is in question
+        br = BoardResult(candidate_id=c.id, board=2, report_status="approved")
+        db.session.add(br); db.session.commit()
+        # no generic path can award the objective half
+        assert client.post("/grade/submit", json={"handle": c.handle, "submission": {"incidents": []}},
+                           headers=hdr).status_code == 409
+        assert client.post("/grade", json={"handle": c.handle, "board": 2, "score": 100},
+                           headers={"X-CI-Token": "ci-secret"}).status_code == 409
+        # objective stays unearned -> board not cleared -> candidate not advanced past Board 2
+        br2 = BoardResult.query.filter_by(candidate_id=c.id, board=2).first()
+        assert not br2.objective_passed and br2.objective_score is None
+        assert not br2.cleared
+        c2 = _reload(db, c.id)
+        assert c2.current_board == 2, "candidate must not advance to Board 3 without the live gate"
+    finally:
+        os.environ.pop("RANGER_STRATA_PORTFOLIOS", None)
+        os.environ.pop("CI_TOKEN", None)
+        ctx.pop()
+
+
+def _reload(db, cid):
+    from models import Candidate
+    return Candidate.query.get(cid)
+
+
+# ---- Issue 2: approval authority is bound to the authenticated session, not a GitHub id -------
+def test_issue2_approval_requires_authenticated_session_not_github_id():
+    application, db, ctx, admin = _app()
+    try:
+        from flask import session
+        from models import ScenarioCatalogEntry
+        e = ScenarioCatalogEntry.query.filter_by(status="catalog_eligible").first()
+        e.status = "calibrated"; db.session.add(e); db.session.commit()
+        real_gid = admin.github_id   # a KNOWN, persisted reviewer's GitHub id
+
+        # Inside a request with NO admin session: supplying the known reviewer's id (dict), the id
+        # (string), or even the persisted AdminUser object must NOT authorize approval.
+        for imposter in ({"github_id": real_gid, "role": "reviewer"}, real_gid, admin):
+            with application.test_request_context():
+                try:
+                    cat.approve(db, e, imposter)
+                    assert False, f"unauthenticated approval via {imposter!r} must be rejected"
+                except cat.CatalogError:
+                    pass
+            assert ScenarioCatalogEntry.query.get(e.id).status == "calibrated"
+
+        # portfolio changes are gated the same way
+        with application.test_request_context():
+            try:
+                asn.set_cohort_portfolio(db, "2026-A", 1, PORTFOLIO["2026-A"][1],
+                                         admin={"github_id": real_gid, "role": "reviewer"})
+                assert False, "unauthenticated portfolio change must be rejected"
+            except asn.AssignmentError:
+                pass
+
+        # With an AUTHENTICATED admin session, approval proceeds.
+        with application.test_request_context():
+            session["admin"] = True
+            session["admin_login"] = admin.login
+            session["admin_gid"] = real_gid
+            cat.approve(db, e, None)   # arg ignored; the session is the authority
+            db.session.commit()
+        assert ScenarioCatalogEntry.query.get(e.id).status == "catalog_eligible"
+    finally:
+        ctx.pop()
+
+
+# ---- Release note (a): the scenario reference is keyed (not brute-forceable from a 64-bit seed) --
+def test_release_note_a_scenario_ref_is_keyed():
+    import importlib
+    from siem import schema as s
+    legacy_64bit_seed = os.urandom(8).hex()   # the token_hex(8) legacy shape
+    saved = os.environ.get("RANGER_REF_KEY")
+    try:
+        os.environ["RANGER_REF_KEY"] = "key-one"
+        importlib.reload(s)
+        r1 = s.case_ref("cand", 2, legacy_64bit_seed)
+        os.environ["RANGER_REF_KEY"] = "key-two"
+        importlib.reload(s)
+        r2 = s.case_ref("cand", 2, legacy_64bit_seed)
+        # different key => different reference: the ref is keyed, so it cannot be reproduced (or
+        # brute-forced back to the seed) without the server secret
+        assert r1 and r2 and r1 != r2
+        assert legacy_64bit_seed not in (r1 + r2)
+    finally:
+        if saved is None:
+            os.environ.pop("RANGER_REF_KEY", None)
+        else:
+            os.environ["RANGER_REF_KEY"] = saved
+        importlib.reload(s)
+
+
+# ---- Release note (b): the generation-contract MAC is keyed (tamper-evident vs a DB-only writer) -
+def test_release_note_b_gen_contract_mac_is_keyed_tamper_evident():
+    import hashlib
+    application, db, ctx, _ = _app()
+    try:
+        from models import ScenarioBinding
+        c = _cand(db, "macb", "2026-A", 1)
+        binding = asn.assign(db, c, 1, portfolio=["b1-credential-access"])
+        # a privileged DB writer WITHOUT the server key alters the contract and recomputes a PLAIN
+        # SHA-256 (the best a keyless attacker can do). The stored MAC is keyed, so this is detected.
+        contract = _json.loads(binding.gen_contract)
+        contract["gen_params"]["id"] = "b1-swapped-by-db-writer"
+        forged = _json.dumps(contract, sort_keys=True, separators=(",", ":"))
+        binding.gen_contract = forged
+        binding.gen_hash = hashlib.sha256(forged.encode()).hexdigest()   # plain digest, no key
+        db.session.add(binding); db.session.commit()
+        try:
+            asn.resolve(ScenarioBinding.query.get(binding.id))
+            assert False, "a keyless forged contract+digest must fail the keyed MAC check"
+        except asn.AssignmentError:
+            pass
+    finally:
+        ctx.pop()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

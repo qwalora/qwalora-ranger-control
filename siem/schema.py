@@ -11,27 +11,47 @@ of a normalized event.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 
 from . import SCHEMA_VERSION, GENERATOR_VERSION
 
 # The protected generator seed is NEVER embedded in a normalized (indexed) event, nor returned to a
-# candidate. In its place events carry `ranger.scenario_ref`: an opaque, non-invertible correlation
-# id derived from (candidate_id, board, seed). It is stable per (candidate, board, scenario) so SOC
-# retrieval and provenance still work, but it cannot be used to reconstruct the grading world because
-# the seed (>= 96 bits of entropy) cannot be recovered from the digest and is not present anywhere a
-# candidate can read. Server-side deterministic replay uses the seed held in the Ranger backend
-# (ScenarioAssignment / ScenarioBinding), never a value read back out of a telemetry document.
+# candidate. In its place events carry `ranger.scenario_ref`: an opaque correlation id for
+# (candidate_id, board, seed). It is stable per (candidate, board, scenario) so SOC retrieval and
+# provenance still work, but it cannot be used to reconstruct the grading world.
+#
+# The reference is a KEYED MAC (HMAC-SHA256 under a server secret), not a bare digest. A bare digest
+# is reversible by brute force when the seed has low entropy: some legacy assignments were minted
+# with `secrets.token_hex(8)` = 64-bit seeds, which are within offline brute-force reach against a
+# known SHA-256. Keying the reference means that, without the server secret, neither a 64-bit legacy
+# seed nor any seed can be recovered from the published reference. Server-side deterministic replay
+# always uses the seed held in the Ranger backend (ScenarioAssignment / ScenarioBinding / Case),
+# never a value read back out of a telemetry document, so keying the reference costs nothing
+# operationally. The reference is a correlator only; nothing is looked up by it, so key rotation is
+# safe (it only changes refs minted afterward).
 _REF_DOMAIN = "ranger-scenario-ref\x1f"
 
 
+def _mac_key() -> bytes:
+    raw = os.environ.get("RANGER_REF_KEY") or os.environ.get("SECRET_KEY") or "qwalora-ranger-dev"
+    return hashlib.sha256(raw.encode("utf-8")).digest()
+
+
+def keyed_mac(material: bytes) -> str:
+    """HMAC-SHA256 hex digest under the server secret. Shared by the scenario reference and the
+    generation-contract integrity MAC so there is one keyed primitive."""
+    return hmac.new(_mac_key(), material, hashlib.sha256).hexdigest()
+
+
 def case_ref(candidate_id, board, seed) -> str:
-    """Opaque, deterministic, non-invertible scenario/case reference. Safe to index and to show to a
-    candidate; reveals neither the seed nor the hidden truth. Returns None only when there is no
-    seed to reference yet."""
+    """Opaque, keyed, non-invertible scenario/case reference. Safe to index and to show to a
+    candidate; reveals neither the seed nor the hidden truth, and is not brute-forceable back to the
+    seed without the server secret. Returns None only when there is no seed to reference yet."""
     if not seed:
         return None
-    material = "%s%s\x1f%s\x1f%s" % (_REF_DOMAIN, candidate_id or "", board, seed)
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+    material = ("%s%s\x1f%s\x1f%s" % (_REF_DOMAIN, candidate_id or "", board, seed)).encode("utf-8")
+    return keyed_mac(material)[:24]
 
 # Event categories this SIEM carries, and the ECS-style category/type they map to.
 SOURCES = ("linux-auth", "linux-sudo", "linux-process", "linux-file",

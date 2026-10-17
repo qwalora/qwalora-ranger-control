@@ -25,7 +25,6 @@ graded qualification instance, not an operational session.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 
@@ -33,6 +32,7 @@ import scenarios as sc
 import strata_catalog as cat
 from siem import board_variants as bv
 from siem import enterprise
+from siem import schema as _schema
 
 FAMILY_COOLDOWN = 1   # a person will not get the same family within this many of their recent bindings
 
@@ -46,7 +46,13 @@ def _canonical(obj) -> str:
 
 
 def _gen_hash(contract: dict) -> str:
-    return hashlib.sha256(_canonical(contract).encode("utf-8")).hexdigest()
+    """Integrity MAC over the pinned generation contract. This is a KEYED HMAC (under the server
+    secret), not a bare SHA-256: a bare digest only detects ACCIDENTAL change, because a privileged
+    database writer who can alter the stored contract can also recompute and store a matching plain
+    digest. A keyed MAC is tamper-EVIDENT against such a writer - they cannot forge a valid MAC for
+    an altered contract without the server secret. (If the server secret itself is compromised the
+    guarantee degrades; that is a broader-compromise case documented in the threat model.)"""
+    return _schema.keyed_mac(_canonical(contract).encode("utf-8"))
 
 
 def _build_contract(entry, board, variant_id):

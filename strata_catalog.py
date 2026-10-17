@@ -318,28 +318,47 @@ APPROVER_ROLES = ("reviewer",)   # only full reviewers may approve catalog entri
 
 
 def _is_authorized_admin(admin):
-    """A real approver is an administrator identity that is PERSISTED in the AdminUser table with an
-    authorizing role - established by re-reading the row from the database, never trusted from the
-    passed object alone. This rejects:
-      * a bare string or any non-admin value,
-      * an in-memory AdminUser that was constructed but never persisted/authenticated (no id, or no
-        matching row), and
-      * an invented reviewer identity (a dict whose github_id has no AdminUser row).
-    Returns (ok, who) where `who` is the persisted login/github_id used for attribution."""
+    """Authorize catalog promotion / cohort-portfolio changes against Ranger's ESTABLISHED
+    authentication context, so authority is never conferred by a self-asserted identity.
+
+    Two cases, by context:
+
+    * Inside an HTTP request (the production path): authority comes ONLY from the authenticated
+      admin session that the portal's GitHub-OAuth reviewer flow establishes (`session['admin']`,
+      set solely when the signed-in GitHub id is in the reviewer set). The `admin` ARGUMENT IS
+      IGNORED here - supplying a known reviewer's GitHub id (a dict, a string, or even a persisted
+      AdminUser object) does NOT authorize an unauthenticated caller. This closes the impersonation
+      vector: a known reviewer id must not itself confer approval authority.
+
+    * Outside any request (server bootstrap, scheduled jobs, tests): there is no session, so a
+      TRUSTED server-side principal must be passed explicitly - a PERSISTED AdminUser row with an
+      authorizing role, re-read from the database. A dict/string/unpersisted object is rejected.
+
+    Returns (ok, who) where `who` is the authenticated/persisted identity used for attribution."""
     from models import AdminUser
-    gid = None
-    if isinstance(admin, AdminUser):
-        # Must be a persisted row, not a transient object fabricated by a caller.
-        if getattr(admin, "id", None) is None or not admin.github_id:
+    try:
+        from flask import has_request_context, session as _sess
+        in_request = has_request_context()
+    except Exception:  # noqa: BLE001 - flask always present, but never let authz crash open
+        in_request = False
+        _sess = {}
+    if in_request:
+        # Session-bound authority only. The passed `admin` is deliberately not consulted.
+        if not _sess.get("admin"):
             return False, None
-        gid = admin.github_id
-    elif isinstance(admin, dict):
-        gid = admin.get("github_id")
-    if not gid:
-        return False, None
-    row = AdminUser.query.filter_by(github_id=gid).first()
-    if row is not None and getattr(row, "id", None) is not None and row.role in APPROVER_ROLES:
-        return True, (row.login or row.github_id)
+        gid = str(_sess.get("admin_gid") or "")
+        if gid:
+            row = AdminUser.query.filter_by(github_id=gid).first()
+            if row is not None and row.role in APPROVER_ROLES:
+                return True, (row.login or row.github_id)
+        # An env-allowlisted reviewer authenticated via OAuth may have no AdminUser row; the
+        # authenticated session is itself the trusted principal.
+        return True, (_sess.get("admin_login") or "authenticated-admin")
+    # Non-request: require an explicitly passed, persisted, authorizing AdminUser (trusted caller).
+    if isinstance(admin, AdminUser) and getattr(admin, "id", None) is not None and admin.github_id:
+        row = AdminUser.query.filter_by(github_id=admin.github_id).first()
+        if row is not None and getattr(row, "id", None) is not None and row.role in APPROVER_ROLES:
+            return True, (row.login or row.github_id)
     return False, None
 
 
