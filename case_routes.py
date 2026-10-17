@@ -259,8 +259,11 @@ def register(app, candidate_model, db, helpers):
             return jsonify({"ok": False, "stage": "evidence", "verification": verification}), 422
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
+        from siem import schema as _schema
         meta = {"candidate": _slug(c), "board": CASE_BOARD, "cohort": case.cohort,
-                "seed": case.seed, "scenario_version": case.scenario_version,
+                # opaque case reference, not the protected seed (which stays on the Case row only)
+                "scenario_ref": _schema.case_ref(_slug(c), CASE_BOARD, case.seed),
+                "scenario_version": case.scenario_version,
                 "rubric_version": case.rubric_version, "case_id": case.id,
                 "submitted_at": now_iso}
         record, sig = cc.preserve_and_sign(payload, reader, case.index_name, meta)

@@ -395,7 +395,7 @@ def candidate_verification(payload: dict, reader, candidate_index: str) -> dict:
 # --- Evidence preservation + signing -----------------------------------------
 # Preservation format version. Bumped when the record schema changes so an old
 # record is still verifiable under the format it was signed with.
-PRESERVATION_VERSION = 2
+PRESERVATION_VERSION = 3   # v3: the protected seed is no longer embedded; an opaque scenario_ref is
 #
 # Retention & access model (enforced by the storage/HTTP layers, documented here
 # so the contract is self-describing):
@@ -463,7 +463,10 @@ def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict,
         "candidate": meta.get("candidate"),
         "board": meta.get("board"),
         "cohort": meta.get("cohort"),
-        "seed": meta.get("seed"),
+        # The protected generator seed is NEVER embedded in the preservation artifact. An opaque
+        # case reference correlates the record without allowing reconstruction of the grading world;
+        # server-side replay/regrading uses the seed held on the Case row, not this record.
+        "scenario_ref": meta.get("scenario_ref"),
         "scenario_version": meta.get("scenario_version", SCENARIO_VERSION),
         "rubric_version": meta.get("rubric_version", RUBRIC_VERSION),
         "case_id": meta.get("case_id"),

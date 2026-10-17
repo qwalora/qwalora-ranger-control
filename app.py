@@ -707,6 +707,14 @@ def create_app():
              .order_by(ScenarioAssignment.id.desc()).first())
         return a.seed if a else None
 
+    def _scenario_ref(c, board, seed=None):
+        """An OPAQUE, non-invertible case reference for candidate-facing surfaces. The protected
+        generator seed is never shown to a candidate; this reference correlates their scenario
+        without allowing reconstruction of the grading world."""
+        from siem import schema as _schema
+        s = seed if seed is not None else _current_seed(c)
+        return _schema.case_ref(c.github_id or c.handle, board, s)
+
     def _strata_portfolios_on():
         """S3/S4 cohort-portfolio integration flag (default OFF). When off, the seed-only legacy
         dataset/grade path is used and nothing changes in production."""
@@ -1141,7 +1149,17 @@ def create_app():
             return False
         return _promote(c)
 
+    # Board 2 (enterprise SOC investigation) is graded ONLY through the signed-citation case
+    # workflow (case_contract via /case). The generic objective grader must never award Board 2
+    # objective credit or drive its clearance gate, or it would bypass citation verification. This is
+    # the single server-side chokepoint; both candidate-facing grading routes also refuse Board 2
+    # up front.
+    ENTERPRISE_CASE_BOARD = 2
+
     def _record_objective(c, n, score):
+        if int(n) == ENTERPRISE_CASE_BOARD:
+            raise RuntimeError("board 2 objective credit must come from the signed-citation case "
+                               "workflow, not the generic grader")
         br = _board_result(c, n)
         br.objective_score = float(score)
         br.objective_passed = float(score) >= P.PASS_BAR
@@ -1286,7 +1304,7 @@ def create_app():
         db.session.commit()
         return jsonify(ok=True, handle=c.handle, board=n, tier=P.tier_of(n),
                        range_status=rr.status, range_id=rr.ludus_range_id,
-                       scenario_seed=_current_seed(c), detail=rr.detail,
+                       scenario_ref=_scenario_ref(c, n), detail=rr.detail,
                        mode=broker.mode()), 200
 
     def _create_report(c, body, board_str=None, role=None):
@@ -1344,6 +1362,9 @@ def create_app():
             return jsonify(error="unknown candidate"), 404
         if board is None or not P.board_meta(board):
             return jsonify(error="unknown board"), 400
+        if int(board) == ENTERPRISE_CASE_BOARD:
+            return jsonify(error="board 2 is graded via the signed-citation case workflow, not a "
+                           "generic CI objective callback"), 409
         _record_objective(c, board, score)
         promoted = _evaluate_gate(c) if board == c.current_board else False
         db.session.commit()
@@ -1368,24 +1389,32 @@ def create_app():
         # explicit error, never the legacy path.
         if _strata_portfolios_on() and n in (1, 3, 4):
             try:
-                pf = strata_assignment.cohort_portfolio(db, c.cohort, n)
-                binding = strata_assignment.assign(db, c, n, portfolio=pf)
+                pf = strata_assignment.resolve_portfolio(db, c.cohort, n, required=True)
+                binding = strata_assignment.assign(db, c, n, portfolio=pf, require_portfolio=True)
                 scen = strata_assignment.generate(binding)
                 view = strata_assignment.candidate_view(binding, scen)
                 _touch(c, n); db.session.commit()
-                return jsonify(ok=True, board=n, seed=binding.seed, kind=scenarios.kind(n),
-                               scenario_ref=binding.spec_id, scenario_version=binding.spec_version,
-                               variant=binding.variant_id, dataset=view), 200
+                # No raw seed and no hidden variant/family to the candidate: only an opaque case
+                # reference and the (non-secret) spec version.
+                return jsonify(ok=True, board=n, kind=scenarios.kind(n),
+                               case_ref=_scenario_ref(c, n, binding.seed),
+                               scenario_version=binding.spec_version, dataset=view), 200
             except strata_assignment.AssignmentExhausted as e:
                 return jsonify(error="no approved scenario is available to assign", detail=str(e),
                                board=n), 503
+            except strata_assignment.AssignmentError as e:
+                # Missing/invalid/empty/unauthorized cohort portfolio, etc. Fail closed, never fall
+                # back to the generic seed-only scenario in a qualification workflow.
+                return jsonify(error="cohort scenario assignment is not available", detail=str(e),
+                               board=n), 409
         seed = _current_seed(c)
         if not seed:
             _ensure_seed(c, n)
             seed = _current_seed(c)
         _touch(c, n)
         db.session.commit()
-        return jsonify(ok=True, board=n, seed=seed, kind=scenarios.kind(n),
+        return jsonify(ok=True, board=n, kind=scenarios.kind(n),
+                       case_ref=_scenario_ref(c, n, seed),
                        dataset=scenarios.dataset(n, seed)), 200
 
     @app.post("/grade/submit")
@@ -1400,6 +1429,12 @@ def create_app():
         if not c.is_active:
             return jsonify(error=f"candidate is {c.status}"), 409
         n = c.current_board
+        if int(n) == ENTERPRISE_CASE_BOARD:
+            # Board 2 enterprise qualification is graded ONLY through the signed-citation case
+            # workflow (/case). The generic grader must not award objective credit or trigger
+            # clearance here, or it would bypass required citation verification.
+            return jsonify(error="board 2 is graded through the signed-citation case workflow "
+                           "(/case), not the generic grader", board=n), 409
         if not scenarios.has_board(n):
             return jsonify(error="grader for this board is not available yet", board=n), 501
         submission = data.get("submission")
@@ -1428,7 +1463,8 @@ def create_app():
             db.session.commit()
             return jsonify(ok=True, board=n, kind=scenarios.kind(n), score=score,
                            passed=score >= P.PASS_BAR, per_alert=per_alert, promoted=promoted,
-                           scenario_ref=binding.spec_id, scenario_version=binding.spec_version,
+                           case_ref=_scenario_ref(c, n, binding.seed),
+                           scenario_version=binding.spec_version,
                            current_board=c.current_board, status=c.status,
                            note="Report approval is also required to clear the board."), 200
         seed = _current_seed(c)
@@ -2703,7 +2739,7 @@ def create_app():
             "badges": bc["chain"], "certified": bc["certified"],
             "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
             "has_wg": bool(rr and rr.wireguard_config),
-            "seed": _current_seed(c), "token": c.token,
+            "scenario_ref": _scenario_ref(c, n), "token": c.token,
             "range_detail": (rr.detail if rr else ""),
             "preview": False,
             "progress": _board_progress(c),
@@ -2755,7 +2791,7 @@ def create_app():
             "tier": P.tier_of(n), "cohort": "DEMO",
             "badges": chain, "certified": graduated,
             "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
-            "has_wg": isolated, "seed": "demo-seed-b%d" % n, "token": "demo-preview-token",
+            "has_wg": isolated, "scenario_ref": "demo-%d" % n, "token": "demo-preview-token",
             "range_detail": "Demo range (preview only)",
             "preview": True, "demo": True,
             "persona_board": n, "persona_graduated": graduated, "personas": personas,

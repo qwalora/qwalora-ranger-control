@@ -158,10 +158,19 @@ def simulate(board, variant_id, seed=CALIBRATION_SEED):
                                                       "role": "primary"}]}]}
         vres = case_contract.verify_evidence(payload, reader, idx, truth=truth)
         c0 = vres["incidents"][0]["citations"][0]
+        # Candidate projection must carry NO server-only truth: run the strict allowlist the live
+        # candidate_view uses and assert none of the hidden fields (labels, seed, opaque ref,
+        # provenance) survive, recursively over the whole projected JSON.
+        from siem import schema as _schema
+        proj_blob = json.dumps(_schema.project_candidate_events(ev))
+        no_leak = not any(tok in proj_blob for tok in (
+            "_malicious", "_key", "scenario_seed", "scenario_ref", "candidate_id",
+            "generator_version", seed))
         checks["telemetry_produced"] = {"ok": len(ev) > 100}
         checks["truth_derivable"] = {"ok": len(truth["incidents"]) >= 1}
         checks["detection_behaves"] = {"ok": len([p for p in det["per_incident"] if p.get("detected")]) >= 1}
         checks["evidence_verifiable"] = {"ok": bool(c0["reference_valid"]) and c0.get("malicious_activity") is True}
+        checks["candidate_view_no_truth"] = {"ok": no_leak}
         checks["reproducible"] = {"ok": [e["_id"] for e in ev] == [e["_id"] for e in ev2]}
         difficulty = _calibrate_board2(gp["families"], gp.get("profile", "B"))
     else:
@@ -305,18 +314,32 @@ def register(db, board, variant_id):
     return entry
 
 
+APPROVER_ROLES = ("reviewer",)   # only full reviewers may approve catalog entries (sponsors are read-only)
+
+
 def _is_authorized_admin(admin):
-    """A real approver is a models.AdminUser row with an authorizing role, OR a dict carrying a
-    verified admin identity {github_id, role}. A bare string is NEVER accepted."""
+    """A real approver is an administrator identity that is PERSISTED in the AdminUser table with an
+    authorizing role - established by re-reading the row from the database, never trusted from the
+    passed object alone. This rejects:
+      * a bare string or any non-admin value,
+      * an in-memory AdminUser that was constructed but never persisted/authenticated (no id, or no
+        matching row), and
+      * an invented reviewer identity (a dict whose github_id has no AdminUser row).
+    Returns (ok, who) where `who` is the persisted login/github_id used for attribution."""
     from models import AdminUser
+    gid = None
     if isinstance(admin, AdminUser):
-        return admin.role in ("reviewer", "sponsor") and bool(admin.github_id), \
-            (admin.login or admin.github_id)
-    if isinstance(admin, dict) and admin.get("github_id") and admin.get("role") in ("reviewer", "sponsor"):
-        # must correspond to a persisted AdminUser (no invented reviewer identity)
-        row = AdminUser.query.filter_by(github_id=admin["github_id"]).first()
-        if row and row.role in ("reviewer", "sponsor"):
-            return True, (row.login or row.github_id)
+        # Must be a persisted row, not a transient object fabricated by a caller.
+        if getattr(admin, "id", None) is None or not admin.github_id:
+            return False, None
+        gid = admin.github_id
+    elif isinstance(admin, dict):
+        gid = admin.get("github_id")
+    if not gid:
+        return False, None
+    row = AdminUser.query.filter_by(github_id=gid).first()
+    if row is not None and getattr(row, "id", None) is not None and row.role in APPROVER_ROLES:
+        return True, (row.login or row.github_id)
     return False, None
 
 

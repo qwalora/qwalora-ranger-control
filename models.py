@@ -83,6 +83,19 @@ def ensure_schema(db):
         "cases": [
             ("scenario_ref", "VARCHAR(60)"),   # F5.1: approved candidate-safe scenario metadata ref
         ],
+        "cohort_scenario_plans": [
+            # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
+            # clobbers the admin `notes`. Added after the table shipped; a deployed DB needs this
+            # ALTER (applied idempotently here; it is also part of the release-gated migration).
+            ("portfolio_json", "TEXT"),
+        ],
+        "scenario_bindings": [
+            # S3/S4 real version pinning: immutable generation-contract snapshot + integrity hash.
+            # scenario_bindings is itself an additive table (create_all makes it with these columns);
+            # these entries keep ensure_schema correct if the table predates the pinning fields.
+            ("gen_contract", "TEXT"),
+            ("gen_hash", "VARCHAR(64)"),
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -460,6 +473,14 @@ class ScenarioBinding(db.Model):
     family = db.Column(db.String(60), nullable=True)      # for scenario-family reuse cooldown
     seed = db.Column(db.String(64), nullable=False)
     status = db.Column(db.String(20), nullable=False, default="bound")   # bound | completed
+    # S3/S4 real version pinning: an immutable snapshot of the generation contract (board, variant,
+    # spec_version and the exact gen_params) captured at bind time, plus an integrity hash over it.
+    # Replay uses THIS, not whatever the live variant code currently returns, so an existing
+    # assignment reproduces its original world even after a variant is edited or superseded. A
+    # tampered contract fails the gen_hash check; a missing one (legacy binding) falls back to live
+    # params only when the live spec still hashes to the pinned content_hash, else fails closed.
+    gen_contract = db.Column(db.Text, nullable=True)
+    gen_hash = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "board", "attempt",
@@ -628,7 +649,11 @@ class CohortScenarioPlan(db.Model):
     coverage = db.Column(db.String(400), nullable=True)   # what this board covers
     difficulty = db.Column(db.String(20), nullable=True)  # intro | standard | advanced
     variant = db.Column(db.String(40), nullable=True)     # scenario family/variant tag (future)
-    notes = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)             # admin-maintained free text (never clobbered)
+    # S3/S4 cohort portfolio: the admin-approved set of variant ids a cohort draws from, stored in a
+    # DEDICATED column so saving a portfolio never overwrites the admin `notes` or other operator
+    # metadata. JSON: {"portfolio": [...], "set_by": <approver>, "set_at": <iso>}.
+    portfolio_json = db.Column(db.Text, nullable=True)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
     __table_args__ = (db.UniqueConstraint("cohort", "board", name="uq_plan_per_cohort_board"),)
