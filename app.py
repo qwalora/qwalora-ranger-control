@@ -35,6 +35,7 @@ from flask import (Flask, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
 import broker
+import range_lifecycle
 import catalog
 import githuboauth
 import program as P
@@ -61,6 +62,11 @@ RECONCILE_INTERVAL = int(os.environ.get("RECONCILE_INTERVAL_SECONDS", "60"))
 # long, so a stalled ranger never permanently holds a slot. 0 disables either.
 RANGE_MAX_AGE_HOURS = float(os.environ.get("RANGE_MAX_AGE_HOURS", "48"))
 RANGE_IDLE_HOURS = float(os.environ.get("RANGE_IDLE_HOURS", "8"))
+# S6 §16: once a candidate submits an isolated-board objective, a signed assessment-time
+# attestation is minted and an evidence window opens. For this long, reclamation PRESERVES the
+# range's disks (suspend/power-off instead of destroy) so the candidate's evidence survives until
+# the human report-approval review closes. 0 disables the hold.
+RANGE_EVIDENCE_HOLD_HOURS = float(os.environ.get("RANGE_EVIDENCE_HOLD_HOURS", "72"))
 # The program window: 26 weeks / 130 days. The clock starts when a cohort is
 # activated. Enforcement (window-expiry + inactivity washout) is a toggle, off
 # by default so a deploy never mass-washes-out; turn on when you want the 130-day
@@ -736,6 +742,31 @@ def create_app():
                         RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT),
                         RangeRequest.id != exclude_id).count())
 
+    def _resume_range(c, rr):
+        """Resume a SUSPENDED (powered-off) range: power the preserved disks back
+        on and return to deployed, re-taking a slot. Evidence is intact - this is
+        NOT a rebuild. If the host is at its cap, the range stays suspended (so its
+        evidence stays preserved) and the candidate retries; it is never silently
+        rebuilt (which would discard evidence)."""
+        if _slots_used_excluding(rr.host, rr.id) >= MAX_CONCURRENT:
+            rr.detail = f"at capacity on {rr.host} (cap {MAX_CONCURRENT}); range stays suspended, retry shortly"
+            return rr.status
+        now = _dt.datetime.now(_dt.timezone.utc)
+        try:
+            ok, detail = broker.power_on(c, user_key=_candidate_key(c))
+        except Exception as e:  # noqa: BLE001
+            rr.detail = ("resume failed: %s" % e)[:200]
+            return rr.status
+        if ok:
+            range_lifecycle.assert_transition(rr.status, "deployed")
+            rr.status = "deployed"
+            rr.detail = "resumed from suspend: " + detail
+            rr.last_active_at = now
+            rr.last_checked_at = now
+        else:
+            rr.detail = "resume failed: " + detail
+        return rr.status
+
     def _try_deploy(c, rr):
         """Deploy an isolated range if a slot is free, else park it as
         queued_slot. Returns the resulting status.
@@ -746,6 +777,10 @@ def create_app():
         oversubscribe the host. A failed launch releases the reserved slot
         ("failed", which does not occupy a slot). Idempotent: a range already
         holding a slot is never redeployed."""
+        # A suspended range is powered off with its disks (and evidence) intact:
+        # resume it (power-on) rather than rebuilding from scratch.
+        if rr.status == "suspended":
+            return _resume_range(c, rr)
         # Duplicate-deploy guard: already reserved/deploying/deployed -> leave it.
         if rr.status in RangeRequest.OCCUPIES_SLOT:
             return rr.status
@@ -941,19 +976,32 @@ def create_app():
             idle_h = (now - base_idle).total_seconds() / 3600.0 if base_idle else 0
             reason = None
             if RANGE_MAX_AGE_HOURS and age_h >= RANGE_MAX_AGE_HOURS:
-                reason = f"reclaimed: reached max age {RANGE_MAX_AGE_HOURS:g}h"
+                reason = "max_age"
             elif RANGE_IDLE_HOURS and idle_h >= RANGE_IDLE_HOURS:
-                reason = f"reclaimed: idle {RANGE_IDLE_HOURS:g}h"
+                reason = "idle"
             if not reason:
+                continue
+            # S6 §16: the evidence-preservation guard decides destroy vs suspend. While an
+            # assessment/evidence window is open (evidence_hold_until in the future), the range's
+            # disks hold candidate evidence, so reclamation SUSPENDS (power-off, frees the slot,
+            # preserves disks) instead of destroying. Outside the window, destroy as before.
+            decision = range_lifecycle.reclaim_decision(
+                state=rr.status, now=now,
+                evidence_hold_until=_aware(rr.evidence_hold_until), reason=reason)
+            if decision["action"] == "hold":
                 continue
             c = Candidate.query.get(rr.candidate_id)
             try:
                 if c:
-                    broker.destroy_range(c, user_key=_candidate_key(c))
+                    if decision["action"] == "suspend":
+                        broker.power_off(c, user_key=_candidate_key(c))
+                    else:
+                        broker.destroy_range(c, user_key=_candidate_key(c))
             except Exception:  # noqa: BLE001
                 pass
-            rr.status = "destroyed"
-            rr.detail = reason
+            range_lifecycle.assert_transition(rr.status, decision["to_state"])
+            rr.status = decision["to_state"]
+            rr.detail = decision["reason"]
             reclaimed.append(rr.host or "primary")
         return reclaimed
 
@@ -1259,6 +1307,11 @@ def create_app():
             br.range_attestation = _json.dumps(att)   # signed assessment-time attestation (immutable)
             if not creditable:
                 passed = False   # simulated/unavailable/absent range never yields an isolated award
+            # S6 §16: opening the assessment/evidence window pins an evidence hold on the range, so
+            # idle/age reclamation preserves its disks (suspend, never destroy) until review closes.
+            if rr is not None and RANGE_EVIDENCE_HOLD_HOURS:
+                rr.evidence_hold_until = (_dt.datetime.now(_dt.timezone.utc)
+                                          + _dt.timedelta(hours=RANGE_EVIDENCE_HOLD_HOURS))
         br.objective_passed = passed
         attest = {"kind": "objective", "handle": c.handle, "board": n,
                   "score": float(score), "passed": br.objective_passed,

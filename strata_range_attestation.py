@@ -88,14 +88,37 @@ def technical_validation(candidate, board, rr, broker_mod, *, expected_vms=None)
                    "candidate_attempt_ownership")
     live = bool(broker_mod is not None and broker_mod.is_live())
     if live:
-        # Real validation path is a release-gated dependency (needs a Ludus/Proxmox host).
+        # The real probe (broker.verify_range, S6 §15) inspects the live range's VMs/power/state. It
+        # is only TRUSTED once an operator has confirmed the adapter's REST paths against their
+        # installed Ludus version (broker.adapter_verified() -> LUDUS_ADAPTER_VERIFIED=1). Until then
+        # the probe stays fail-closed: the code exists, but we never credit a range we cannot trust
+        # the adapter to have validated, and we never fabricate a pass.
+        verified = bool(getattr(broker_mod, "adapter_verified", lambda: False)())
+        if not verified:
+            return {
+                "simulated": False,
+                "passed": False,
+                "checks": {k: None for k in check_names},
+                "observed_vms": [],
+                "reason": "live range present but Ludus adapter is UNVERIFIED "
+                          "(set LUDUS_ADAPTER_VERIFIED=1 on a confirmed host); fail closed",
+            }
+        expected = {}
+        if expected_vms:
+            expected["vms"] = list(expected_vms)
+            expected["expected_vm_count"] = len(expected_vms)
+        expected["require_powered_on"] = True
+        try:
+            probe = broker_mod.verify_range(candidate, expected)
+        except Exception as e:  # noqa: BLE001
+            return {"simulated": False, "passed": False, "checks": {k: None for k in check_names},
+                    "observed_vms": [], "reason": f"technical probe error: {e}; fail closed"}
         return {
             "simulated": False,
-            "passed": False,
-            "checks": {k: None for k in check_names},
-            "observed_vms": [],
-            "reason": "live technical validation requires a Ludus host (adapter not yet verified); "
-                      "fail closed",
+            "passed": bool(probe.get("ok")),
+            "checks": dict(probe.get("checks") or {}),
+            "observed_vms": list(probe.get("observed_vms") or []),
+            "reason": probe.get("reason") or "live technical validation ran",
         }
     # offline: simulate, clearly labeled. Mock simulation is never creditable as real on its own.
     return {

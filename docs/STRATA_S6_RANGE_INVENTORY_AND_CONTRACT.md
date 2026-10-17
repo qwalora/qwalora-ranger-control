@@ -91,14 +91,69 @@ Implemented (additive, fail-closed, preserves all accepted S1-S5 tests):
   override) awards and, with report approval, promotes exactly once; that the CI callback refuses
   boards 5/6; and that the attestation is signed and tamper-evident.
 
-## Deferred to later phases (pending the truncated brief, sections 14+)
+## §14 - Boards 5/6 under S3/S4 scenario governance (implemented)
 
-Scenario families for boards 5/6 under the S3/S4 governance model (schema/structural/feasibility/
-diversity/calibration/approval/versioning/candidate-safe projection); a separately versioned capstone
-rubric with board-6 objectives independent of board 5; the full range-provisioning lifecycle with an
-independent technical-validation probe and the §9 state machine; the stronger evidence contract
-(section 8) binding range instance + window; admin range-management controls (approve/queue/
-suspend=power-off/resume=power-on/rebuild/reclaim) with evidence-preservation guards; distinct Board
-5/6 mission briefs and deliverables; the operational cost model; and the `qwalora_flags` ACL account
-fix. None of these are started; they depend on the acceptance/test/restriction sections not present in
-the uploaded brief.
+Boards 5 (Raider) and 6 (Vanguard) now run under the same cohort scenario-governance machinery as
+boards 1/3/4: `goad-redteam` / `goad-capstone` spec validators with GOAD inventory feasibility checks;
+materially-diverse scenario families (`siem/board_variants.py` VARIANTS[5]/[6], ≥2 divergent axes);
+catalog build/approve/calibrate (advanced band); cohort portfolios; randomized, immutably-pinned
+assignment; reproducible replay; candidate-safe projection (no flags leak); and non-transfer of one
+candidate's answers to another's pinned world. The provisioner plants flags for the pinned
+`ScenarioBinding` seed + family `gen_params`, so the live range matches exactly what the grader scores
+and the ACL locks reference the approved accounts (closes the §17 latent defect). The governed grade
+path STILL passes through the §9 attestation chokepoint: a correct submission against a mock range
+earns no objective. Covered by `test_strata_s6_families.py` and `test_strata_s6_governance.py`.
+
+## §15 - Hardened Ludus adapter (implemented; live path category-D unverified)
+
+`broker.py` closes the section-3 gaps:
+- **Typed errors**: `LudusError` base + `LudusTimeout` / `LudusUnavailable` (retryable), `LudusAuthError`
+  (401/403), `LudusNotFound` (404), `LudusConflict` (409), `LudusProtocolError` (bad shape / TLS).
+- **TLS**: `LUDUS_VERIFY_TLS` honored (verify ON by default; explicit opt-out is surfaced in
+  `broker_status()`), optional `LUDUS_CA_BUNDLE` for a private CA. An SSL error under verification is a
+  hard, non-retryable trust failure, never masked.
+- **Bounded retry/backoff**: only IDEMPOTENT calls (status/config/wireguard GETs) are retried, only on
+  retryable typed errors, with capped exponential backoff + full jitter (`LUDUS_RETRIES`,
+  `LUDUS_TIMEOUT`). Writes (user/range create, deploy, destroy) are never silently retried.
+- **Idempotency**: `ensure_user` treats 409 as reuse; `destroy_range` treats 404 as already-gone.
+- **Power off/on**: `power_off` = Proxmox stop (disks preserved), `power_on` = start. There is NO
+  snapshot-suspend; the module never claims one.
+- **Technical-validation probe**: `verify_range(candidate, expected)` inspects the live range detail
+  (VMs present, count, powered-on, deployed state) so a broker-reported `deployed` is not trusted on
+  its own. It NEVER passes a mock range, and NEVER passes while the adapter is unverified: an operator
+  who has confirmed the REST paths against their installed Ludus version sets
+  `LUDUS_ADAPTER_VERIFIED=1`; until then the probe is fail-closed (code present, not trusted).
+  `strata_range_attestation.technical_validation` delegates to this probe behind that gate, so no
+  real-range objective credit is possible until the adapter is confirmed on a live host.
+
+Honesty: the exact Ludus REST paths remain UNVERIFIED against a running node (category D). The live
+adapter is present but gated off; mock is still the only exercised path. Covered (offline, mocked
+transport) by `test_strata_s6_lifecycle.py`.
+
+## §16 - Range lifecycle state machine + evidence-preservation guards (implemented)
+
+`range_lifecycle.py` is a PURE state machine (no I/O): states
+`configured/queued_slot/deploying/deployed/suspended/failed/destroyed`, legal transitions, slot
+accounting (a **suspended** range is powered off, so it FREES its concurrency slot while its disks and
+planted evidence persist), and the policy decisions reclamation uses. `app.py` executes them:
+- Submitting an isolated objective opens an **evidence hold** (`RangeRequest.evidence_hold_until`,
+  additive column + ensure_schema ALTER; `RANGE_EVIDENCE_HOLD_HOURS`, default 72h).
+- `_expire_ranges` consults `reclaim_decision`: while the evidence window is open it **suspends**
+  (power-off) instead of destroying, preserving the candidate's evidence - even for a max-age reclaim.
+  After the window closes, idle/age reclamation destroys as before (cost stays bounded).
+- Re-entering a suspended board **resumes** (power-on → deployed, same range id) rather than rebuilding
+  (destroy+deploy would discard evidence); if the host is at cap it stays suspended and the candidate
+  retries, never silently rebuilt.
+- `teardown_allowed` refuses an explicit destroy during an open evidence window.
+
+Covered by `test_strata_s6_lifecycle.py` (pure transitions/guards + integration: hold-on-submit,
+suspend-under-hold then destroy-after, resume-not-rebuild, suspended-frees-a-slot).
+
+## Deferred to later phases
+
+Still outstanding: a separately versioned Board 6 capstone rubric with objectives independent of
+board 5 (§18); distinct Board 5/6 ten-section mission briefs + candidate/admin status surfaces (§19);
+the operational cost/capacity model (§20); and the comprehensive acceptance suite + handoff (§21).
+Categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E (candidate acceptance)
+remain UNVERIFIED without a live host and must not be claimed as done. No merge, deploy, live Ludus
+provisioning, paid infrastructure, or candidate activation is in scope.

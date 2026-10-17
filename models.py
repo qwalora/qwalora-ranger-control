@@ -115,6 +115,7 @@ def ensure_schema(db):
             ("last_active_at", "TIMESTAMP"),
             ("board", "INTEGER"),
             ("host", "VARCHAR(60) DEFAULT 'primary'"),
+            ("evidence_hold_until", "TIMESTAMP"),
         ],
         "badges": [
             # Human-typeable public lookup key, minted on the certified badge.
@@ -364,10 +365,15 @@ class RangeRequest(db.Model):
     last_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)  # last status poll
     deployed_at = db.Column(db.DateTime(timezone=True), nullable=True)      # when it went deployed (TTL base)
     last_active_at = db.Column(db.DateTime(timezone=True), nullable=True)   # last candidate touch (idle base)
+    # S6 §16: while set and in the future, an assessment/evidence window is OPEN for this range;
+    # reclamation must preserve the disks (suspend, never destroy) so candidate evidence survives.
+    evidence_hold_until = db.Column(db.DateTime(timezone=True), nullable=True)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
-    ACTIVE = ("configured", "queued_slot", "deploying", "deployed")
+    # "suspended" (S6 §16) is powered-off: still an active, resumable lifecycle but frees the slot.
+    ACTIVE = ("configured", "queued_slot", "deploying", "deployed", "suspended")
     # States that consume a host RAM slot (count against the concurrency cap).
+    # A suspended range is powered off, so it does NOT occupy a slot.
     OCCUPIES_SLOT = ("deploying", "deployed")
 
     @property
