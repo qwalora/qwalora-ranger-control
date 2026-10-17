@@ -179,10 +179,19 @@ vs Vanguard multi-forest capstone). Updated for consistency with the rest of S6:
 - The candidate/admin range-status surface renders the new `suspended` state (`_RANGE_UI`), alongside
   the existing deployed/deploying/queued/configured/failed/destroyed.
 
+## §20 - Cost and capacity model (implemented)
+
+`docs/STRATA_S6_COST_AND_CAPACITY.md` models the boards 5/6 range operating cost and concurrency
+capacity: per-board GOAD VM footprints, the capacity math tied to the real controls
+(`MAX_CONCURRENT_RANGES`, idle/age caps, the §16 evidence-hold suspend behaviour), labeled monthly
+estimates (~$50-70/mo for the S6 ranges, well inside the $300/mo combined target, with a second GOAD
+host named as the likely overage trigger requiring approval), and honest trade-offs (no scale-to-zero
+for an active range; suspend saves RAM not the host bill; resume cheap vs rebuild expensive). All
+figures are labeled estimates; range timings are category-D unverified without a live host.
+
 ## Deferred to later phases
 
-Still outstanding:
-the operational cost/capacity model (§20); and the comprehensive acceptance suite + handoff (§21).
+Still outstanding: the comprehensive acceptance suite + handoff (§21).
 Categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E (candidate acceptance)
 remain UNVERIFIED without a live host and must not be claimed as done. No merge, deploy, live Ludus
 provisioning, paid infrastructure, or candidate activation is in scope.
