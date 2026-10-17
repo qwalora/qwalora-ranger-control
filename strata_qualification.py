@@ -39,7 +39,7 @@ import strata_catalog as cat
 from siem import case_contract as cc
 from siem import enterprise_grader as eg
 
-QUAL_DECISION_VERSION = 1
+QUAL_DECISION_VERSION = 2   # v2: binds submission_id, payload_sha256 and awarded_objective into the signed record
 PASS_BAR = _program.PASS_BAR          # 95.0 - unchanged
 
 # Critical-failure rules: any one makes the attempt a FAIL regardless of composite score.
@@ -348,15 +348,10 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
         case_id=case.id, attempt=assignment.attempt, submission_id=submission_row.id,
         rubric_version=rubric_version, mode=mode).first()
     if existing:
-        if not verify_decision(existing):
-            raise QualificationError(f"cached decision {existing.id} failed signature verification; "
-                                     f"refusing to trust it")
-        # the cached decision must pin the same source identity we just re-validated
-        if (existing.scenario_fingerprint != assignment.dataset_fingerprint
-                or existing.content_hash != assignment.content_hash
-                or existing.variant_id != assignment.variant_id):
-            raise QualificationError(f"cached decision {existing.id} pins a different scenario than "
-                                     f"the current assignment; refusing to trust it")
+        ok, reason = verify_decision_integrity(existing, case=case, submission=submission_row,
+                                               assignment=assignment, rubric_version=rubric_version)
+        if not ok:
+            raise QualificationError(f"cached decision {existing.id} failed integrity check: {reason}")
         return existing
 
     # scenario identity must match the case/binding the submission was made under
@@ -374,6 +369,7 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
 
     crit = _critical_failures(payload, verification, grader, assignment)
     passed = (score >= PASS_BAR) and not crit
+    awarded = bool(mode == "authorized" and passed)
 
     now = _dt.datetime.now(_dt.timezone.utc)
     record = {
@@ -389,6 +385,9 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
         "attempt": assignment.attempt,
         "board": b2.BOARD,
         "cohort": assignment.cohort,
+        # the exact submission this decision graded, bound by id AND its authenticated payload digest
+        "submission_id": submission_row.id,
+        "payload_sha256": cc.payload_digest(payload),
         "scenario": {"spec_id": assignment.spec_id, "spec_version": assignment.spec_version,
                      "content_hash": assignment.content_hash, "variant_id": assignment.variant_id,
                      "dataset_fingerprint": assignment.dataset_fingerprint},
@@ -396,6 +395,7 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
         "normalized": round(normalized, 4),
         "pass_bar": PASS_BAR,
         "passed": bool(passed),
+        "awarded_objective": awarded,
         "critical_failures": crit,
         "decided_at": now.isoformat(),
     }
@@ -409,7 +409,7 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
         spec_id=assignment.spec_id, spec_version=assignment.spec_version,
         content_hash=assignment.content_hash, variant_id=assignment.variant_id,
         principal=who, decision_record=json.dumps(record), decision_sig=sig,
-        awarded_objective=False)
+        awarded_objective=awarded)   # mirrors the signed record; the integrity verifier re-checks it
     db.session.add(decision)
 
     # Authorized pass -> award objective credit idempotently. This is the ONLY authorized writer of
@@ -438,11 +438,110 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
 
 
 def verify_decision(decision) -> bool:
-    """Verify a persisted decision's Ed25519 signature over its own record (audit)."""
+    """Verify a persisted decision's Ed25519 signature over its own record (audit, signature-only)."""
     try:
         return signing.verify(json.loads(decision.decision_record), decision.decision_sig)
     except Exception:  # noqa: BLE001
         return False
+
+
+def verify_decision_integrity(decision, *, case=None, submission=None, assignment=None,
+                              rubric_version=None):
+    """The common decision-integrity verifier. The cryptographically SIGNED decision record is the
+    authoritative source of qualification state; the mutable ORM columns are trusted only where they
+    equal the signed record. Returns (ok, reason). Used by verify_authorized_clearance and by
+    decide()'s cached-return path (and any other path that trusts an existing decision).
+
+    It checks, in order:
+      1. the Ed25519 signature over decision_record;
+      2. the record is the current contract version and kind;
+      3. the 95% passing condition recomputed FROM the signed record (score/pass_bar/critical ->
+         passed, and awarded == authorized&passed) - a signed failed/proposed record can never be
+         combined with flipped columns to pass;
+      4. every consequential ORM column equals the signed record (mode, passed, awarded_objective,
+         score, normalized, rubric/grader version, candidate/case/board/attempt, submission_id,
+         critical_failures, scenario spec/content_hash/variant/fingerprint, principal);
+      5. when case/submission/assignment are supplied, the signed record also matches the CURRENT
+         pinned case/submission (submission id + authenticated payload digest), candidate/cohort,
+         rubric, and the re-resolved scenario identity - so a decision cannot be reused against
+         another submission, candidate or scenario."""
+    try:
+        rec = json.loads(decision.decision_record)
+    except Exception as e:  # noqa: BLE001
+        return False, f"decision record unreadable: {e}"
+    if not signing.verify(rec, decision.decision_sig):
+        return False, "decision record signature invalid (record altered or not re-signed)"
+    if int(rec.get("decision_version", -1)) != QUAL_DECISION_VERSION:
+        return False, f"decision record version {rec.get('decision_version')} is not the current contract"
+    if rec.get("kind") != "board2-qualification-decision":
+        return False, "decision record is not a board-2 qualification decision"
+    # (3) recompute the passing + award conditions from the SIGNED record itself
+    rec_score = float(rec.get("score") or -1)
+    rec_bar = float(rec.get("pass_bar") or -1)
+    rec_crit = rec.get("critical_failures") or []
+    rec_passed = bool(rec.get("passed"))
+    if rec_bar != PASS_BAR:
+        return False, f"decision record pass_bar {rec_bar} != {PASS_BAR}"
+    if rec_passed != ((rec_score >= PASS_BAR) and not rec_crit):
+        return False, "decision record passed flag is inconsistent with its own score/criticals"
+    rec_mode = rec.get("mode")
+    if bool(rec.get("awarded_objective")) != (rec_mode == "authorized" and rec_passed):
+        return False, "decision record awarded_objective is inconsistent with mode/passed"
+    # (4) every consequential column must equal the signed record
+    sc = rec.get("scenario") or {}
+    col = {
+        "mode": (decision.mode, rec_mode),
+        "passed": (bool(decision.passed), rec_passed),
+        "awarded_objective": (bool(decision.awarded_objective), bool(rec.get("awarded_objective"))),
+        "score": (float(decision.score), rec_score),
+        "normalized": (float(decision.normalized or 0), float(rec.get("normalized") or 0)),
+        "rubric_version": (int(decision.rubric_version), int(rec.get("rubric_version") or -1)),
+        "candidate_id": (int(decision.candidate_id), int(rec.get("candidate_id") or -1)),
+        "case_id": (int(decision.case_id), int(rec.get("case_id") or -1)),
+        "board": (int(decision.board), int(rec.get("board") or -1)),
+        "attempt": (int(decision.attempt), int(rec.get("attempt") or -1)),
+        "submission_id": (int(decision.submission_id), int(rec.get("submission_id") or -1)),
+        "scenario_fingerprint": (decision.scenario_fingerprint, sc.get("dataset_fingerprint")),
+        "content_hash": (decision.content_hash, sc.get("content_hash")),
+        "variant_id": (decision.variant_id, sc.get("variant_id")),
+        "spec_id": (decision.spec_id, sc.get("spec_id")),
+        "principal": (decision.principal, rec.get("principal")),
+    }
+    for name, (dbv, recv) in col.items():
+        if dbv != recv:
+            return False, f"persisted {name} ({dbv!r}) does not match the signed record ({recv!r})"
+    try:
+        if (json.loads(decision.critical_failures or "[]")) != rec_crit:
+            return False, "persisted critical_failures do not match the signed record"
+    except Exception:  # noqa: BLE001
+        return False, "persisted critical_failures unreadable"
+    # (5) bind to the CURRENT pinned case/submission/assignment when supplied
+    if assignment is not None:
+        if (sc.get("dataset_fingerprint") != assignment.dataset_fingerprint
+                or sc.get("content_hash") != assignment.content_hash
+                or sc.get("variant_id") != assignment.variant_id
+                or sc.get("spec_id") != assignment.spec_id
+                or int(sc.get("spec_version") or -1) != int(assignment.spec_version)):
+            return False, "signed decision scenario does not match the current assignment"
+        if rec.get("cohort") != assignment.cohort:
+            return False, "signed decision cohort does not match the current assignment"
+    if rubric_version is not None and int(rec.get("rubric_version") or -1) != int(rubric_version):
+        return False, "signed decision rubric_version does not match the required rubric"
+    if case is not None:
+        if int(rec.get("case_id") or -1) != int(case.id) or int(rec.get("attempt") or -1) != int(case.attempt):
+            return False, "signed decision case/attempt does not match the current case"
+        if int(rec.get("candidate_id") or -1) != int(case.candidate_id):
+            return False, "signed decision candidate does not match the current case"
+    if submission is not None:
+        if int(rec.get("submission_id") or -1) != int(submission.id):
+            return False, "signed decision is for a different submission"
+        try:
+            cur_payload = json.loads(submission.payload) if submission.payload else {}
+        except Exception as e:  # noqa: BLE001
+            return False, f"current submission payload unreadable: {e}"
+        if rec.get("payload_sha256") != cc.payload_digest(cur_payload):
+            return False, "current submission payload differs from the one the decision signed"
+    return True, "ok"
 
 
 def verify_authorized_clearance(db, candidate, *, attempt=None):
@@ -474,17 +573,29 @@ def verify_authorized_clearance(db, candidate, *, attempt=None):
         rubric_version=case.rubric_version, mode="authorized").first()
     if decision is None:
         return False, "no authorized decision for the current submission"
-    if not (decision.passed and decision.awarded_objective):
-        return False, "authorized decision did not pass / award"
-    if not verify_decision(decision):
-        return False, "authorized decision signature is invalid"
-    if (decision.scenario_fingerprint != assignment.dataset_fingerprint
-            or decision.content_hash != assignment.content_hash
-            or decision.variant_id != assignment.variant_id):
-        return False, "authorized decision pins a different scenario than the current assignment"
+    # the SIGNED decision record is authoritative: it must verify, be internally consistent, equal
+    # its persisted columns, and match the current pinned case/submission/assignment.
+    ok, reason = verify_decision_integrity(decision, case=case, submission=sub, assignment=assignment,
+                                           rubric_version=case.rubric_version)
+    if not ok:
+        return False, f"decision integrity failed: {reason}"
+    # the signed record must be an authorized pass that awarded objective credit
+    rec = json.loads(decision.decision_record)
+    if rec.get("mode") != "authorized" or not rec.get("passed") or not rec.get("awarded_objective"):
+        return False, "signed decision is not an authorized, passing, awarding decision"
+    # the source submission must still re-validate (finalized + signed + full-payload + identity)
     try:
         _check_case_binding(case, assignment, case.rubric_version)
         _check_submission_binding(sub, case, assignment, case.rubric_version)
     except QualificationError as e:
         return False, f"source re-validation failed: {e}"
+    # BoardResult objective credit must be consistent with THIS signed authorized decision
+    from models import BoardResult
+    br = BoardResult.query.filter_by(candidate_id=candidate.id, board=board).first()
+    if br is None or not br.objective_passed:
+        return False, "no objective credit recorded"
+    if br.objective_sig != decision.decision_sig:
+        return False, "BoardResult objective signature does not match the signed authorized decision"
+    if float(br.objective_score or -1) != float(decision.score):
+        return False, "BoardResult objective score does not match the signed decision"
     return True, "ok"

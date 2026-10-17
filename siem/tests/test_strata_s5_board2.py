@@ -1005,6 +1005,86 @@ def test_gapf1b_shared_gate_rejects_bad_decisions():
         ctx.pop()
 
 
+def _weak_submission(a):
+    _events, truth = b2.generate_world(a)
+    t0 = truth["incidents"][0]
+    return {"baseline_summary": "b", "overall_conclusion": "c",
+            "incidents": [{"label": t0["family"], "disposition": "confirmed_incident",
+                           "severity": "high", "confidence": 60,
+                           "attack_techniques": t0["techniques"][:1],
+                           "primary_identity": t0["primary_identity"], "affected_assets": [],
+                           "cited_evidence": [{"event_uid": t0["event_uids"][0], "index": a.index_name,
+                                               "query": {"query": {"match_all": {}}},
+                                               "role": "primary"}]}]}
+
+
+def test_gapf6_signed_decision_record_is_authoritative():
+    """The signed decision record - not the mutable ORM columns - is authoritative. Flipping columns
+    (passed/awarded/mode/score) on an originally failed or proposed signed decision, or reusing a
+    decision against another submission, is rejected at the shared boundary and at decide()'s cache."""
+    application, db, ctx, admin = _app()
+    try:
+        from models import BoardResult, QualificationDecision
+        # 1. a legitimately-signed FAILED authorized decision, then columns flipped to pass + award
+        c1 = _cand(db, "f1", "2026-A")
+        a1 = b2.resolve_assignment(db, c1); cl1 = FakeCluster(); b2.provision(cl1, a1)
+        case1, sub1 = _submit_signed(db, c1, a1, cl1, _weak_submission(a1))
+        d1 = sq.decide(db, case1, sub1, a1, _reader(cl1), principal=admin, mode="authorized",
+                       activation=_test_activation())
+        assert not d1.passed and not d1.awarded_objective
+        d1.passed = True; d1.awarded_objective = True; db.session.add(d1)
+        br1 = BoardResult(candidate_id=c1.id, board=2, objective_passed=True, objective_score=d1.score,
+                          objective_sig=d1.decision_sig, report_status="approved")
+        db.session.add(br1); db.session.commit()
+        ok, _ = sq.verify_authorized_clearance(db, c1)
+        assert not ok, "flipped-column failed decision must not clear"
+
+        # 2. a signed PASSING PROPOSED decision, then mode flipped to authorized + award
+        c2 = _cand(db, "f2", "2026-A")
+        a2 = b2.resolve_assignment(db, c2); cl2 = FakeCluster(); b2.provision(cl2, a2)
+        case2, sub2 = _submit_signed(db, c2, a2, cl2, _correct_submission(a2, cl2))
+        d2 = sq.decide(db, case2, sub2, a2, _reader(cl2), principal=admin, mode="proposed")
+        assert d2.passed and not d2.awarded_objective and d2.mode == "proposed"
+        d2.mode = "authorized"; d2.awarded_objective = True; db.session.add(d2)
+        br2 = BoardResult(candidate_id=c2.id, board=2, objective_passed=True, objective_score=d2.score,
+                          objective_sig=d2.decision_sig, report_status="approved")
+        db.session.add(br2); db.session.commit()
+        ok, _ = sq.verify_authorized_clearance(db, c2)
+        assert not ok, "proposed decision relabelled authorized must not clear"
+
+        # 3. a legit authorized pass, then a column (score) changed without resigning -> rejected
+        c3 = _cand(db, "f3", "2026-A")
+        a3 = b2.resolve_assignment(db, c3); cl3 = FakeCluster(); b2.provision(cl3, a3)
+        case3, sub3 = _submit_signed(db, c3, a3, cl3, _correct_submission(a3, cl3))
+        d3 = sq.decide(db, case3, sub3, a3, _reader(cl3), principal=admin, mode="authorized",
+                       activation=_test_activation())
+        assert sq.verify_authorized_clearance(db, c3)[0]      # intact -> ok
+        good_score = d3.score
+        d3.score = 50.0; db.session.add(d3); db.session.commit()
+        ok, _ = sq.verify_authorized_clearance(db, c3)
+        assert not ok, "score changed without resigning must be rejected"
+        d3.score = good_score; db.session.add(d3); db.session.commit()
+        assert sq.verify_authorized_clearance(db, c3)[0]      # restored -> ok again
+
+        # 4. reuse a signed decision against ANOTHER candidate's submission -> rejected
+        c4 = _cand(db, "f4", "2026-A")
+        a4 = b2.resolve_assignment(db, c4); cl4 = FakeCluster(); b2.provision(cl4, a4)
+        _case4, sub4 = _submit_signed(db, c4, a4, cl4, _correct_submission(a4, cl4))
+        ok, reason = sq.verify_decision_integrity(QualificationDecision.query.get(d3.id),
+                                                  case=case3, submission=sub4, assignment=a3,
+                                                  rubric_version=case3.rubric_version)
+        assert not ok and "different submission" in reason
+
+        # 6. decide()'s cached path validates against the same signed contract
+        dd = QualificationDecision.query.get(d3.id)
+        dd.passed = False; db.session.add(dd); db.session.commit()
+        with pytest.raises(sq.QualificationError):
+            sq.decide(db, case3, sub3, a3, _reader(cl3), principal=admin, mode="authorized",
+                      activation=_test_activation())
+    finally:
+        ctx.pop()
+
+
 # =============================================================================================
 # 10. Reviewer/evaluator concurrency - against REAL PostgreSQL (skips if none authorized).
 # =============================================================================================
