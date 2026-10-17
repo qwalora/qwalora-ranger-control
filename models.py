@@ -371,10 +371,12 @@ class RangeRequest(db.Model):
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
     # "suspended" (S6 §16) is powered-off: still an active, resumable lifecycle but frees the slot.
-    ACTIVE = ("configured", "queued_slot", "deploying", "deployed", "suspended")
+    # "resuming" (S6 R3-2) is an issued-but-unconfirmed power-on: it still OCCUPIES a slot (the VMs may
+    # already be running) until the transition resolves, so capacity is never undercounted.
+    ACTIVE = ("configured", "queued_slot", "deploying", "deployed", "suspended", "resuming")
     # States that consume a host RAM slot (count against the concurrency cap).
-    # A suspended range is powered off, so it does NOT occupy a slot.
-    OCCUPIES_SLOT = ("deploying", "deployed")
+    # A suspended range is powered off, so it does NOT occupy a slot; a resuming one does.
+    OCCUPIES_SLOT = ("deploying", "deployed", "resuming")
 
     @property
     def is_deployed(self):

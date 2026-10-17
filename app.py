@@ -792,18 +792,18 @@ def create_app():
     def _host_lock(host):
         """Serialize capacity admission for a host. On PostgreSQL, take a per-host TRANSACTIONAL
         advisory lock (pg_advisory_xact_lock) held until this transaction commits/rolls back, so two
-        concurrent transactions cannot both observe free capacity and both reserve - the second blocks
-        until the first commits its reservation. On SQLite there is a single writer, so admission is
-        already serialized and this is a no-op. (The Postgres path needs a real PG server to verify -
-        category C, unverified offline.)"""
-        try:
-            if db.engine.dialect.name == "postgresql":
-                key = int.from_bytes(hashlib.sha256(("rangecap:" + host).encode()).digest()[:8],
-                                     "big", signed=True)
-                db.session.execute(db.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
-        except Exception:  # noqa: BLE001
-            # Never let lock acquisition crash admission; fall back to the unlocked check (SQLite-safe).
-            pass
+        concurrent transactions cannot both observe free capacity and both reserve. On SQLite there is
+        a single writer, so admission is already serialized and this is an explicit local no-op.
+
+        R3-1: on PostgreSQL a lock-acquisition failure FAILS CLOSED - it raises, and the caller must
+        refuse admission. There is NO unlocked fallback on Postgres, because proceeding without the
+        lock would be exactly the oversubscription race this guards. (The Postgres path still needs a
+        real PG server to verify end to end - category C, unverified offline.)"""
+        if db.engine.dialect.name != "postgresql":
+            return  # SQLite/local single-writer: serialized by the database itself
+        key = int.from_bytes(hashlib.sha256(("rangecap:" + host).encode()).digest()[:8],
+                             "big", signed=True)
+        db.session.execute(db.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
 
     def _admit(host, board, exclude_id):
         """Atomically decide whether `host` can admit a range of `board`. Acquires the per-host
@@ -811,8 +811,15 @@ def create_app():
         same transaction, reserve the slot (flip to 'deploying') and eventually commit - the xact lock
         held here keeps the check+reserve atomic against concurrent admissions. A count limit of two is
         never assumed to mean enough RAM for any two ranges: two capstones (2+2 units) exceed the
-        default capacity and are refused, while two Raiders (1+1) fit."""
-        _host_lock(host)
+        default capacity and are refused, while two Raiders (1+1) fit.
+
+        R3-1: if the PostgreSQL advisory lock cannot be acquired, admission is REFUSED (fail closed) -
+        we never admit without the serialization guarantee."""
+        try:
+            _host_lock(host)
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("capacity admission refused on %s: advisory lock failed: %s", host, e)
+            return False
         return (_capacity_used(host, exclude_id) + _board_weight(board)) <= _host_capacity()
 
     def _resume_range(c, rr):
@@ -828,25 +835,25 @@ def create_app():
                          f"({_capacity_used(rr.host, rr.id)}+{_board_weight(rr.board)} > "
                          f"{_host_capacity()} units); range stays suspended, retry shortly")
             return rr.status
-        # Reserve-before-launch (§4): flip to a slot-occupying state and FLUSH before the slow
-        # power-on, still holding the admission lock, so two concurrent resumes/deploys cannot both
-        # pass the capacity check. On a failed/unconfirmed power-on the reservation is released back to
-        # suspended (the disks and evidence are untouched), never left falsely holding a slot.
-        prev = rr.status
-        range_lifecycle.assert_transition(prev, "deploying")
-        rr.status = "deploying"
-        rr.detail = "slot reserved; resuming"
+        # Reserve-before-launch (§4): flip to the slot-occupying 'resuming' state and FLUSH before the
+        # slow power-on, still holding the admission lock, so two concurrent resumes/deploys cannot
+        # both pass the capacity check.
+        range_lifecycle.assert_transition(rr.status, "resuming")
+        rr.status = "resuming"
+        rr.detail = "slot reserved; resuming (power-on issued)"
         db.session.flush()
         now = _dt.datetime.now(_dt.timezone.utc)
-        # §2: only treat the range as deployed once the broker CONFIRMS the VMs are running. An
-        # accepted-but-unconfirmed power-on releases the reservation back to the preserved suspended
-        # state (disks + evidence intact), so capacity is never counted against an unconfirmed resume.
+        # R3-2: only DEPLOYED once the broker CONFIRMS the VMs are running. A request failure/exception
+        # is a definitive failure -> release to suspended. But an accepted-but-UNCONFIRMED power-on
+        # (pending/unknown) must KEEP COUNTING: the VMs may already be starting, so the range stays
+        # 'resuming' (slot held) and a later read-only poll (_poll_resuming) resolves it WITHOUT
+        # re-issuing the power-on. Capacity is never undercounted on an uncertain transition.
         try:
             confirmed, detail, outcome = broker.power_on(c, user_key=_candidate_key(c))
         except Exception as e:  # noqa: BLE001
             range_lifecycle.assert_transition(rr.status, "suspended")
             rr.status = "suspended"
-            rr.detail = ("resume request failed, range left suspended: %s" % e)[:200]
+            rr.detail = ("resume request failed (definitive), range left suspended: %s" % e)[:200]
             db.session.flush()
             return rr.status
         if confirmed:
@@ -855,10 +862,15 @@ def create_app():
             rr.detail = "resumed from suspend: " + detail
             rr.last_active_at = now
             rr.last_checked_at = now
-        else:
+        elif outcome == broker.OP_FAILED:
+            # definitive failure (e.g. request rejected / confirmed still stopped): release the slot
             range_lifecycle.assert_transition(rr.status, "suspended")
             rr.status = "suspended"
-            rr.detail = ("resume %s, range left suspended: %s" % (outcome, detail))[:200]
+            rr.detail = ("resume failed (definitive), range left suspended: %s" % detail)[:200]
+        else:
+            # accepted but unconfirmed (pending/unknown): HOLD the reservation as 'resuming'
+            rr.detail = ("resume %s (holding reservation; will re-confirm): %s" % (outcome, detail))[:200]
+            rr.last_checked_at = now
         db.session.flush()
         return rr.status
 
@@ -948,10 +960,18 @@ def create_app():
             db.session.flush()
             return rr.status
         now = _dt.datetime.now(_dt.timezone.utc)
-        rr.status = st
-        rr.detail = f"{detail}; {sdetail}"
         rr.last_checked_at = now
         rr.last_active_at = now  # starting the lab is activity
+        # R3-2: an accepted deploy whose status cannot be positively resolved ('unknown') KEEPS its
+        # reserved 'deploying' state (still counted), to be resolved by a later poll - it is never
+        # dropped to a non-occupying state on an uncertain probe, which would undercount capacity and
+        # risk a duplicate deploy.
+        if st == "unknown":
+            rr.status = "deploying"
+            rr.detail = ("deploy accepted; status unconfirmed (holding reservation): %s" % sdetail)[:200]
+            return rr.status
+        rr.status = st
+        rr.detail = f"{detail}; {sdetail}"
         if st == "deployed":
             if not rr.deployed_at:
                 _notify(c, "range", "Your board %d lab is ready" % rr.board,
@@ -1047,6 +1067,11 @@ def create_app():
             except Exception:  # noqa: BLE001
                 continue
             rr.last_checked_at = now
+            # R3-2: 'unknown' (transient probe error / unrecognized state) keeps the range 'deploying'
+            # (still counted); never free or re-fail an in-flight range on an uncertain probe.
+            if st == "unknown":
+                rr.detail = ("deploy status unconfirmed (holding reservation): %s" % sdetail)[:200]
+                continue
             if st != rr.status:
                 rr.status = st
                 rr.detail = sdetail
@@ -1060,6 +1085,40 @@ def create_app():
                         pass
                 _notify(c, "range", "Your board %d lab is ready" % rr.board,
                         "Your range is deployed. Download WireGuard from your dashboard and begin.")
+        return changed
+
+    def _poll_resuming():
+        """R3-2: resolve ranges stuck in 'resuming' (a power-on was issued but not yet confirmed)
+        WITHOUT re-issuing any power command. A READ-ONLY confirmation decides: VMs confirmed running
+        -> deployed; definitive failure (VMs confirmed stopped) -> suspended (reservation released);
+        pending/unknown -> stay 'resuming' (slot held, re-checked next pass). This recovers
+        accepted-but-unconfirmed resumes across maintenance passes and process restarts with no
+        phantom capacity and no duplicate power operations."""
+        changed = 0
+        rows = RangeRequest.query.filter(RangeRequest.status == "resuming").all()
+        for rr in rows:
+            c = Candidate.query.get(rr.candidate_id)
+            if not c:
+                continue
+            now = _dt.datetime.now(_dt.timezone.utc)
+            try:
+                confirmed, outcome = broker.confirm_power(c, "running", user_key=_candidate_key(c))
+            except Exception:  # noqa: BLE001
+                continue  # keep 'resuming' (counted); re-check on a later pass
+            rr.last_checked_at = now
+            if confirmed:
+                range_lifecycle.assert_transition(rr.status, "deployed")
+                rr.status = "deployed"
+                rr.detail = "resume confirmed (VMs running)"
+                rr.deployed_at = rr.deployed_at or now
+                rr.last_active_at = now
+                changed += 1
+            elif outcome == broker.OP_FAILED:
+                range_lifecycle.assert_transition(rr.status, "suspended")
+                rr.status = "suspended"
+                rr.detail = "resume definitively failed (VMs confirmed stopped); suspended"
+                changed += 1
+            # else pending/unknown: stay 'resuming' (slot held), no power op re-issued
         return changed
 
     def _retire_range(rr, c=None, *, reason, force=False):
@@ -1227,6 +1286,7 @@ def create_app():
         _activate_due_cohorts()
         _enforce_program()
         _poll_deploying()
+        _poll_resuming()      # R3-2: resolve accepted-but-unconfirmed resumes (read-only, no re-issue)
         freed = _expire_ranges()
         _cleanup_suspended()  # reclaim suspended-range disks past retention (evidence-safe, confirmed)
         db.session.flush()
@@ -2173,6 +2233,7 @@ def create_app():
         "queued_slot": ("Queued for a slot", "pill-amber", "dot-amber"),
         "configured": ("Configured", "pill-violet", "dot-violet"),
         "suspended": ("Suspended (resume to continue)", "pill-violet", "dot-violet"),
+        "resuming": ("Resuming", "pill-amber", "dot-amber"),
         "failed": ("Failed", "pill-amber", "dot-amber"),
         "destroyed": ("Destroyed", "pill", "dot"),
         "queued": ("Configured", "pill-violet", "dot-violet"),  # legacy

@@ -23,6 +23,7 @@ SUITES=(
   siem/tests/test_strata_s6_retention.py
   siem/tests/test_strata_s6_real_credit.py
   siem/tests/test_strata_s6_capacity.py
+  siem/tests/test_strata_s6_remote_state.py
 )
 fail=0
 for s in "${SUITES[@]}"; do

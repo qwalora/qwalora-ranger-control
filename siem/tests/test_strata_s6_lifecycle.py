@@ -221,15 +221,21 @@ def test_power_off_on_are_power_toggles_not_snapshots():
 
 
 def test_broker_distinguishes_accepted_from_confirmed(monkeypatch):
-    # §2: a live power-off whose confirmation poll never sees the VMs stopped is NOT confirmed
-    # (PENDING), so a caller must not free the slot; a probe error is UNKNOWN; neither is a pass.
+    # §2/R3-3: a live power-off whose confirmation never sees all VMs stopped is NOT confirmed, so a
+    # caller must not free the slot. An UNKNOWN VM -> PENDING; a probe error -> UNKNOWN; a VM still
+    # running -> FAILED (power-off ineffective). None is a pass.
     os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
     monkeypatch.setattr(broker, "_req", lambda *a, **k: {})  # POST accepted
-    # VMs still running on every poll -> power-off PENDING, not confirmed
+    # a VM with no recognized power field is UNKNOWN -> power-off PENDING, not confirmed
     monkeypatch.setattr(broker, "range_detail",
-                        lambda *a, **k: {"VMs": [{"name": "DC01", "poweredOn": True}]})
+                        lambda *a, **k: {"VMs": [{"name": "DC01", "powerState": "transitioning"}]})
     confirmed, _d, outcome = broker.power_off(_C())
     assert confirmed is False and outcome == broker.OP_PENDING
+    # a VM still running means power-off did not take -> FAILED (definitive), still not a pass
+    monkeypatch.setattr(broker, "range_detail",
+                        lambda *a, **k: {"VMs": [{"name": "DC01", "poweredOn": True}]})
+    cf, _df, of = broker.power_off(_C())
+    assert cf is False and of == broker.OP_FAILED
     # a probe error -> UNKNOWN (conservative, retryable), never a false confirmation
     def _boom(*a, **k):
         raise broker.LudusUnavailable("503", status=503)

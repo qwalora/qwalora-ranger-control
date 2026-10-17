@@ -368,7 +368,10 @@ def range_status(candidate, user_key=None):
     """Poll the live range state (idempotent GET; retried on transient faults).
 
     Returns (status, detail) with status in
-    configured/deploying/deployed/suspended/failed/destroyed."""
+    configured/deploying/deployed/suspended/failed/destroyed/unknown. R3-2: a transient probe error
+    returns 'unknown' (NOT 'failed'), so a caller never drops an in-flight (slot-holding) range out of
+    its reserved state on an uncertain probe - it keeps the reservation and re-checks on a later pass.
+    Only a definite Ludus ERROR/FAILURE state maps to 'failed'."""
     if not is_live():
         # Mock: once asked, report deployed so the end-to-end chain completes.
         return ("deployed", "mock: range SUCCESS (simulated)")
@@ -383,11 +386,12 @@ def range_status(candidate, user_key=None):
             "DESTROYED": "destroyed",
             "POWEREDOFF": "suspended", "POWERED OFF": "suspended", "STOPPED": "suspended",
         }
-        return (mapping.get(state, "deploying"), f"Ludus state: {state or 'unknown'}")
+        # An unrecognized/empty state is UNKNOWN (conservative), not an assumed 'deploying'.
+        return (mapping.get(state, "unknown"), f"Ludus state: {state or 'unknown'}")
     except LudusNotFound:
         return ("destroyed", "Ludus state: range not found")
     except LudusError as e:
-        return ("failed", f"status error: {e}")
+        return ("unknown", f"status probe error (transient): {e}")
 
 
 def range_detail(candidate, user_key=None):
@@ -543,15 +547,76 @@ def _confirm(fn, *, want, attempts=_CONFIRM_POLLS):
     return False, OP_PENDING
 
 
+# Tri-state VM power (S6 R3-3): a power state is only RUNNING or STOPPED when an EXPLICIT, recognized
+# field says so. An absent or unrecognized field is UNKNOWN - never silently treated as stopped.
+VM_RUNNING = "running"
+VM_STOPPED = "stopped"
+VM_UNKNOWN = "unknown"
+_RUNNING_TOKENS = frozenset({"running", "on", "poweredon", "powered on", "started", "up", "active"})
+_STOPPED_TOKENS = frozenset({"stopped", "off", "poweredoff", "powered off", "shutoff",
+                             "shut off", "halted", "down"})
+
+
+def _classify_vm(vm):
+    """Classify one VM's power state as running/stopped/unknown from explicit recognized fields only."""
+    for key in ("poweredOn", "PoweredOn", "poweredon"):
+        if key in vm and isinstance(vm[key], bool):
+            return VM_RUNNING if vm[key] else VM_STOPPED
+    ps = vm.get("powerState") or vm.get("PowerState") or vm.get("state") or vm.get("status")
+    if ps is None:
+        return VM_UNKNOWN           # no recognized power field present
+    token = str(ps).strip().lower()
+    if token in _RUNNING_TOKENS:
+        return VM_RUNNING
+    if token in _STOPPED_TOKENS:
+        return VM_STOPPED
+    return VM_UNKNOWN               # an unrecognized value stays UNKNOWN, never assumed stopped
+
+
 def _vm_power_states(detail):
+    """Map VM name -> tri-state power (running/stopped/unknown). A VM given only as a bare name, with
+    no power field, is UNKNOWN."""
     out = {}
     for vm in (detail.get("VMs") or detail.get("vms") or []):
         if isinstance(vm, dict):
-            name = vm.get("name") or vm.get("Name") or ""
-            running = bool(vm.get("poweredOn") or vm.get("PoweredOn")
-                           or (vm.get("powerState") in ("running", "on")))
-            out[name] = running
+            out[vm.get("name") or vm.get("Name") or ""] = _classify_vm(vm)
+        elif isinstance(vm, str):
+            out[vm] = VM_UNKNOWN
     return out
+
+
+def _all_stopped(states):
+    """True only when there is at least one VM and EVERY VM is explicitly stopped. Any running,
+    unknown or (by construction) missing VM makes this False - power-off is never confirmed on doubt."""
+    return bool(states) and all(s == VM_STOPPED for s in states.values())
+
+
+def _all_running(states):
+    """True only when there is at least one VM and EVERY VM is explicitly running."""
+    return bool(states) and all(s == VM_RUNNING for s in states.values())
+
+
+def confirm_power(candidate, want, user_key=None, *, attempts=1):
+    """READ-ONLY confirmation of a range's VM power state - issues NO power command (so it never
+    re-sends a destructive/uncertain operation). want is 'running' or 'stopped'. Returns
+    (confirmed, outcome), polling up to `attempts` times. Mock is treated as confirmed. A probe error
+    is UNKNOWN; every VM explicitly in the target state is CONFIRMED; every VM explicitly in the
+    definitive opposite state (e.g. all stopped when a resume wanted running) is FAILED; anything else
+    (mixed, or any unknown/missing VM) is PENDING - never confirmed on doubt."""
+    if not is_live():
+        return (True, OP_CONFIRMED)
+    for _ in range(max(1, attempts)):
+        try:
+            states = _vm_power_states(range_detail(candidate, user_key=user_key))
+        except LudusError:
+            return (False, OP_UNKNOWN)
+        except Exception:  # noqa: BLE001
+            return (False, OP_UNKNOWN)
+        if (_all_running(states) if want == "running" else _all_stopped(states)):
+            return (True, OP_CONFIRMED)
+        if (_all_stopped(states) if want == "running" else _all_running(states)):
+            return (False, OP_FAILED)   # definitive opposite: the operation did not take
+    return (False, OP_PENDING)
 
 
 def power_off(candidate, user_key=None, *, confirm=True):
@@ -571,12 +636,11 @@ def power_off(candidate, user_key=None, *, confirm=True):
         return (False, f"power-off request failed: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-off accepted (VMs stopping; not yet confirmed)", OP_ACCEPTED)
-
-    def _all_stopped():
-        states = _vm_power_states(range_detail(candidate, user_key=user_key))
-        return bool(states) and not any(states.values())
-    ok, outcome = _confirm(_all_stopped, want=False)
+    # Resolve via the tri-state confirmation: all stopped -> CONFIRMED; all running (power-off did not
+    # take) -> FAILED; mixed/unknown -> PENDING. Never confirm on any unknown/missing/running VM.
+    ok, outcome = confirm_power(candidate, "stopped", user_key=user_key, attempts=_CONFIRM_POLLS)
     msg = {OP_CONFIRMED: "power-off confirmed (all VMs stopped; disks preserved)",
+           OP_FAILED: "power-off not effective (VMs still running)",
            OP_PENDING: "power-off accepted but VMs not yet confirmed stopped",
            OP_UNKNOWN: "power-off accepted but remote state could not be confirmed"}[outcome]
     return (ok, msg, outcome)
@@ -595,12 +659,10 @@ def power_on(candidate, user_key=None, *, confirm=True):
         return (False, f"power-on request failed: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-on accepted (VMs starting; not yet confirmed)", OP_ACCEPTED)
-
-    def _all_running():
-        states = _vm_power_states(range_detail(candidate, user_key=user_key))
-        return bool(states) and all(states.values())
-    ok, outcome = _confirm(_all_running, want=True)
+    # all running -> CONFIRMED; all stopped (power-on did not take) -> FAILED; mixed/unknown -> PENDING.
+    ok, outcome = confirm_power(candidate, "running", user_key=user_key, attempts=_CONFIRM_POLLS)
     msg = {OP_CONFIRMED: "power-on confirmed (all VMs running)",
+           OP_FAILED: "power-on not effective (VMs still stopped)",
            OP_PENDING: "power-on accepted but VMs not yet confirmed running",
            OP_UNKNOWN: "power-on accepted but remote state could not be confirmed"}[outcome]
     return (ok, msg, outcome)

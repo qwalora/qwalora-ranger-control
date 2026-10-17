@@ -144,46 +144,91 @@ def test_capstone_fits_when_capacity_raised():
         ctx.pop()
 
 
+
+
 def _pg_test_url():
-    return os.environ.get("RANGER_PG_TEST_URL") or (
-        os.environ.get("DATABASE_URL") if (os.environ.get("DATABASE_URL", "").startswith("postgres")
-                                           and os.environ.get("RANGER_TEST_ALLOW_DB_MUTATION")) else None)
+    # An authorized, isolated, DISPOSABLE PostgreSQL test database AND explicit destructive-test
+    # authorization are both required. A non-disposable or shared DB must never be used.
+    if not os.environ.get("RANGER_TEST_ALLOW_DB_MUTATION"):
+        return None
+    url = os.environ.get("RANGER_PG_TEST_URL")
+    if url and url.startswith("postgres") and os.environ.get("RANGER_PG_TEST_DISPOSABLE") == "1":
+        return url
+    return None
 
 
 @pytest.mark.skipif(_pg_test_url() is None,
-                    reason="no authorized PostgreSQL test server: transactional capacity concurrency "
-                           "UNVERIFIED (set RANGER_PG_TEST_URL + RANGER_TEST_ALLOW_DB_MUTATION)")
+                    reason="no authorized disposable PostgreSQL test server: transactional capacity "
+                           "concurrency UNVERIFIED (needs RANGER_PG_TEST_URL + "
+                           "RANGER_PG_TEST_DISPOSABLE=1 + RANGER_TEST_ALLOW_DB_MUTATION)")
 def test_transactional_admission_under_competing_pg_transactions():
-    """Competing-transaction admission on real PostgreSQL. Scenarios (each must never oversubscribe):
-    two simultaneous deployments, two simultaneous resumes, a deployment racing a resume, reconciliation
-    running concurrently, and a failure after a reservation (the reserved unit must be released). The
-    per-host pg_advisory_xact_lock must serialize check+reserve so exactly one of two racers wins the
-    last unit. Requires a disposable PostgreSQL server; without one this is UNVERIFIED and skipped."""
+    """R3-4: competing-transaction admission on a real, disposable PostgreSQL database, driving the
+    ACTUAL production admission path (the /labs/start route -> _try_deploy -> _admit's per-host
+    pg_advisory_xact_lock + PERSISTED weighted capacity), not a re-implementation.
+
+    Two capstone candidates race /labs/start against a 1-capstone (2-unit) host. The persisted weighted
+    capacity must never exceed the budget: exactly one range may hold the host, the other must queue.
+    The same admission lock covers resume/resume, deploy/resume and deploy-vs-reconcile races (every
+    path funnels through _admit). Requires an authorized disposable PG server; else UNVERIFIED + skip.
+    """
     import threading
-    import sqlalchemy as sa
 
-    url = _pg_test_url()
-    eng = sa.create_engine(url)
-    host = "pgcap"
-    results = []
+    import app as appmod
+    from models import db, Cohort, AdminUser, Candidate, RangeRequest
+    import strata_catalog as cat
+    import strata_assignment as asn
+    from siem import board_variants as bv
 
-    def _admit_and_reserve():
-        # Mirror _admit: take the per-host xact advisory lock, check capacity (<=1 unit), reserve.
-        import hashlib
-        key = int.from_bytes(hashlib.sha256(("rangecap:" + host).encode()).digest()[:8], "big", signed=True)
-        with eng.begin() as cn:
-            cn.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
-            used = cn.execute(sa.text(
-                "SELECT COALESCE(SUM(weight),0) FROM _cap WHERE host=:h"), {"h": host}).scalar()
-            if used + 1 <= 1:
-                cn.execute(sa.text("INSERT INTO _cap(host, weight) VALUES (:h, 1)"), {"h": host})
-                results.append("won")
-            else:
-                results.append("queued")
+    os.environ["DATABASE_URL"] = _pg_test_url()
+    os.environ["ADMIN_TOKEN"] = "s6-pgcap-admin"
+    os.environ["RANGER_STRATA_PORTFOLIOS"] = "1"
+    appmod.MAX_CONCURRENT = 2  # 2 units => exactly ONE capstone (weight 2) fits
 
-    with eng.begin() as cn:
-        cn.execute(sa.text("CREATE TEMP TABLE IF NOT EXISTS _cap(host text, weight int)"))
-    t1 = threading.Thread(target=_admit_and_reserve)
-    t2 = threading.Thread(target=_admit_and_reserve)
-    t1.start(); t2.start(); t1.join(); t2.join()
-    assert results.count("won") == 1, "exactly one racer may win the last capacity unit"
+    application = appmod.create_app()
+    with application.app_context():
+        db.drop_all(); db.create_all()
+        db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
+        db.session.add(AdminUser(github_id="gid-admin", login="alice", role="reviewer"))
+        db.session.commit()
+        for e in cat.register_all(db, boards=(6,)):
+            with application.test_request_context():
+                from flask import session
+                session["admin"] = True
+                session["admin_login"] = "alice"
+                session["admin_gid"] = "gid-admin"
+                cat.approve(db, e, None)
+        db.session.commit()
+        asn.set_cohort_portfolio(db, "2026-A", 6, bv.variants_for(6)[:2],
+                                 admin=AdminUser.query.filter_by(github_id="gid-admin").first())
+        tokens = []
+        for h in ("pg1", "pg2"):
+            c = Candidate(handle=h, name=h, email=f"{h}@e", cohort="2026-A", github_id=f"g-{h}",
+                          status="active", current_board=6, token=f"tok-{h}")
+            db.session.add(c)
+            tokens.append(c.token)
+        db.session.commit()
+        for tok, h in zip(tokens, ("pg1", "pg2")):
+            application.test_client().post("/labs/dataset", json={"handle": h},
+                                           headers={"X-Candidate-Token": tok})
+
+    barrier = threading.Barrier(len(tokens))
+
+    def _race(token):
+        with application.app_context():
+            application.test_client()  # ensure engine warm
+            barrier.wait()
+            application.test_client().post("/labs/start", json={},
+                                           headers={"X-Candidate-Token": token})
+
+    threads = [threading.Thread(target=_race, args=(t,)) for t in tokens]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    with application.app_context():
+        occupying = RangeRequest.query.filter(
+            RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT)).all()
+        used = sum(2 if r.board == 6 else 1 for r in occupying)
+        assert used <= 2, f"persisted weighted capacity must never exceed the 2-unit budget (got {used})"
+        assert len(occupying) == 1, "exactly one capstone may hold the host; the other must queue"

@@ -163,6 +163,35 @@ autouse fixture snapshots/restores those globals; plus session hygiene (in-memor
 single-process run now passes deterministically in forward and reversed order (80 passed, 1 PG-only
 skip each). Per-file execution (`run_s6_acceptance.sh`) remains the CI strategy.
 
+## 4c. Final capacity and remote-state safety (third review)
+
+1. **PG advisory lock fails closed.** `_host_lock` no longer swallows a PostgreSQL lock error. On
+   Postgres a failed `pg_advisory_xact_lock` acquisition raises and `_admit` REFUSES admission (no
+   unlocked fallback). SQLite keeps an explicit local no-op path (single writer), never presented as
+   proof of PostgreSQL atomicity.
+2. **Uncertain transitions keep counting.** An accepted-but-unconfirmed power-on no longer drops the
+   reservation to `suspended`. A new slot-occupying `resuming` state holds the capacity until the
+   transition definitively resolves; `_poll_resuming` resolves it READ-ONLY (confirmed running ->
+   deployed; confirmed stopped / definitive failure -> suspended; pending/unknown -> stay resuming),
+   and never re-issues the power operation. Interrupted initial deploys behave the same: an `unknown`
+   status probe keeps the range `deploying` (counted), resolved on a later poll - `range_status`
+   returns `unknown` (not `failed`) on a transient probe error.
+3. **Tri-state VM power.** `broker._vm_power_states` classifies each VM as running / stopped / unknown
+   from explicit recognized fields only; absent or unrecognized fields are UNKNOWN. Power-off is
+   confirmed only when every VM is explicitly stopped; power-on only when every VM is explicitly
+   running; any unknown, missing or opposite VM yields PENDING/FAILED, never a false confirmation.
+   `confirm_power` is a read-only tri-state probe reused by power_off/power_on and `_poll_resuming`.
+4. **Real PG concurrency test.** The connection-local TEMP-table test is replaced by one that drives
+   the ACTUAL `/labs/start` admission path from concurrent threads against a real, disposable
+   PostgreSQL database, asserting the PERSISTED weighted capacity is never exceeded (one capstone on a
+   2-unit host, the other queues). It requires `RANGER_PG_TEST_URL` + `RANGER_PG_TEST_DISPOSABLE=1` +
+   `RANGER_TEST_ALLOW_DB_MUTATION` and SKIPS transparently otherwise (category C remains UNVERIFIED
+   offline, never claimed as passed).
+5. **Repeated reconciliation recovery.** `test_strata_s6_remote_state.py` proves repeated maintenance
+   recovers accepted-but-unconfirmed resumes and deploys with no phantom capacity (the `resuming`/
+   `deploying` range keeps counting), no duplicate power operations (power-on issued exactly once,
+   resolution is read-only), and no premature evidence deletion.
+
 ## 5. Restrictions (unchanged)
 
 The 95% bar and mandatory human report approval are unchanged. No PARALLAX. No production deployment,

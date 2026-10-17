@@ -32,28 +32,34 @@ QUEUED_SLOT = "queued_slot"
 DEPLOYING = "deploying"
 DEPLOYED = "deployed"
 SUSPENDED = "suspended"
+RESUMING = "resuming"   # R3-2: power-on issued from suspended, remote running-state not yet confirmed
 FAILED = "failed"
 DESTROYED = "destroyed"
 
-STATES = (CONFIGURED, QUEUED_SLOT, DEPLOYING, DEPLOYED, SUSPENDED, FAILED, DESTROYED)
+STATES = (CONFIGURED, QUEUED_SLOT, DEPLOYING, DEPLOYED, SUSPENDED, RESUMING, FAILED, DESTROYED)
 
-# States that consume a host RAM slot (count against the concurrency cap).
-# A suspended range is powered off, so it frees its slot while its disks persist.
-SLOT_STATES = (DEPLOYING, DEPLOYED)
+# States that consume a host RAM slot (count against the concurrency cap). A suspended range is
+# powered off, so it frees its slot while its disks persist. RESUMING counts: a power-on was issued
+# and the VMs may already be consuming RAM, so capacity must be reserved until the transition
+# definitively resolves (confirmed running -> deployed, or confirmed stopped/failed -> suspended).
+SLOT_STATES = (DEPLOYING, DEPLOYED, RESUMING)
 
 # States that are still part of an active, resumable lifecycle (not terminal).
-ACTIVE_STATES = (CONFIGURED, QUEUED_SLOT, DEPLOYING, DEPLOYED, SUSPENDED)
+ACTIVE_STATES = (CONFIGURED, QUEUED_SLOT, DEPLOYING, DEPLOYED, SUSPENDED, RESUMING)
 
 # Legal transitions. A state may always "transition" to itself (idempotent
 # re-poll); that is allowed implicitly by can_transition.
 TRANSITIONS = {
     CONFIGURED: {QUEUED_SLOT, DEPLOYING, FAILED, DESTROYED},
     QUEUED_SLOT: {DEPLOYING, FAILED, DESTROYED},
-    # DEPLOYING -> SUSPENDED: a reserve-before-launch RESUME (suspended -> deploying) whose power-on
-    # did not confirm releases its reservation back to the preserved suspended state (disks intact).
+    # DEPLOYING -> SUSPENDED: a reserve-before-launch deploy whose outcome resolved to suspended.
     DEPLOYING: {DEPLOYED, FAILED, DESTROYED, SUSPENDED},
     DEPLOYED: {SUSPENDED, DESTROYED, FAILED},
-    SUSPENDED: {DEPLOYED, DEPLOYING, DESTROYED, FAILED},
+    # SUSPENDED -> RESUMING: a power-on was issued; RESUMING is the explicit unconfirmed transition.
+    SUSPENDED: {RESUMING, DEPLOYED, DEPLOYING, DESTROYED, FAILED},
+    # RESUMING resolves to DEPLOYED (confirmed running) or back to SUSPENDED (confirmed stopped /
+    # definitive failure); it never silently frees its slot while unconfirmed.
+    RESUMING: {DEPLOYED, SUSPENDED, FAILED, DESTROYED},
     FAILED: {CONFIGURED, DEPLOYING, DESTROYED},
     DESTROYED: {CONFIGURED, DEPLOYING},  # rebuild
 }
