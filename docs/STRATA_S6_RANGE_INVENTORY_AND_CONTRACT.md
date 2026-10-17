@@ -189,9 +189,23 @@ host named as the likely overage trigger requiring approval), and honest trade-o
 for an active range; suspend saves RAM not the host bill; resume cheap vs rebuild expensive). All
 figures are labeled estimates; range timings are category-D unverified without a live host.
 
-## Deferred to later phases
+## §21 - Acceptance suite + handoff (implemented)
 
-Still outstanding: the comprehensive acceptance suite + handoff (§21).
-Categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E (candidate acceptance)
-remain UNVERIFIED without a live host and must not be claimed as done. No merge, deploy, live Ludus
-provisioning, paid infrastructure, or candidate activation is in scope.
+`siem/tests/test_strata_s6_acceptance.py` is the consolidated engineering-acceptance gate: 8 NEGATIVE
+checks (mock range earns no credit / no promotion; CI callback refuses 5/6; forged/foreign/expired
+attestation rejected; one candidate's flags do not grade another's pinned world; capstone missing a
+mandatory milestone fails; verify_range fails closed in mock and live-unverified; illegal lifecycle
+transition + teardown-under-hold refused; candidate projection leaks no flags) and 5 POSITIVE checks
+(attested-real range awards + promotes once; governed assignment pins immutably + replays; full
+capstone passes; broker TLS-on-by-default + typed errors; reclaim suspends under hold then destroys
+after). `docs/STRATA_S6_HANDOFF.md` records the A-E evidence mapping, how to run acceptance, the
+category-D/E go-live checklist (confirm Ludus REST paths -> LUDUS_ADAPTER_VERIFIED=1, host sizing,
+pilot), and the restrictions.
+
+## Status
+
+Implementation is complete through section 21 and awaits engineering acceptance. Categories A-C are
+VERIFIED offline; categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E
+(candidate acceptance) remain UNVERIFIED without a live host and must not be claimed as done. Boards
+5/6 are not operational, and a simulated range is never qualification proof. No merge, deploy, live
+Ludus provisioning, paid infrastructure, or candidate activation is in scope.
