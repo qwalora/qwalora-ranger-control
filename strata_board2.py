@@ -26,12 +26,18 @@ strata_qualification; this module only establishes the one authoritative world.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 
 import strata_assignment as asn
 import strata_catalog as cat
 from siem import authz, schema
+
+
+def _canon(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 BOARD = 2
 # Integrity metadata (fingerprint, variant/spec identity, completion state) lives in a PROTECTED
@@ -150,7 +156,9 @@ def _resolve_pinned(assignment: Board2Assignment):
         raise Board2ProvisionError(f"pinned binding {assignment.binding_id} not found (fail closed)")
     # the binding must match the assignment's candidate/board/scenario identity exactly
     identity = {
+        "candidate_id": (int(binding.candidate_id), int(assignment.candidate_id)),
         "github_id": (binding.github_id, assignment.github_id),
+        "cohort": (binding.cohort, assignment.cohort),
         "board": (int(binding.board), BOARD),
         "attempt": (int(binding.attempt), int(assignment.attempt)),
         "seed": (binding.seed, assignment.seed),
@@ -185,10 +193,19 @@ def generate_world(assignment: Board2Assignment, *, candidate_id=None):
     return events, truth
 
 
-def _meta_doc(assignment: Board2Assignment, count: int, status: str) -> dict:
+def dataset_manifest(docs) -> str:
+    """A deterministic, keyed integrity manifest over the WHOLE dataset: a keyed MAC over the sorted
+    (event id, content digest) pairs. Two indices with the same document COUNT but different ids or
+    mutated content yield different manifests, so a same-count substitution/mutation is detectable.
+    Bounded: one linear pass over the events (cheap enough for Profile B)."""
+    items = sorted((d["_id"], hashlib.sha256(_canon(d["_source"])).hexdigest()) for d in docs)
+    return schema.keyed_mac(_canon(items))
+
+
+def _meta_doc(assignment: Board2Assignment, count: int, status: str, manifest=None) -> dict:
     """The system-side index stamp, stored in SYSTEM_META_INDEX keyed by the qualification index
-    name. Carries the fingerprint + assignment identity (variant/spec/etc.), NEVER the seed or truth.
-    It is never written to the candidate index and is unreadable by any candidate role."""
+    name. Carries the fingerprint + assignment identity (variant/spec/etc.) + a dataset manifest,
+    NEVER the seed or truth. Never written to the candidate index; unreadable by any candidate role."""
     return {"_id": assignment.index_name, "_source": {
         "ranger": {"candidate_id": "__system__", "board": BOARD, "meta": True},
         "data": {"synthetic": True, "plane": DATA_PLANE, "meta": True},
@@ -196,7 +213,8 @@ def _meta_doc(assignment: Board2Assignment, count: int, status: str) -> dict:
                  "fingerprint": assignment.dataset_fingerprint, "spec_id": assignment.spec_id,
                  "spec_version": assignment.spec_version, "content_hash": assignment.content_hash,
                  "variant_id": assignment.variant_id, "attempt": assignment.attempt,
-                 "cohort": assignment.cohort, "event_count": count, "status": status}}}
+                 "cohort": assignment.cohort, "event_count": count, "status": status,
+                 "manifest": manifest}}}
 
 
 def _stamp_plane(events: list) -> list:
@@ -210,6 +228,17 @@ def _stamp_plane(events: list) -> list:
         src["data"] = data
         out.append({"_id": e["_id"], "_source": src})
     return out
+
+
+def _fetch_all(cluster, index, size):
+    """Fetch all docs (with _id) from an index via the broker, for manifest verification. One
+    bounded search; Profile B fits in a single request."""
+    code, resp = cluster._req("GET", f"/{index}/_search",
+                              body={"size": int(size), "query": {"match_all": {}}})
+    if code != 200:
+        raise Board2ProvisionError(f"search {index} failed to verify dataset: {code}")
+    return [{"_id": h.get("_id"), "_source": h.get("_source")}
+            for h in (resp.get("hits", {}) or {}).get("hits", [])]
 
 
 def read_index_meta(cluster, index):
@@ -250,16 +279,24 @@ def provision(cluster, assignment: Board2Assignment, *, batch=1000):
                 f"{assignment.dataset_fingerprint[:12]}); refusing (no write/delete/reindex)")
         status = meta.get("status")
         if status == "complete":
-            # verify the document inventory before trusting reuse; a count mismatch = corrupted.
+            # verify the document inventory AND the dataset manifest before trusting reuse. A count
+            # match alone does not prove the dataset is intact, so a keyed manifest over the actual
+            # index contents must also equal the one recorded at provision time; a same-count
+            # substitution or mutation is therefore rejected, not silently reused.
             expected = int(meta.get("event_count") or -1)
+            stored_manifest = meta.get("manifest")
             try:
-                actual = int(cluster.count(idx))     # broker count, no candidate scoping
+                rows = _fetch_all(cluster, idx, max(expected, 1) + 8)
             except Exception as e:  # noqa: BLE001
                 raise Board2ProvisionError(f"cannot verify inventory of {idx}: {e}")
-            if expected < 0 or actual != expected:
+            if expected < 0 or len(rows) != expected:
                 raise Board2ProvisionError(
                     f"index {idx} completion record is corrupted "
-                    f"(expected {expected} docs, found {actual}); refusing to reuse")
+                    f"(expected {expected} docs, found {len(rows)}); refusing to reuse")
+            if not stored_manifest or dataset_manifest(rows) != stored_manifest:
+                raise Board2ProvisionError(
+                    f"index {idx} dataset manifest does not match the recorded one "
+                    f"(same-count substitution/mutation); refusing to reuse")
             return {"index": idx, "action": "reused", "event_count": expected}
         if status != "incomplete":
             raise Board2ProvisionError(
@@ -285,13 +322,19 @@ def provision(cluster, assignment: Board2Assignment, *, batch=1000):
         if isinstance(res, dict) and res.get("errors"):
             raise Board2ProvisionError(f"bulk ingest into {idx} reported errors: {res}")
     cluster.refresh(idx)
-    # confirm the full inventory landed, then stamp complete LAST.
-    actual = int(cluster.count(idx))
-    if actual != len(indexed):
+    # confirm the full inventory landed AND its manifest matches what we ingested, then stamp
+    # complete LAST (with the manifest) so reuse can verify dataset integrity, not just count.
+    rows = _fetch_all(cluster, idx, len(indexed) + 8)
+    if len(rows) != len(indexed):
         raise Board2ProvisionError(
-            f"ingest into {idx} is incomplete ({actual}/{len(indexed)}); left claim incomplete "
+            f"ingest into {idx} is incomplete ({len(rows)}/{len(indexed)}); left claim incomplete "
             f"for a safe retry")
-    cluster.bulk_index(SYSTEM_META_INDEX, [_meta_doc(assignment, len(indexed), "complete")])
+    want_manifest = dataset_manifest(indexed)
+    if dataset_manifest(rows) != want_manifest:
+        raise Board2ProvisionError(
+            f"ingested dataset for {idx} does not match what was generated; left claim incomplete")
+    cluster.bulk_index(SYSTEM_META_INDEX,
+                       [_meta_doc(assignment, len(indexed), "complete", manifest=want_manifest)])
     cluster.refresh(SYSTEM_META_INDEX)
     return {"index": idx, "action": "provisioned", "event_count": len(indexed)}
 

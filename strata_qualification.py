@@ -122,7 +122,9 @@ def load_activation():
         return None
 
 
-_KNOWN_ENVS = ("production", "test", "development", "ci", "staging")
+# Environments in which a signed TEST activation may authorize grading: an explicit test identity
+# only. Unset, staging, development, production and any unrecognized value are NOT permitted.
+_PERMITTED_TEST_ENVS = ("test", "ci")
 
 
 def _ranger_env() -> str:
@@ -164,10 +166,12 @@ def assert_gate_open(activation, rubric_version):
             raise QualificationNotActivated(
                 "production activation lacks calibration/shadow-run authorization evidence")
     elif env == "test":
-        # a signed test activation grades ONLY inside an explicitly permitted isolated test env
-        if renv == "production":
+        # a signed test activation grades ONLY inside an EXPLICITLY declared, permitted test env
+        # (RANGER_ENV in {test, ci}) AND with RANGER_ALLOW_TEST_QUAL set. Unset, staging,
+        # development, unrecognized and production all reject it.
+        if renv not in _PERMITTED_TEST_ENVS:
             raise QualificationNotActivated(
-                "a test activation cannot authorize grading in a production process")
+                f"a test activation requires RANGER_ENV in {_PERMITTED_TEST_ENVS} (got {renv!r})")
         if not _test_qual_allowed():
             raise QualificationNotActivated(
                 "a test activation requires RANGER_ALLOW_TEST_QUAL in a permitted isolated test env")
@@ -255,6 +259,32 @@ def _check_submission_binding(submission_row, case, assignment, rubric_version):
     return record, payload
 
 
+def _check_case_binding(case, assignment, rubric_version):
+    """Enforce the direct identity relationship between the Case, its ScenarioBinding and the
+    authoritative assignment: the same binding, candidate, cohort, authorized index, attempt, seed,
+    content hash, variant and rubric. Any mismatch fails closed, so a case cannot be graded against
+    a scenario/index/attempt it was not pinned to."""
+    checks = {
+        "binding_id": (case.binding_id, assignment.binding_id),
+        "candidate_id": (int(case.candidate_id), int(assignment.candidate_id)),
+        "cohort": (case.cohort, assignment.cohort),
+        "index": (case.index_name, assignment.index_name),
+        "attempt": (int(case.attempt), int(assignment.attempt)),
+        "seed": (case.seed, assignment.seed),
+        "scenario_version": (int(case.scenario_version or 0), int(assignment.spec_version)),
+        "rubric_version": (int(case.rubric_version or 0), int(rubric_version)),
+    }
+    # content_hash / variant_id are nullable on legacy cases; enforce only when the case pinned them.
+    if case.content_hash:
+        checks["content_hash"] = (case.content_hash, assignment.content_hash)
+    if case.variant_id:
+        checks["variant_id"] = (case.variant_id, assignment.variant_id)
+    for name, (got, want) in checks.items():
+        if got != want:
+            raise QualificationEvidenceError(
+                f"case/assignment identity mismatch on {name} (case {got!r} != assignment {want!r})")
+
+
 # ------------------------------------------------------------------ critical failures ------------
 def _critical_failures(payload, verification, grader_result, assignment):
     fails = []
@@ -302,9 +332,18 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
     if mode == "authorized":
         assert_gate_open(activation, rubric_version)   # closed by default; needs a signed activation
 
+    # Enforce the direct Case <-> binding <-> assignment <-> index/attempt/seed/rubric relationship
+    # (fail closed) BEFORE anything else trusts the case.
+    _check_case_binding(case, assignment, rubric_version)
+
+    # Revalidate the SOURCE (finalized, signed, full-payload digest, identity) FIRST, so a cached
+    # decision can never be returned when the underlying submission has since been altered. This
+    # runs on every call, including the idempotent path, and raises on any failure.
+    _record, payload = _check_submission_binding(submission_row, case, assignment, rubric_version)
+
     # Idempotency: a decision already recorded for this (case, attempt, submission, rubric, mode).
-    # A cached result is trusted ONLY if its own signature still verifies (a tampered stored decision
-    # is not reused).
+    # Returned ONLY when its own signature still verifies AND the source re-validated above - so an
+    # altered submission cannot ride a previously-valid cached decision into promotion.
     existing = QualificationDecision.query.filter_by(
         case_id=case.id, attempt=assignment.attempt, submission_id=submission_row.id,
         rubric_version=rubric_version, mode=mode).first()
@@ -312,10 +351,13 @@ def decide(db, case, submission_row, assignment, reader, *, principal, rubric_ve
         if not verify_decision(existing):
             raise QualificationError(f"cached decision {existing.id} failed signature verification; "
                                      f"refusing to trust it")
+        # the cached decision must pin the same source identity we just re-validated
+        if (existing.scenario_fingerprint != assignment.dataset_fingerprint
+                or existing.content_hash != assignment.content_hash
+                or existing.variant_id != assignment.variant_id):
+            raise QualificationError(f"cached decision {existing.id} pins a different scenario than "
+                                     f"the current assignment; refusing to trust it")
         return existing
-
-    # (finalized, signed, correctly-bound submission with the full payload digest) - raises on failure
-    _record, payload = _check_submission_binding(submission_row, case, assignment, rubric_version)
 
     # scenario identity must match the case/binding the submission was made under
     if case.content_hash and assignment.content_hash and case.content_hash != assignment.content_hash:

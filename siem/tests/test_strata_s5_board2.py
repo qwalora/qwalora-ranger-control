@@ -22,9 +22,9 @@ os.environ.setdefault("SECRET_KEY", "s5")
 os.environ.setdefault("DEFAULT_COHORT", "2026-A")
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["RANGER_B2_PROFILE"] = "A"      # fast, approved TEST profile; real qual = Profile B
-# this process is an explicitly-permitted ISOLATED TEST env for Board 2 qualification (never prod)
+# this process is an explicitly-declared, permitted ISOLATED TEST env for Board 2 qualification
 os.environ["RANGER_ALLOW_TEST_QUAL"] = "1"
-os.environ.pop("RANGER_ENV", None)
+os.environ["RANGER_ENV"] = "test"
 
 import json as _json  # noqa: E402
 
@@ -313,15 +313,25 @@ def test_authorized_gate_closed_without_activation():
         # no activation -> authorized mode is refused (gate closed by default)
         with pytest.raises(sq.QualificationNotActivated):
             sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized")
-        # a test activation is refused when the process declares itself production
-        os.environ["RANGER_ENV"] = "production"
-        try:
+        # a test activation is refused in every environment except an explicitly permitted test one
+        for bad_env in (None, "", "production", "staging", "development", "prod", "qa", "unknown"):
+            if bad_env is None:
+                os.environ.pop("RANGER_ENV", None)
+            else:
+                os.environ["RANGER_ENV"] = bad_env
             with pytest.raises(sq.QualificationNotActivated):
                 sq.decide(db, case, sub, a, _reader(cluster), principal=admin,
                           mode="authorized", activation=_test_activation())
-        finally:
-            os.environ.pop("RANGER_ENV", None)
+        # and accepted in a permitted test env
+        for good_env in ("test", "ci"):
+            os.environ["RANGER_ENV"] = good_env
+            d = sq.decide(db, case, sub, a, _reader(cluster), principal=admin,
+                          mode="authorized", activation=_test_activation())
+            assert d.mode == "authorized"
+            from models import QualificationDecision
+            QualificationDecision.query.filter_by(case_id=case.id).delete(); db.session.commit()
     finally:
+        os.environ["RANGER_ENV"] = "test"   # restore the module default for later tests
         ctx.pop()
 
 
@@ -337,6 +347,74 @@ def test_repeated_evaluation_is_idempotent():
         d2 = sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized", activation=act)
         assert d1.id == d2.id
         assert QualificationDecision.query.filter_by(case_id=case.id, mode="authorized").count() == 1
+    finally:
+        ctx.pop()
+
+
+def test_gapf2_cached_decision_rejected_when_source_altered_after_award():
+    """A legitimate authorized decision is awarded; the stored submission is then altered; the report
+    is approved; a reviewer retries qualification. The retry must fail closed on the now-invalid
+    source instead of riding the cached decision into promotion."""
+    application, db, ctx, admin = _app()
+    try:
+        from models import BoardResult
+        c = _cand(db, "cached", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        case, sub = _submit_signed(db, c, a, cluster, _correct_submission(a, cluster))
+        act = _test_activation()
+        d1 = sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized",
+                       activation=act)
+        assert d1.passed and d1.awarded_objective
+        # tamper the stored payload AFTER the award (leave the signed evidence record untouched)
+        tampered = _json.loads(sub.payload)
+        tampered["overall_conclusion"] = "there was no incident"
+        sub.payload = _json.dumps(tampered); db.session.commit()
+        # approve the report (subjective gate) and retry qualification
+        br = BoardResult.query.filter_by(candidate_id=c.id, board=2).first()
+        br.report_status = "approved"; db.session.add(br); db.session.commit()
+        with pytest.raises(sq.QualificationEvidenceError):
+            sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized",
+                      activation=act)
+        # unchanged source still returns the cached decision idempotently
+        sub.payload = _json.dumps(_correct_submission(a, cluster)); db.session.commit()
+        d2 = sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized",
+                       activation=act)
+        assert d2.id == d1.id
+    finally:
+        ctx.pop()
+
+
+def test_gapf3_completed_index_rejects_same_count_mutation():
+    """A same-count substitution/mutation of a completed index is rejected by the dataset manifest,
+    not silently reused."""
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "manifest", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster()
+        b2.provision(cluster, a)
+        assert b2.provision(cluster, a)["action"] == "reused"   # intact -> reuse ok
+        # mutate ONE event's content in place (same document count)
+        idx = a.index_name
+        some_id = next(iter(cluster._idx[idx]))
+        cluster._idx[idx][some_id] = {**cluster._idx[idx][some_id], "message": "mutated by attacker"}
+        with pytest.raises(b2.Board2ProvisionError):
+            b2.provision(cluster, a)
+    finally:
+        ctx.pop()
+
+
+def test_gapf4_case_binding_identity_mismatch_fails_closed():
+    """At grading time a Case whose pinned identity disagrees with the assignment fails closed."""
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "ident", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        case, sub = _submit_signed(db, c, a, cluster, _correct_submission(a, cluster))
+        # corrupt the case's pinned seed so it no longer matches the assignment
+        case.seed = (case.seed or "") + "-tamper"; db.session.commit()
+        with pytest.raises(sq.QualificationEvidenceError):
+            sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized",
+                      activation=_test_activation())
     finally:
         ctx.pop()
 
@@ -639,8 +717,12 @@ def test_gap5_activation_and_principal_hardening():
         prod_act = sq.build_activation(cc.RUBRIC_VERSION, approved_by="alice", environment="production",
                                        deployment_id="dep-1", calibration_ref="c", shadow_run_ref="s")
         os.environ.pop("RANGER_ENV", None)
-        with pytest.raises(sq.QualificationNotActivated):
-            sq.decide(db, case, sub, a, reader, principal=admin, mode="authorized", activation=prod_act)
+        try:
+            with pytest.raises(sq.QualificationNotActivated):
+                sq.decide(db, case, sub, a, reader, principal=admin, mode="authorized",
+                          activation=prod_act)
+        finally:
+            os.environ["RANGER_ENV"] = "test"
         # a service principal without a valid token is rejected (no bare {service, trusted})
         os.environ.pop("RANGER_EVALUATOR_TOKEN", None)
         with pytest.raises(sq.QualificationAuthError):
@@ -655,6 +737,7 @@ def test_gap5_activation_and_principal_hardening():
         finally:
             os.environ.pop("RANGER_EVALUATOR_TOKEN", None)
     finally:
+        os.environ["RANGER_ENV"] = "test"
         ctx.pop()
 
 

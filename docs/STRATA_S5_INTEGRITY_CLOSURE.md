@@ -54,6 +54,15 @@ Additive, unchanged from the S5 delivery: `scenario_bindings`, `qualification_de
 ## Remaining limitations / blockers
 Unchanged from the S5 delivery section K: live OpenSearch validation on a disposable node; written activation + real-cohort shadow run with reviewer adjudication; production-safe `SECRET_KEY`/`RANGER_REF_KEY`/`RANGER_SIGNING_KEY` and a MAC/signing key-version + rotation scheme (with old-key verification for historical records); a signed production `ActivationAuthorization` naming the deployment; re-index/drop of historical telemetry carrying `ranger.scenario_seed`; candidate access stays disabled. The pre-existing full-PG forensic test-order failures (shared-fixture app-context isolation gap) are unchanged and still out of S5 scope.
 
+## Final security-gate corrections (second review round)
+
+Four further corrections, same branch:
+
+- **F1 - explicit test environment.** `assert_gate_open()` now accepts a signed *test* activation only when `RANGER_ENV` is a permitted test identity (`test` or `ci`) AND `RANGER_ALLOW_TEST_QUAL=1`. Unset, `staging`, `development`, unrecognized and `production` all reject it. Fixtures declare `RANGER_ENV=test` explicitly. Evidence: `test_authorized_gate_closed_without_activation` iterates unset/empty/production/staging/development/prod/qa/unknown (all rejected) and `test`/`ci` (accepted).
+- **F2 - revalidate source before a cached decision.** `decide()` now runs the full source re-validation (`_check_submission_binding`: finalized status, evidence signature, full-payload digest, candidate/cohort/board/scenario_ref/case_id/index/scenario_version/rubric_version/attempt) and the Case<->assignment identity check BEFORE the idempotency return, and confirms the cached decision pins the same scenario fingerprint/content_hash/variant. A submission altered after a legitimate award causes the reviewer's retry to fail closed (no promotion); an unchanged source still returns the cached decision idempotently. Evidence: `test_gapf2_cached_decision_rejected_when_source_altered_after_award`.
+- **F3 - dataset manifest integrity.** Provisioning records a deterministic keyed manifest (`dataset_manifest`: a keyed MAC over the sorted event-id + per-event content digests) in the system meta, and verifies both the document inventory and the manifest before reusing a completed index. A same-count substitution or in-place mutation is rejected, not reused. One bounded pass (fits Profile B); interrupted-ingest recovery is preserved. Evidence: `test_gapf3_completed_index_rejects_same_count_mutation`.
+- **F4 - complete assignment identity.** `_resolve_pinned` now also checks `binding.candidate_id` and `binding.cohort` against the assignment, and `decide()` enforces the direct Case<->binding<->assignment<->index<->attempt<->seed<->scenario_version<->rubric (and content_hash/variant when pinned) relationship; any mismatch fails closed. Evidence: `test_gapf4_case_binding_identity_mismatch_fails_closed`.
+
 ## Stop conditions honored
 No merge/deploy/Railway/prod-migration/activation/candidate-access/new-service/S6/PARALLAX; 95 bar and S1/S2 unchanged.
 
