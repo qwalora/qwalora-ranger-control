@@ -149,10 +149,23 @@ planted evidence persist), and the policy decisions reclamation uses. `app.py` e
 Covered by `test_strata_s6_lifecycle.py` (pure transitions/guards + integration: hold-on-submit,
 suspend-under-hold then destroy-after, resume-not-rebuild, suspended-frees-a-slot).
 
+## §18 - Board 6 capstone rubric (implemented)
+
+Board 6 (Vanguard) is now graded by a DISTINCT, VERSIONED capstone rubric (`CAPSTONE_RUBRIC_VERSION
+= b6-capstone-v1`), not board 5's flat points sum. A set of MANDATORY end-to-end milestones
+(`child_da, trust_abuse, parent_ea, forest_persist, cross_forest, crown`) must all be demonstrated;
+missing any is a CRITICAL FAILURE that caps the effective score below the 95 bar regardless of points
+(OSCP-style must-complete gating). The weights make the gate load-bearing: the final crown-jewel exfil
+is low-point but mandatory, so a candidate can earn >=95 points on the rest of the chain and still fail
+by never capturing the crown. The versioned rubric is carried on the generated world and surfaced in
+the candidate brief (`public_board6`), flag-free. Board 5 is unchanged. `scenarios.score_board6`
+delegates to `score_capstone`; covered by `test_strata_s6_capstone.py` (versioning + distinctness,
+full-pass, the crown gate, each mandatory individually required, brief exposure without flag leak,
+reproducibility).
+
 ## Deferred to later phases
 
-Still outstanding: a separately versioned Board 6 capstone rubric with objectives independent of
-board 5 (§18); distinct Board 5/6 ten-section mission briefs + candidate/admin status surfaces (§19);
+Still outstanding: distinct Board 5/6 ten-section mission briefs + candidate/admin status surfaces (§19);
 the operational cost/capacity model (§20); and the comprehensive acceptance suite + handoff (§21).
 Categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E (candidate acceptance)
 remain UNVERIFIED without a live host and must not be claimed as done. No merge, deploy, live Ludus

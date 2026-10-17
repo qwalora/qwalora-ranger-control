@@ -964,13 +964,16 @@ _B6_CHILD = "north.sevenkingdoms.local"
 _B6_FOREST2 = "essos.local"
 _B6_DCS = ["kingslanding", "winterfell", "braavos"]
 _B6_SERVERS = ["castelblack", "meereen"]
+# Point weights interplay with the capstone rubric (§18): the final crown-jewel exfil is deliberately
+# low-point but MANDATORY, so a candidate can accumulate >=95 points on the rest of the chain and still
+# critically fail by never capturing the crown - the mandatory gate does real, independent work.
 _B6_OBJECTIVES = [
     ("recon_forest", "Map the forest and its trusts", "T1482 / T1087",
-     "Enumerate {parent}, {child}, and the trust to {forest2}. The flag is on a world-readable share.", 5),
+     "Enumerate {parent}, {child}, and the trust to {forest2}. The flag is on a world-readable share.", 8),
     ("foothold", "Establish a foothold", "T1110 / T1078",
-     "Land a session in {child}. The flag is in the user's profile.", 8),
+     "Land a session in {child}. The flag is in the user's profile.", 10),
     ("roast_forest", "Harvest service and AS-REP tickets", "T1558.003 / T1558.004",
-     "Kerberoast and AS-REP roast across the forest, crack offline. The flag unlocks with a cracked account.", 10),
+     "Kerberoast and AS-REP roast across the forest, crack offline. The flag unlocks with a cracked account.", 12),
     ("child_da", "Become Domain Admin of the child", "T1078.002",
      "Reach Domain Admin on {child}. The flag is on the Administrator desktop of {child_dc}.", 12),
     ("trust_abuse", "Abuse the child to parent trust", "T1134.005 / T1484.002",
@@ -978,15 +981,66 @@ _B6_OBJECTIVES = [
     ("parent_ea", "Seize Enterprise Admin", "T1078.002",
      "Take Enterprise Admin on {parent}. The flag is on {parent_dc}.", 12),
     ("forest_persist", "Establish forest persistence", "T1558.001 / T1003.006",
-     "DCSync krbtgt and mint forest persistence (golden ticket). The flag derives from the krbtgt material.", 10),
+     "DCSync krbtgt and mint forest persistence (golden ticket). The flag derives from the krbtgt material.", 12),
     ("cross_forest", "Pivot across the forest trust", "T1482 / T1550",
-     "Abuse the trust to {forest2} and land there. The flag is on a {forest2} host.", 12),
+     "Abuse the trust to {forest2} and land there. The flag is on a {forest2} host.", 10),
     ("forest2_da", "Compromise the second forest", "T1078.002",
-     "Reach Domain Admin on {forest2}. The flag is on {forest2_dc}.", 10),
+     "Reach Domain Admin on {forest2}. The flag is on {forest2_dc}.", 8),
     ("crown", "Capture the crown jewels", "T1005 / T1020",
-     "Exfiltrate the designated crown-jewel secret from the root DC. The flag is that secret.", 9),
+     "Exfiltrate the designated crown-jewel secret from the root DC. The flag is that secret.", 4),
 ]
 _FLAG_OBJECTIVES[6] = _B6_OBJECTIVES
+
+# --- Board 6 capstone rubric (S6 §18) ---------------------------------------
+# Board 6 is the Vanguard CAPSTONE: an end-to-end, full-forest compromise. It is graded by a
+# rubric DISTINCT from board 5 (which is a flat points-weighted sum). The capstone's defining
+# achievement is demonstrating the whole kill chain, so a set of objectives is MANDATORY: these are
+# the milestones that prove the candidate actually owned the estate end to end (becoming child DA,
+# abusing the trust across domains, seizing the parent forest, establishing forest persistence,
+# pivoting across the forest trust, and capturing the crown jewels). Missing ANY mandatory milestone
+# is a CRITICAL FAILURE: the attempt cannot pass regardless of how many points of easier objectives
+# were captured, so its score is capped below the 95 bar (OSCP-style must-complete gating). The
+# rubric is VERSIONED so the exact rubric that graded an attempt is recorded and bindable.
+CAPSTONE_RUBRIC_VERSION = "b6-capstone-v1"
+_B6_MANDATORY = ("child_da", "trust_abuse", "parent_ea", "forest_persist", "cross_forest", "crown")
+_CAPSTONE_FAIL_CEILING = 94.9  # strictly below PASS_BAR (95.0)
+
+
+def capstone_rubric():
+    """The versioned Board 6 capstone rubric, candidate-safe (no flags). Describes the mandatory
+    end-to-end milestones and the critical-failure rule, so it can be shown in the mission brief and
+    bound into the assessment record."""
+    return {
+        "version": CAPSTONE_RUBRIC_VERSION,
+        "board": 6,
+        "kind": "capstone",
+        "pass_bar": 95.0,
+        "mandatory_objectives": list(_B6_MANDATORY),
+        "rule": ("This is a capstone: every mandatory milestone must be demonstrated end to end. "
+                 "Missing any mandatory objective is a critical failure and caps the score below the "
+                 "pass bar, regardless of points earned on other objectives."),
+    }
+
+
+def score_capstone(scenario, submission):
+    """Board 6 capstone scorer (§18). Starts from the points-weighted capture score, then applies the
+    mandatory-milestone critical-failure gate: if any mandatory objective is uncaptured, the effective
+    score is capped below the bar and the feedback names the missing milestones. Distinct from board 5
+    and versioned."""
+    score, feedback = _score_flags(scenario, submission)
+    fb = feedback[0]
+    captured_ids = {p["id"] for p in fb["objectives"] if p["captured"]}
+    missing = [oid for oid in _B6_MANDATORY if oid not in captured_ids]
+    fb["rubric_version"] = CAPSTONE_RUBRIC_VERSION
+    fb["mandatory_objectives"] = list(_B6_MANDATORY)
+    fb["mandatory_missing"] = missing
+    fb["capstone_complete"] = not missing
+    effective = score
+    if missing:
+        effective = min(score, _CAPSTONE_FAIL_CEILING)
+        fb["critical_failure"] = ("capstone incomplete: mandatory end-to-end milestones not "
+                                  "demonstrated (%s); score capped below the bar" % ", ".join(missing))
+    return effective, feedback
 
 
 def generate_board6(seed, gp=None):
@@ -1022,15 +1076,21 @@ def generate_board6(seed, gp=None):
                         "forest2_host": forest2_host, "trust_topology": trust_topology,
                         "crown_location": crown_location, "escalation": escalation},
             "objectives": objectives,
+            "rubric": capstone_rubric(),
             "_flags": _flags_for(6, seed)}
 
 
 def public_board6(scenario):
-    return _public_flags(scenario)
+    pub = _public_flags(scenario)
+    # The capstone rule (mandatory milestones + critical-failure gate) is part of the brief, not a
+    # secret: surface the versioned rubric so the candidate knows the capstone must be completed
+    # end to end. Still flag-free.
+    pub["rubric"] = scenario.get("rubric") or capstone_rubric()
+    return pub
 
 
 def score_board6(scenario, submission):
-    return _score_flags(scenario, submission)
+    return score_capstone(scenario, submission)
 
 
 # --- dispatch ---------------------------------------------------------------
