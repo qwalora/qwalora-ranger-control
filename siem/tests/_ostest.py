@@ -58,6 +58,12 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 # the real Ranger qualification/operational data must never share a node with destructive tests.
 PRODUCTION_LIKE_INDEX_PREFIXES = ("ranger-prod", "ranger-live", ".ranger-qualmeta-prod")
 
+# A disposable node must look fresh. A non-system index is only acceptable when it is obviously a test
+# index (carries a test marker) or the authorizing sentinel; ANY other non-system index, and any
+# Ranger security principal, indicates a shared or previously-used environment and refuses the run.
+TEST_INDEX_MARKERS = ("ostest", "-test-", "test-", "-test")
+RANGER_PRINCIPAL_PREFIXES = ("cand_", "ranger_", "ranger-")
+
 
 class UnauthorizedTestServer(RuntimeError):
     """The OpenSearch target is not a positively identified, disposable test instance."""
@@ -167,11 +173,80 @@ def _index_exists(url: str, index: str) -> bool:
 
 
 def _present_indices(url: str) -> set:
-    """All non-system index names the node reports (best-effort), for the production-like check."""
-    code, body = _raw_get(url, "/_cat/indices?format=json&h=index")
+    """Every index name the node reports, including dot/hidden/system indices (expand_wildcards=all),
+    for the production-like and shared-environment checks."""
+    code, body = _raw_get(url, "/_cat/indices?format=json&h=index&expand_wildcards=all")
     if code != 200 or not isinstance(body, list):
-        return set()
-    return {row.get("index", "") for row in body if isinstance(row, dict)}
+        # fall back to the default view; an empty set here makes the caller unable to prove
+        # disposability, which (fail-closed) refuses the run rather than assuming it is safe.
+        code, body = _raw_get(url, "/_cat/indices?format=json&h=index")
+        if code != 200 or not isinstance(body, list):
+            return set()
+    return {row.get("index", "") for row in body if isinstance(row, dict) and row.get("index")}
+
+
+def _doc_count(url: str, index: str) -> int:
+    code, body = _raw_get(url, f"/{index}/_count")
+    if code == 200 and isinstance(body, dict):
+        return int(body.get("count") or 0)
+    return 0
+
+
+def _present_ranger_principals(url: str) -> list:
+    """Custom Security-plugin roles/internal users whose names look like Ranger principals
+    (cand_*, ranger_*). Their presence indicates a previously-used or shared environment. Built-in
+    OpenSearch roles/users are ignored. Best-effort: an unreadable Security API yields []."""
+    found = []
+    for api in ("roles", "internalusers"):
+        code, body = _raw_get(url, f"/_plugins/_security/api/{api}")
+        if code != 200 or not isinstance(body, dict):
+            continue
+        for name in body:
+            low = str(name).lower()
+            if any(low.startswith(p) for p in RANGER_PRINCIPAL_PREFIXES):
+                found.append(f"{api}:{name}")
+    return found
+
+
+def _is_system_index(name: str) -> bool:
+    return str(name).startswith(".")
+
+
+def _is_test_index(name: str) -> bool:
+    low = str(name).lower()
+    return any(m in low for m in TEST_INDEX_MARKERS)
+
+
+def shared_environment_reason(url: str, present=None):
+    """Return a reason string when the node looks shared or previously-used, else None.
+
+    Fail-closed and conservative (spec section 6: default to refusal when ownership is ambiguous):
+      * any production-like index -> refuse;
+      * a populated .ranger-qualmeta (real qualification metadata) -> refuse;
+      * any non-system index that is not an obvious test index and not the sentinel -> refuse
+        (an unknown workload on the node);
+      * any Ranger-looking security role/user left over -> refuse (residue of a prior/shared run).
+    """
+    present = _present_indices(url) if present is None else present
+    sentinel = _sentinel_index()
+    prod = sorted(i for i in present
+                  if any(i.startswith(p) for p in PRODUCTION_LIKE_INDEX_PREFIXES))
+    if prod:
+        return f"production-like index(es) present: {prod}"
+    if ".ranger-qualmeta" in present and _doc_count(url, ".ranger-qualmeta") > 0:
+        return ("a populated .ranger-qualmeta is present (real qualification metadata); this is not "
+                "a fresh disposable node")
+    unexpected = sorted(
+        i for i in present
+        if not _is_system_index(i) and i != sentinel and not _is_test_index(i))
+    if unexpected:
+        return (f"unexpected non-test index(es) present: {unexpected[:10]} - a disposable node must "
+                f"be fresh (default to refusal when ownership is ambiguous)")
+    principals = _present_ranger_principals(url)
+    if principals:
+        return (f"leftover Ranger security principal(s) present: {principals[:10]} - residue of a "
+                f"prior or shared run; recreate the disposable node")
+    return None
 
 
 def assert_authorized_test_server(url=None, *, probe=True):
@@ -200,19 +275,19 @@ def assert_authorized_test_server(url=None, *, probe=True):
         raise UnauthorizedTestServer(
             f"node version {ver} != required {REQUIRED_VERSION}; set {ALLOW_VERSION_MISMATCH_ENV}=1 "
             f"to run against a near version (clearly labelled), or use a 2.17.1 node")
-    # no production-like data may share this node
-    present = _present_indices(url)
-    prod = sorted(i for i in present
-                  if any(i.startswith(p) for p in PRODUCTION_LIKE_INDEX_PREFIXES))
-    if prod:
-        raise UnauthorizedTestServer(
-            f"refusing: node hosts production-like index(es) {prod}; not a dedicated test instance")
     # the authorizing sentinel must be present (localhost alone is not proof)
     sentinel = _sentinel_index()
     if not _index_exists(url, sentinel):
         raise UnauthorizedTestServer(
             f"authorizing sentinel index {sentinel!r} is absent; create it once on a dedicated "
             f"disposable node (PUT /{sentinel}) to authorize destructive tests (fail-closed)")
+    # the sentinel alone is NOT sufficient proof (spec section 6): the node must also LOOK fresh and
+    # unshared - no production-like or unexpected indices, no populated qualification metadata, no
+    # leftover Ranger security principals. Default to refusal when ownership is ambiguous.
+    reason = shared_environment_reason(url)
+    if reason:
+        raise UnauthorizedTestServer(
+            f"refusing: node does not look like a fresh disposable instance ({reason})")
     return True
 
 

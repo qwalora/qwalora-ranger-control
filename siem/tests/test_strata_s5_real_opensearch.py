@@ -510,5 +510,235 @@ def test_s12_historical_replay_and_crypto_integrity():
             ctx.pop()
 
 
+# =============================================================================================
+# FAULT INJECTION wrapper (spec sections 7/9 case I). Wraps a REAL LiveCluster and injects transport
+# faults (partial bulk errors, HTTP 429, 5xx, transport interruption) on chosen calls. Faults here are
+# INJECTED, not naturally observed cluster failures; tests using it are labelled fault-injection.
+# =============================================================================================
+class _FaultInjectingCluster:
+    def __init__(self, real, *, fail_bulk_on=None, mode="partial"):
+        self._real = real
+        self._bulk_calls = 0
+        self._fail_bulk_on = fail_bulk_on   # 1-based bulk_index call number to fault (meta stamp = 1)
+        self._mode = mode                   # "partial" | "429" | "5xx" | "interrupt"
+
+    def __getattr__(self, name):            # delegate everything else to the REAL client
+        return getattr(self._real, name)
+
+    def bulk_index(self, index, docs):
+        self._bulk_calls += 1
+        if self._fail_bulk_on == self._bulk_calls:
+            from siem.live import LiveError
+            if self._mode == "partial":
+                return {"indexed": 0, "errors": True, "took": 1}   # partial bulk failure
+            if self._mode == "429":
+                raise LiveError("injected HTTP 429 too_many_requests")
+            if self._mode == "5xx":
+                raise LiveError("injected HTTP 503 unavailable")
+            if self._mode == "interrupt":
+                raise LiveError("injected transport interruption")
+        return self._real.bulk_index(index, docs)
+
+
+# =============================================================================================
+# Test C - candidate roles + DLS, including the slug vs github_id identity coupling (spec section 7).
+# =============================================================================================
+def test_c_candidate_dls_slug_vs_github_id_and_reconnect():
+    _ostest.require_authorized_or_skip()
+    from siem.live import AuthzError
+    with _ostest.isolated_os_namespace() as ns:
+        cl = ns["cluster"]
+        application, db, ctx, admin = _portal_db()
+        try:
+            cohort = f"{ns['cohort']}-c"
+            # a github identity whose normalized slug DIFFERS from the raw id (dots/underscores/case)
+            from models import Candidate, Cohort
+            if not Cohort.query.filter_by(name=cohort).first():
+                db.session.add(Cohort(name=cohort, pathway="strata", status="active")); db.session.commit()
+            asn.set_cohort_portfolio(db, cohort, 2, COHORT_A_VARIANTS, admin=admin)
+            raw_gh = "Osh.User_A"
+            c = Candidate(handle=f"{ns['cohort']}c", name="c", email="c@e", cohort=cohort,
+                          github_id=raw_gh, status="active", current_board=2, token=f"tk-{ns['cohort']}c")
+            db.session.add(c); db.session.commit()
+            a = b2.resolve_assignment(db, c); _track(ns, a)
+            assert a.slug != raw_gh, "test requires slug to differ from the raw github id"
+            b2.provision(cl, a); cl.refresh(a.index_name)
+            # the gateway grants DLS on ranger.candidate_id == slug; set it up exactly that way
+            pw = "Cand!" + os.urandom(6).hex()
+            cl.put_role(authz.role_name(a.slug), [authz.candidate_index_pattern(cohort, a.slug)],
+                        dls={"ranger.candidate_id": a.slug})
+            cl.put_user(authz.user_name(a.slug), pw, [authz.role_name(a.slug)])
+            cl.put_rolesmapping(authz.role_name(a.slug), users=[authz.user_name(a.slug)])
+            ns["created_principals"].append(authz.user_name(a.slug))
+            cand = _ostest.candidate_cluster(authz.user_name(a.slug), pw)
+            # CONTRACT: the candidate must be able to see their OWN events. If the ingested
+            # ranger.candidate_id (the generation subject) is the raw github id while the DLS term is
+            # the slug, this count is 0 - the known slug/github_id coupling defect, to be fixed at its
+            # root (align the ingested identity and the DLS term) and NOT by weakening DLS.
+            stored_owner = _doc_owner(cl, a.index_name)
+            own = cand.count(a.index_name)
+            assert own > 0, (
+                f"candidate cannot see own events: DLS term={a.slug!r} but ingested "
+                f"ranger.candidate_id={stored_owner!r} (slug/github_id coupling defect)")
+            # reconnect / role refresh: re-mint the user password and re-map; isolation must survive
+            pw2 = "Cand!" + os.urandom(6).hex()
+            cl.put_user(authz.user_name(a.slug), pw2, [authz.role_name(a.slug)])
+            cl.put_rolesmapping(authz.role_name(a.slug), users=[authz.user_name(a.slug)])
+            cand2 = _ostest.candidate_cluster(authz.user_name(a.slug), pw2)
+            assert cand2.count(a.index_name) == own
+            with pytest.raises(AuthzError):
+                cand2.search(b2.SYSTEM_META_INDEX)
+        finally:
+            ctx.pop()
+
+
+# =============================================================================================
+# Test D - citation verification edge cases against the real node (spec section 7 Test D).
+# =============================================================================================
+def test_d_evidence_edge_cases_real():
+    _ostest.require_authorized_or_skip()
+    from case_routes import LiveReader
+    with _ostest.isolated_os_namespace() as ns:
+        cl = ns["cluster"]
+        application, db, ctx, admin = _portal_db()
+        try:
+            cohort = f"{ns['cohort']}-d"
+            c = _cohort_candidate(db, cohort, COHORT_A_VARIANTS, admin, f"{ns['cohort']}d")
+            a = b2.resolve_assignment(db, c); _track(ns, a)
+            b2.provision(cl, a); cl.refresh(a.index_name)
+            reader = LiveReader(cl)
+            rows = b2._fetch_all(cl, a.index_name, 5)
+            uid = rows[0]["_id"]
+            ts = (rows[0]["_source"].get("@timestamp"))
+            # valid timestamp context (the event's own ts window) matches
+            if ts:
+                assert reader.query_matches(a.index_name, {"query": {"match_all": {}}}, uid,
+                                            time_context={"gte": ts, "lte": ts}) is True
+                # a non-overlapping timestamp context must NOT match (no evidence credit)
+                assert reader.query_matches(a.index_name, {"query": {"match_all": {}}}, uid,
+                                            time_context={"gte": "1990-01-01", "lte": "1990-01-02"}) is False
+            # invalid index scope / missing index -> no credit (never a crash)
+            assert reader.query_matches(f"{a.index_name}-missing", {"query": {"match_all": {}}}, uid) is False
+            assert reader.get_source(f"{a.index_name}-missing", uid) is None
+            # FAULT INJECTION (labelled): a temporarily unavailable cluster must yield no evidence
+            # credit, not a false positive. The reader swallows transport errors and returns False.
+            class _Down:
+                def _req(self, *a_, **k_):
+                    raise ConnectionError("injected: cluster temporarily unavailable")
+            down_reader = LiveReader(_Down())
+            assert down_reader.query_matches(a.index_name, {"query": {"match_all": {}}}, uid) is False
+            assert down_reader.get_source(a.index_name, uid) is None
+        finally:
+            ctx.pop()
+
+
+# =============================================================================================
+# Test E - the remaining provisioning states C/E/H/I against the real cluster (spec section 7 Test E).
+# A/B/D/F/G are covered by test_s9_provisioning_state_machine.
+# =============================================================================================
+def test_e_provisioning_states_c_e_h_i():
+    _ostest.require_authorized_or_skip()
+    import threading
+    from siem.live import LiveError
+    with _ostest.isolated_os_namespace() as ns:
+        cl = ns["cluster"]
+        application, db, ctx, admin = _portal_db()
+        try:
+            cohort = f"{ns['cohort']}-e"
+            c = _cohort_candidate(db, cohort, COHORT_A_VARIANTS, admin, f"{ns['cohort']}e")
+            a = b2.resolve_assignment(db, c); _track(ns, a)
+
+            # C. Interrupted ingestion -> safe verified retry. Fault the FIRST candidate-index bulk
+            # (call #2; call #1 is the incomplete meta stamp) so provision raises and leaves the claim
+            # INCOMPLETE, then a clean retry must converge to a verified complete dataset.
+            faulty = _FaultInjectingCluster(cl, fail_bulk_on=2, mode="partial")
+            with pytest.raises(b2.Board2ProvisionError):
+                b2.provision(faulty, a)
+            meta_mid = b2.read_index_meta(cl, a.index_name)
+            assert meta_mid is not None and meta_mid.get("status") == "incomplete"
+            r = b2.provision(cl, a)                      # clean retry converges
+            assert r["action"] in ("provisioned", "reused")
+            cl.refresh(a.index_name)
+            full = cl.count(a.index_name)
+            assert full == b2.read_index_meta(cl, a.index_name)["event_count"]
+
+            # E. Existing index with NO ownership claim -> refuse. Remove the meta stamp but leave the
+            # index; provision must refuse to touch an unclaimed index.
+            cl._req("DELETE", f"/{b2.SYSTEM_META_INDEX}/_doc/{a.index_name}")
+            cl.refresh(b2.SYSTEM_META_INDEX)
+            with pytest.raises(b2.Board2ProvisionError):
+                b2.provision(cl, a)
+            # clean slate for the concurrency case: drop the unclaimed index and any meta stamp
+            cl.delete_index(a.index_name)
+            cl._req("DELETE", f"/{b2.SYSTEM_META_INDEX}/_doc/{a.index_name}")
+            cl.refresh(b2.SYSTEM_META_INDEX)
+
+            # H. Concurrent provisioning of the SAME assignment -> exactly one coherent dataset.
+            errors = []
+            def _worker():
+                try:
+                    b2.provision(cl, a)
+                except Exception as e:  # noqa: BLE001 - idempotent races may raise; final state is checked
+                    errors.append(e)
+            t1 = threading.Thread(target=_worker); t2 = threading.Thread(target=_worker)
+            t1.start(); t2.start(); t1.join(); t2.join()
+            cl.refresh(a.index_name)
+            meta_final = b2.read_index_meta(cl, a.index_name)
+            assert meta_final is not None and meta_final.get("status") == "complete"
+            rows = b2._fetch_all(cl, a.index_name, meta_final["event_count"] + 8)
+            assert len(rows) == meta_final["event_count"]
+            assert b2.dataset_manifest(rows) == meta_final["manifest"]   # one coherent world, no mix
+
+            # I. FAULT INJECTION (labelled): HTTP 429 / 5xx on ingest must NOT produce a complete stamp.
+            for mode in ("429", "5xx"):
+                cl.delete_index(a.index_name)
+                cl._req("DELETE", f"/{b2.SYSTEM_META_INDEX}/_doc/{a.index_name}")
+                cl.refresh(b2.SYSTEM_META_INDEX)
+                fc = _FaultInjectingCluster(cl, fail_bulk_on=2, mode=mode)
+                with pytest.raises((b2.Board2ProvisionError, LiveError)):
+                    b2.provision(fc, a)
+                m = b2.read_index_meta(cl, a.index_name)
+                assert m is None or m.get("status") != "complete", (
+                    f"{mode}: a faulted ingest must never be stamped complete")
+        finally:
+            ctx.pop()
+
+
+# =============================================================================================
+# Section 9 - real-context NEGATIVE qualification controls (the ones that depend on OpenSearch).
+# The crypto/activation/score negatives (unsigned, tampered payload, bad signature, missing/invalid
+# activation, unauthorized evaluator, shadow score, below-95) are proven in the offline S5 suite
+# (siem/tests/test_strata_s5_board2.py) and are re-run as regressions; this focuses on the ones that
+# require a real indexed dataset.
+# =============================================================================================
+def test_s9neg_real_context_refusals():
+    _ostest.require_authorized_or_skip()
+    from case_routes import LiveReader
+    with _ostest.isolated_os_namespace() as ns:
+        cl = ns["cluster"]
+        application, db, ctx, admin = _portal_db()
+        try:
+            cohort_a = f"{ns['cohort']}-na"
+            cohort_b = f"{ns['cohort']}-nb"
+            ca = _cohort_candidate(db, cohort_a, COHORT_A_VARIANTS, admin, f"{ns['cohort']}na")
+            cbn = _cohort_candidate(db, cohort_b, COHORT_B_VARIANTS, admin, f"{ns['cohort']}nb")
+            a = b2.resolve_assignment(db, ca); _track(ns, a)
+            b = b2.resolve_assignment(db, cbn); _track(ns, b)
+            b2.provision(cl, a); b2.provision(cl, b)
+            cl.refresh(a.index_name); cl.refresh(b.index_name)
+            reader = LiveReader(cl)
+            # a citation that points at ANOTHER candidate's event id does not reproduce in A's index
+            b_rows = b2._fetch_all(cl, b.index_name, 3)
+            foreign_uid = b_rows[0]["_id"]
+            assert reader.query_matches(a.index_name, {"query": {"match_all": {}}}, foreign_uid) is False
+            # a citation that cannot be reproduced (nonexistent id) gets no credit
+            assert reader.query_matches(a.index_name, {"query": {"match_all": {}}}, "fabricated-id") is False
+            # cross-index evidence: A's own ids do not resolve in B's index either
+            a_rows = b2._fetch_all(cl, a.index_name, 3)
+            assert reader.query_matches(b.index_name, {"query": {"match_all": {}}}, a_rows[0]["_id"]) is False
+        finally:
+            ctx.pop()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
