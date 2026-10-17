@@ -1163,14 +1163,28 @@ def create_app():
             if not ok:
                 app.logger.info("board2 promotion gate refused: %s", reason)
                 return False
-        # S6: isolated boards (5/6) require a valid, signed REAL-range attestation at the promotion
-        # boundary too (defense in depth). A mock/simulated range never clears an isolated board.
+        # S6: isolated boards (5/6) must present a valid, signed REAL-range attestation at the
+        # promotion boundary. The STORED assessment-time attestation is VERIFIED here (signature +
+        # exact candidate/board/cohort/attempt/scenario/range identity + freshness + creditable mode);
+        # a fresh one is never minted to make a prior award pass. A mock/simulated/unavailable/foreign/
+        # expired/forged attestation fails closed.
         if P.is_isolated(n):
+            import json as _json
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
-            real, _att = _ra.attest(c, n, rr, broker, cohort=c.cohort)
-            if not real:
-                app.logger.info("isolated board %s promotion gate refused: no real range attestation", n)
+            try:
+                stored = _json.loads(br.range_attestation) if br.range_attestation else None
+            except Exception:  # noqa: BLE001
+                stored = None
+            if stored is None:
+                app.logger.info("isolated board %s promotion gate refused: no stored attestation", n)
+                return False
+            ok, reason = _ra.verify_stored(
+                stored, handle=c.handle, board=n, cohort=c.cohort,
+                attempt=getattr(br, "attempt", 1), scenario_ref=_scenario_ref(c, n),
+                range_id=(rr.ludus_range_id if rr else None))
+            if not ok:
+                app.logger.info("isolated board %s promotion gate refused: %s", n, reason)
                 return False
         return _promote(c)
 
@@ -1216,12 +1230,13 @@ def create_app():
             import json as _json
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
-            real, att = _ra.attest(c, n, rr, broker, cohort=c.cohort,
-                                   attempt=getattr(br, "attempt", 1),
-                                   scenario_ref=_scenario_ref(c, n))
-            br.range_attestation = _json.dumps(att)
-            if not real:
-                passed = False   # simulated/absent range never yields an isolated-board award
+            scenario = {"scenario_ref": _scenario_ref(c, n),
+                        "blueprint": (P.board_meta(n) or {}).get("template")}
+            creditable, att = _ra.attest(c, n, rr, broker, cohort=c.cohort,
+                                        attempt=getattr(br, "attempt", 1), scenario=scenario)
+            br.range_attestation = _json.dumps(att)   # signed assessment-time attestation (immutable)
+            if not creditable:
+                passed = False   # simulated/unavailable/absent range never yields an isolated award
         br.objective_passed = passed
         attest = {"kind": "objective", "handle": c.handle, "board": n,
                   "score": float(score), "passed": br.objective_passed,

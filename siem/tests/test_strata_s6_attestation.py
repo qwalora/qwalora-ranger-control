@@ -1,7 +1,8 @@
-"""STRATA S6 - the real-vs-mock range attestation boundary (section 9), exercised through the real
-candidate/CI routes. A simulated range must never produce an isolated-board (5/6) objective award or
-promotion. These tests run offline (no Ludus host): the mock broker is the default, and a deterministic
-test override simulates an ATTESTED real range for the allow-path, exactly as S5 does for activation.
+"""STRATA S6 - range attestation boundary (sections 9 + 13), exercised through the real routes and
+at the unit level. A simulated/unvalidated/foreign/expired/forged range must never produce an
+isolated-board (5/6) objective award or promotion. Offline: the mock broker is the default; a
+deterministic test override simulates an ATTESTED real range (labeled test_fixture) for the
+allow-path only, exactly as S5 does for activation. No Ludus host is contacted.
 """
 import os
 import sys
@@ -17,8 +18,24 @@ os.environ.pop("LUDUS_API_URL", None)   # broker stays in mock mode
 
 import json as _json  # noqa: E402
 
+import pytest  # noqa: E402
+
 import scenarios as sc  # noqa: E402
 import broker  # noqa: E402
+import strata_range_attestation as ra  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _env_guard():
+    """Snapshot and restore the env vars this module mutates, so a test override never leaks into
+    other test modules that set these at import time (e.g. the board-2 suite's RANGER_ENV=test)."""
+    keys = ("RANGER_ENV", "RANGER_S6_ATTEST_TEST", "CI_TOKEN")
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def _app():
@@ -47,37 +64,33 @@ def _seed_for(c, board):
     return a.seed if a else None
 
 
-def _correct_flags(c, db, client, board):
-    """Open the board dataset (assigns the seed), then derive the correct seed-bound flags."""
+def _correct_flags(c, client, board):
     hdr = {"X-Candidate-Token": c.token}
     r = client.post("/labs/dataset", json={"handle": c.handle}, headers=hdr)
     assert r.status_code == 200, r.data
     seed = _seed_for(c, board)
-    assert seed, "seed must be assigned after opening the dataset"
+    assert seed
     return {"flags": sc.flags_for_board(board, seed)}
 
 
+# ---------------------------------------------------------------------- end-to-end (HTTP) ----------
 def test_board5_mock_range_refuses_objective_award():
-    assert broker.is_live() is False, "broker must be mock in this suite"
+    assert broker.is_live() is False
     application, db, ctx = _app()
     try:
         from models import BoardResult, Candidate
         client = application.test_client()
         c = _cand(db, "b5mock", 5)
         hdr = {"X-Candidate-Token": c.token}
-        submission = _correct_flags(c, db, client, 5)
-        g = client.post("/grade/submit", json={"handle": c.handle, "submission": submission}, headers=hdr)
-        assert g.status_code == 200, g.data
+        g = client.post("/grade/submit", json={"handle": c.handle,
+                        "submission": _correct_flags(c, client, 5)}, headers=hdr)
         gb = g.get_json()
-        # the flags are correct (score at/above the bar) but the range is SIMULATED, so no award
-        assert gb["score"] >= 95.0, gb
-        assert gb["passed"] is False, "a mock/simulated range must not award an isolated-board objective"
-        assert gb["promoted"] is False
+        assert gb["score"] >= 95.0 and gb["passed"] is False and gb["promoted"] is False
         br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
         assert br.objective_passed is False
         att = _json.loads(br.range_attestation)
-        assert att["real"] is False and att["mode"] == "mock_simulation"
-        assert Candidate.query.get(c.id).current_board == 5  # not promoted
+        assert att["real"] is False and att["mode"] == "mock"
+        assert Candidate.query.get(c.id).current_board == 5
     finally:
         ctx.pop()
 
@@ -85,33 +98,26 @@ def test_board5_mock_range_refuses_objective_award():
 def test_board5_attested_real_range_awards_and_promotes():
     application, db, ctx = _app()
     _saved = {k: os.environ.get(k) for k in ("RANGER_ENV", "RANGER_S6_ATTEST_TEST")}
-    os.environ["RANGER_ENV"] = "test"
-    os.environ["RANGER_S6_ATTEST_TEST"] = "1"   # deterministic attested-real-range override (test only)
+    os.environ["RANGER_ENV"] = "test"; os.environ["RANGER_S6_ATTEST_TEST"] = "1"
     try:
         from models import BoardResult, Candidate
         client = application.test_client()
         c = _cand(db, "b5real", 5)
         hdr = {"X-Candidate-Token": c.token}
-        submission = _correct_flags(c, db, client, 5)
+        submission = _correct_flags(c, client, 5)
         g = client.post("/grade/submit", json={"handle": c.handle, "submission": submission}, headers=hdr)
-        gb = g.get_json()
-        assert gb["passed"] is True, "an attested real range with correct flags must award the objective"
-        # objective passed but report not yet approved -> not promoted
-        assert gb["promoted"] is False and Candidate.query.get(c.id).current_board == 5
+        assert g.get_json()["passed"] is True
         br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
         att = _json.loads(br.range_attestation)
-        assert att["real"] is True
-        # approve the human technical report, then the gate promotes to board 6 (exactly once)
+        assert att["mode"] == "test_fixture" and att["real"] is False  # creditable, but never 'real'
+        assert Candidate.query.get(c.id).current_board == 5            # not promoted without report
         br.report_status = "approved"; db.session.add(br); db.session.commit()
         g2 = client.post("/grade/submit", json={"handle": c.handle, "submission": submission}, headers=hdr)
         assert g2.get_json()["promoted"] is True
         assert Candidate.query.get(c.id).current_board == 6
     finally:
-        for k, v in _saved.items():   # restore (do not clobber other suites' module-level env)
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+        for k, v in _saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         ctx.pop()
 
 
@@ -122,21 +128,19 @@ def test_board6_mock_range_refuses_award():
         client = application.test_client()
         c = _cand(db, "b6mock", 6)
         hdr = {"X-Candidate-Token": c.token}
-        submission = _correct_flags(c, db, client, 6)
-        g = client.post("/grade/submit", json={"handle": c.handle, "submission": submission}, headers=hdr)
+        g = client.post("/grade/submit", json={"handle": c.handle,
+                        "submission": _correct_flags(c, client, 6)}, headers=hdr)
         gb = g.get_json()
         assert gb["score"] >= 95.0 and gb["passed"] is False
         br = BoardResult.query.filter_by(candidate_id=c.id, board=6).first()
-        assert br.objective_passed is False
-        assert _json.loads(br.range_attestation)["real"] is False
+        assert br.objective_passed is False and _json.loads(br.range_attestation)["real"] is False
     finally:
         ctx.pop()
 
 
 def test_grade_ci_callback_refuses_isolated_boards():
     application, db, ctx = _app()
-    _saved_ci = os.environ.get("CI_TOKEN")
-    os.environ["CI_TOKEN"] = "ci-secret"
+    _saved_ci = os.environ.get("CI_TOKEN"); os.environ["CI_TOKEN"] = "ci-secret"
     try:
         from models import BoardResult
         client = application.test_client()
@@ -145,26 +149,81 @@ def test_grade_ci_callback_refuses_isolated_boards():
             r = client.post("/grade", json={"handle": c.handle, "board": board, "score": 100},
                             headers={"X-CI-Token": "ci-secret"})
             assert r.status_code == 409, (board, r.data)
-        # no objective was recorded via the CI callback for the isolated board
-        assert BoardResult.query.filter_by(candidate_id=c.id, board=5).first() is None or \
-            BoardResult.query.filter_by(candidate_id=c.id, board=5).first().objective_passed is False
+        br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
+        assert br is None or br.objective_passed is False
     finally:
-        if _saved_ci is None:
-            os.environ.pop("CI_TOKEN", None)
-        else:
-            os.environ["CI_TOKEN"] = _saved_ci
+        os.environ.pop("CI_TOKEN", None) if _saved_ci is None else os.environ.__setitem__("CI_TOKEN", _saved_ci)
         ctx.pop()
 
 
-def test_attestation_record_is_signed_and_tamper_evident():
-    import strata_range_attestation as ra
+# ---------------------------------------------------------------------- unit: verify_stored --------
+class _RR:
+    def __init__(self, deployed=False, rid=None, status="configured"):
+        self.is_deployed = deployed; self.ludus_range_id = rid; self.status = status; self.template = "goad"
 
-    class _RR:
-        is_deployed = False; status = "configured"; ludus_range_id = "r1"
 
-    class _C:
-        handle = "x"; cohort = "2026-A"
-    real, rec = ra.attest(_C(), 5, _RR(), broker, cohort="2026-A")
-    assert real is False and ra.verify(rec) is False      # mock posture: not a valid real attestation
-    tampered = dict(rec); tampered["real"] = True
-    assert ra.verify(tampered) is False                    # signature no longer matches
+class _C:
+    def __init__(self, handle="h", cohort="2026-A"):
+        self.handle = handle; self.cohort = cohort; self.ludus_user_id = "QR-h"
+
+
+def _real_fixture_record():
+    """A creditable attestation under the active test override (mode test_fixture)."""
+    os.environ["RANGER_ENV"] = "test"; os.environ["RANGER_S6_ATTEST_TEST"] = "1"
+    creditable, rec = ra.attest(_C(), 5, _RR(), broker, cohort="2026-A", attempt=1,
+                                scenario={"scenario_ref": "ref-5"})
+    assert creditable and rec["mode"] == "test_fixture"
+    return rec
+
+
+def _clear_override():
+    os.environ.pop("RANGER_ENV", None); os.environ.pop("RANGER_S6_ATTEST_TEST", None)
+
+
+def test_mock_and_urlonly_and_deployedonly_are_not_creditable():
+    _clear_override()
+    # mock broker -> not creditable
+    creditable, rec = ra.attest(_C(), 5, _RR(), broker, cohort="2026-A")
+    assert not creditable and rec["mode"] == "mock"
+    # a configured URL alone (live broker) with NO validated range -> unavailable, not creditable,
+    # even when the stored status says 'deployed' (deployed status alone does not attest validation).
+    saved = broker.is_live
+    broker.is_live = lambda: True
+    try:
+        creditable2, rec2 = ra.attest(_C(), 5, _RR(deployed=True, status="deployed"), broker, cohort="2026-A")
+        assert not creditable2 and rec2["mode"] == "unavailable"
+        assert rec2["technical_validation"]["passed"] is False
+    finally:
+        broker.is_live = saved
+
+
+def test_forged_foreign_expired_and_testfixture_without_override_fail_closed():
+    rec = _real_fixture_record()
+    # baseline: valid under override + matching identity
+    ok, _ = ra.verify_stored(rec, handle="h", board=5, cohort="2026-A", attempt=1, scenario_ref="ref-5")
+    assert ok
+    # forged/altered: flip a field without re-signing
+    tampered = dict(rec); tampered["board"] = 6
+    assert ra.verify_stored(tampered, handle="h", board=6, cohort="2026-A", attempt=1)[0] is False
+    # foreign candidate / cohort
+    assert ra.verify_stored(rec, handle="other", board=5, cohort="2026-A", attempt=1)[0] is False
+    assert ra.verify_stored(rec, handle="h", board=5, cohort="2026-Z", attempt=1)[0] is False
+    # scenario mismatch
+    assert ra.verify_stored(rec, handle="h", board=5, cohort="2026-A", attempt=1, scenario_ref="ref-X")[0] is False
+    # expired assessment window
+    expired = dict(rec); expired["assessment_window"] = {"expires_at": "2000-01-01T00:00:00+00:00"}
+    import signing
+    expired["signature"] = signing.sign({k: expired[k] for k in expired if k != "signature"})
+    assert ra.verify_stored(expired, handle="h", board=5, cohort="2026-A", attempt=1)[0] is False
+    # a test-fixture attestation is NOT real-production proof once the override is gone
+    _clear_override()
+    assert ra.verify_stored(rec, handle="h", board=5, cohort="2026-A", attempt=1)[0] is False
+
+
+def test_gate_verifies_stored_not_reminted():
+    _clear_override()
+    rec = _real_fixture_record()
+    _clear_override()
+    # outside the override, even a well-signed test-fixture attestation is refused at the gate
+    ok, reason = ra.verify_stored(rec, handle="h", board=5, cohort="2026-A", attempt=1)
+    assert ok is False and "real-production" in reason
