@@ -30,6 +30,8 @@ os.environ.setdefault("ADMIN_TOKEN", "s6-admin-tok")
 
 import pytest  # noqa: E402
 
+from _s6util import expiring_client  # noqa: E402
+
 import broker  # noqa: E402
 import range_lifecycle as L  # noqa: E402
 
@@ -37,14 +39,21 @@ import range_lifecycle as L  # noqa: E402
 @pytest.fixture(autouse=True)
 def _env_guard():
     keys = ("LUDUS_API_URL", "LUDUS_API_KEY", "LUDUS_VERIFY_TLS", "LUDUS_CA_BUNDLE",
-            "LUDUS_ADAPTER_VERIFIED", "LUDUS_RETRIES", "LUDUS_TIMEOUT",
+            "LUDUS_ADAPTER_VERIFIED", "LUDUS_RETRIES", "LUDUS_TIMEOUT", "ADMIN_TOKEN",
             "RANGER_STRATA_PORTFOLIOS", "RANGER_ENV", "RANGER_S6_ATTEST_TEST")
     saved = {k: os.environ.get(k) for k in keys}
+    # Several tests here mutate app module globals (MAX_CONCURRENT, the reclaim thresholds) to force a
+    # path; snapshot and restore them so the mutation is test-local and never leaks into other suites.
+    import app as _appmod
+    gkeys = ("MAX_CONCURRENT", "RANGE_IDLE_HOURS", "RANGE_MAX_AGE_HOURS", "RANGE_EVIDENCE_HOLD_HOURS")
+    gsaved = {k: getattr(_appmod, k) for k in gkeys}
     try:
         yield
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        for k, v in gsaved.items():
+            setattr(_appmod, k, v)
 
 
 class _C:
@@ -146,8 +155,8 @@ def test_destroy_treats_404_as_idempotent_success(monkeypatch):
         raise broker.LudusNotFound("404", status=404)
 
     monkeypatch.setattr(broker, "_req", nf)
-    ok, detail = broker.destroy_range(_C())
-    assert ok is True and "absent" in detail
+    confirmed, detail, outcome = broker.destroy_range(_C())
+    assert confirmed is True and outcome == broker.OP_CONFIRMED and "absent" in detail
 
 
 def test_ensure_user_treats_409_as_reuse(monkeypatch):
@@ -205,10 +214,33 @@ def test_verify_range_requires_the_complete_contract(monkeypatch):
 
 
 def test_power_off_on_are_power_toggles_not_snapshots():
-    ok1, d1 = broker.power_off(_C())
-    ok2, d2 = broker.power_on(_C())
-    assert ok1 and ok2
+    ok1, d1, o1 = broker.power_off(_C())
+    ok2, d2, o2 = broker.power_on(_C())
+    assert ok1 and ok2 and o1 == broker.OP_CONFIRMED and o2 == broker.OP_CONFIRMED
     assert "disks preserved" in d1 and "snapshot" not in d1.lower()
+
+
+def test_broker_distinguishes_accepted_from_confirmed(monkeypatch):
+    # §2: a live power-off whose confirmation poll never sees the VMs stopped is NOT confirmed
+    # (PENDING), so a caller must not free the slot; a probe error is UNKNOWN; neither is a pass.
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    monkeypatch.setattr(broker, "_req", lambda *a, **k: {})  # POST accepted
+    # VMs still running on every poll -> power-off PENDING, not confirmed
+    monkeypatch.setattr(broker, "range_detail",
+                        lambda *a, **k: {"VMs": [{"name": "DC01", "poweredOn": True}]})
+    confirmed, _d, outcome = broker.power_off(_C())
+    assert confirmed is False and outcome == broker.OP_PENDING
+    # a probe error -> UNKNOWN (conservative, retryable), never a false confirmation
+    def _boom(*a, **k):
+        raise broker.LudusUnavailable("503", status=503)
+    monkeypatch.setattr(broker, "range_detail", _boom)
+    confirmed2, _d2, outcome2 = broker.power_off(_C())
+    assert confirmed2 is False and outcome2 == broker.OP_UNKNOWN
+    # destroy: range still present on poll -> PENDING (absence not confirmed)
+    monkeypatch.setattr(broker, "range_detail",
+                        lambda *a, **k: {"rangeState": "SUCCESS", "VMs": []})
+    cdestroy, _d3, outcome3 = broker.destroy_range(_C())
+    assert cdestroy is False and outcome3 == broker.OP_PENDING
 
 
 # =====================================================================================
@@ -274,9 +306,13 @@ def test_action_plans_describe_reality():
 def _app():
     import app as appmod
     from models import db, AdminUser, Cohort
+    # Set the admin token EXPLICITLY per app (not setdefault): multiple suites set ADMIN_TOKEN via
+    # setdefault at import, so whichever imports first would otherwise win process-wide and the admin
+    # Bearer header below would 401. create_app reads ADMIN_TOKEN at call time, so set it here.
+    os.environ["ADMIN_TOKEN"] = "s6-admin-tok"
     application = appmod.create_app()
     ctx = application.app_context(); ctx.push()
-    db.create_all()
+    db.drop_all(); db.create_all()  # per-test schema reset: StaticPool shares one in-memory DB in a process
     for nm in ("2026-A",):
         if not Cohort.query.filter_by(name=nm).first():
             db.session.add(Cohort(name=nm, pathway="strata", status="active"))
@@ -312,7 +348,7 @@ def _start_board5(appmod, application, db, c):
     import strata_assignment as asn
     from siem import board_variants as bv
     asn.set_cohort_portfolio(db, "2026-A", 5, bv.variants_for(5)[:2], admin=_admin_row(db))
-    client = application.test_client()
+    client = expiring_client(application, db)
     hdr = {"X-Candidate-Token": c.token}
     assert client.post("/labs/dataset", json={"handle": c.handle}, headers=hdr).status_code == 200
     r = client.post("/labs/start", json={"handle": c.handle}, headers=hdr)
@@ -419,7 +455,7 @@ def test_suspended_range_frees_a_concurrency_slot():
         import strata_assignment as asn
         from siem import board_variants as bv
         asn.set_cohort_portfolio(db, "2026-A", 5, bv.variants_for(5)[:2], admin=_admin_row(db))
-        client_b = application.test_client()
+        client_b = expiring_client(application, db)
         hdr_b = {"X-Candidate-Token": cb.token}
         client_b.post("/labs/dataset", json={"handle": cb.handle}, headers=hdr_b)
         rb = client_b.post("/labs/start", json={"handle": cb.handle}, headers=hdr_b).get_json()

@@ -53,6 +53,14 @@ from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_RANGES", "2"))
+# S6 §3 (post-closure): host admission is RAM-WEIGHTED, not a bare count - a count of 2 does NOT imply
+# a host has RAM for any two ranges. A Vanguard capstone (multi-forest GOAD) needs materially more RAM
+# than a Raider range, so each board carries a weight and admission sums weights against the host's
+# capacity in units. Defaults mirror the corrected cost model (a 64 GB host = 2 Raider OR 1 capstone):
+# capacity 2 units, Raider 1 unit, capstone 2 units. HOST_CAPACITY_UNITS defaults to MAX_CONCURRENT so
+# existing single-board deployments are unchanged.
+RAIDER_RAM_UNITS = int(os.environ.get("RAIDER_RAM_UNITS", "1"))
+CAPSTONE_RAM_UNITS = int(os.environ.get("CAPSTONE_RAM_UNITS", "2"))
 # Background maintenance: poll deploying ranges, reconcile the queue, reclaim
 # ranges. Enable on the server (ENABLE_SCHEDULER=1); off by default so imports
 # and tests don't spin a thread.
@@ -67,6 +75,12 @@ RANGE_IDLE_HOURS = float(os.environ.get("RANGE_IDLE_HOURS", "8"))
 # range's disks (suspend/power-off instead of destroy) so the candidate's evidence survives until
 # the human report-approval review closes. 0 disables the hold.
 RANGE_EVIDENCE_HOLD_HOURS = float(os.environ.get("RANGE_EVIDENCE_HOLD_HOURS", "72"))
+# S6 §1 (post-closure): a SUSPENDED range keeps its disks (and evidence) through the evidence hold.
+# Once the hold has ended, it is retained for this grace period and then its disks are reclaimed
+# (destroyed) - but only after the signed qualification record is confirmed durably preserved, so a
+# suspended range never lingers indefinitely yet evidence is never discarded. 0 disables suspended
+# reclamation (disks kept until an explicit teardown).
+RANGE_SUSPENDED_RETENTION_HOURS = float(os.environ.get("RANGE_SUSPENDED_RETENTION_HOURS", "24"))
 # The program window: 26 weeks / 130 days. The clock starts when a cohort is
 # activated. Enforcement (window-expiry + inactivity washout) is a toggle, off
 # by default so a deploy never mass-washes-out; turn on when you want the 130-day
@@ -463,8 +477,20 @@ def create_app():
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = os.environ.get("COOKIE_INSECURE") != "1"
-    app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(os.environ.get("DATABASE_URL"))
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
+    _db_uri = _normalize_db_url(os.environ.get("DATABASE_URL"))
+    app.config["SQLALCHEMY_DATABASE_URI"] = _db_uri
+    if _db_uri.startswith("sqlite") and (":memory:" in _db_uri or _db_uri in ("sqlite://", "sqlite:///:memory:")):
+        # An in-memory SQLite database lives inside a SINGLE connection: a connection pool that opens
+        # more than one connection would hand out independent, divergent databases, so a write on one
+        # connection is invisible on another. Pin a StaticPool (one shared connection) so every session
+        # - including a Flask test client's request-scoped session vs the test's own session - sees the
+        # same data. This only affects in-memory SQLite (tests/dev); file and Postgres URLs keep the
+        # production pool options below.
+        from sqlalchemy.pool import StaticPool
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+            "poolclass": StaticPool, "connect_args": {"check_same_thread": False}}
+    else:
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
     db.init_app(app)
     with app.app_context():
         # Two gunicorn workers import the app concurrently and both run these.
@@ -742,34 +768,88 @@ def create_app():
                         RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT),
                         RangeRequest.id != exclude_id).count())
 
+    # --- S6 §3: RAM-weighted, atomically-admitted host capacity ---------------
+    def _board_weight(board):
+        """RAM units a board's range occupies. A capstone (board 6) is heavier than a Raider."""
+        return CAPSTONE_RAM_UNITS if int(board or 0) == 6 else RAIDER_RAM_UNITS
+
+    def _host_capacity():
+        """Host capacity in RAM units (read at call time so a runtime MAX_CONCURRENT change is honored)."""
+        try:
+            v = os.environ.get("HOST_CAPACITY_UNITS")
+            return int(v) if v else MAX_CONCURRENT
+        except ValueError:
+            return MAX_CONCURRENT
+
+    def _capacity_used(host, exclude_id=None):
+        """RAM units currently committed on a host (weighted sum of slot-occupying ranges)."""
+        q = RangeRequest.query.filter(RangeRequest.host == host,
+                                      RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT))
+        if exclude_id is not None:
+            q = q.filter(RangeRequest.id != exclude_id)
+        return sum(_board_weight(r.board) for r in q.all())
+
+    def _host_lock(host):
+        """Serialize capacity admission for a host. On PostgreSQL, take a per-host TRANSACTIONAL
+        advisory lock (pg_advisory_xact_lock) held until this transaction commits/rolls back, so two
+        concurrent transactions cannot both observe free capacity and both reserve - the second blocks
+        until the first commits its reservation. On SQLite there is a single writer, so admission is
+        already serialized and this is a no-op. (The Postgres path needs a real PG server to verify -
+        category C, unverified offline.)"""
+        try:
+            if db.engine.dialect.name == "postgresql":
+                key = int.from_bytes(hashlib.sha256(("rangecap:" + host).encode()).digest()[:8],
+                                     "big", signed=True)
+                db.session.execute(db.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
+        except Exception:  # noqa: BLE001
+            # Never let lock acquisition crash admission; fall back to the unlocked check (SQLite-safe).
+            pass
+
+    def _admit(host, board, exclude_id):
+        """Atomically decide whether `host` can admit a range of `board`. Acquires the per-host
+        admission lock, then checks the RAM-weighted capacity. The CALLER must, while still in this
+        same transaction, reserve the slot (flip to 'deploying') and eventually commit - the xact lock
+        held here keeps the check+reserve atomic against concurrent admissions. A count limit of two is
+        never assumed to mean enough RAM for any two ranges: two capstones (2+2 units) exceed the
+        default capacity and are refused, while two Raiders (1+1) fit."""
+        _host_lock(host)
+        return (_capacity_used(host, exclude_id) + _board_weight(board)) <= _host_capacity()
+
     def _resume_range(c, rr):
         """Resume a SUSPENDED (powered-off) range: power the preserved disks back
         on and return to deployed, re-taking a slot. Evidence is intact - this is
         NOT a rebuild. If the host is at its cap, the range stays suspended (so its
         evidence stays preserved) and the candidate retries; it is never silently
         rebuilt (which would discard evidence)."""
-        if _slots_used_excluding(rr.host, rr.id) >= MAX_CONCURRENT:
-            rr.detail = f"at capacity on {rr.host} (cap {MAX_CONCURRENT}); range stays suspended, retry shortly"
+        # §3: RAM-weighted, atomic admission (same per-host lock as deploy) so a resume racing a deploy
+        # or another resume cannot oversubscribe the host.
+        if not _admit(rr.host, rr.board, rr.id):
+            rr.detail = (f"at capacity on {rr.host} "
+                         f"({_capacity_used(rr.host, rr.id)}+{_board_weight(rr.board)} > "
+                         f"{_host_capacity()} units); range stays suspended, retry shortly")
             return rr.status
         # Reserve-before-launch (§4): flip to a slot-occupying state and FLUSH before the slow
-        # power-on, so two concurrent resumes/deploys cannot both pass the cap check and oversubscribe
-        # the host. On a failed/unconfirmed power-on the reservation is released back to suspended
-        # (the disks and evidence are untouched), never left falsely holding a slot.
+        # power-on, still holding the admission lock, so two concurrent resumes/deploys cannot both
+        # pass the capacity check. On a failed/unconfirmed power-on the reservation is released back to
+        # suspended (the disks and evidence are untouched), never left falsely holding a slot.
         prev = rr.status
         range_lifecycle.assert_transition(prev, "deploying")
         rr.status = "deploying"
         rr.detail = "slot reserved; resuming"
         db.session.flush()
         now = _dt.datetime.now(_dt.timezone.utc)
+        # §2: only treat the range as deployed once the broker CONFIRMS the VMs are running. An
+        # accepted-but-unconfirmed power-on releases the reservation back to the preserved suspended
+        # state (disks + evidence intact), so capacity is never counted against an unconfirmed resume.
         try:
-            ok, detail = broker.power_on(c, user_key=_candidate_key(c))
+            confirmed, detail, outcome = broker.power_on(c, user_key=_candidate_key(c))
         except Exception as e:  # noqa: BLE001
             range_lifecycle.assert_transition(rr.status, "suspended")
             rr.status = "suspended"
-            rr.detail = ("resume failed, range left suspended: %s" % e)[:200]
+            rr.detail = ("resume request failed, range left suspended: %s" % e)[:200]
             db.session.flush()
             return rr.status
-        if ok:
+        if confirmed:
             range_lifecycle.assert_transition(rr.status, "deployed")
             rr.status = "deployed"
             rr.detail = "resumed from suspend: " + detail
@@ -778,7 +858,7 @@ def create_app():
         else:
             range_lifecycle.assert_transition(rr.status, "suspended")
             rr.status = "suspended"
-            rr.detail = "resume not confirmed, range left suspended: " + detail
+            rr.detail = ("resume %s, range left suspended: %s" % (outcome, detail))[:200]
         db.session.flush()
         return rr.status
 
@@ -799,12 +879,17 @@ def create_app():
         # Duplicate-deploy guard: already reserved/deploying/deployed -> leave it.
         if rr.status in RangeRequest.OCCUPIES_SLOT:
             return rr.status
-        # Count reserved + provisioning + deployed, excluding this row, against cap.
-        if _slots_used_excluding(rr.host, rr.id) >= MAX_CONCURRENT:
+        # §3: RAM-weighted, atomic admission. _admit holds a per-host lock while checking weighted
+        # capacity; we reserve (flip to deploying) and flush inside the SAME transaction, so the lock
+        # keeps check+reserve atomic against a concurrent deploy/resume (no oversubscription).
+        if not _admit(rr.host, rr.board, rr.id):
             rr.status = "queued_slot"
-            rr.detail = f"waiting for a slot on {rr.host} (cap {MAX_CONCURRENT})"
+            rr.detail = (f"waiting for capacity on {rr.host} "
+                         f"({_capacity_used(rr.host, rr.id)}+{_board_weight(rr.board)} > "
+                         f"{_host_capacity()} units)")
+            db.session.flush()
             return rr.status
-        # Reserve the slot now, before any slow broker call.
+        # Reserve the slot now, before any slow broker call (still holding the admission lock).
         rr.status = "deploying"
         rr.detail = "slot reserved; provisioning"
         db.session.flush()
@@ -905,18 +990,19 @@ def create_app():
         return rr
 
     def _reconcile(host="primary"):
-        """Promote queued ranges into freed slots, oldest first. Called after a
-        teardown and by the admin reconcile endpoint. Keeps the host at its cap."""
+        """Promote queued ranges into freed capacity, oldest first. Called after a teardown and by the
+        admin reconcile endpoint. §3: admission is RAM-weighted, so each queued range is attempted
+        through _try_deploy (which re-checks weighted capacity under the per-host lock); a range too
+        heavy to fit stays queued without spinning, and a lighter queued range is still attempted."""
         promoted = 0
-        while _slots_used(host) < MAX_CONCURRENT:
-            rr = (RangeRequest.query
+        queued = (RangeRequest.query
                   .filter_by(host=host, status="queued_slot")
-                  .order_by(RangeRequest.id.asc()).first())
-            if not rr:
-                break
+                  .order_by(RangeRequest.id.asc()).all())
+        for rr in queued:
             c = Candidate.query.get(rr.candidate_id)
             _try_deploy(c, rr)
-            promoted += 1
+            if rr.status != "queued_slot":
+                promoted += 1
         db.session.commit()
         return promoted
 
@@ -1009,13 +1095,15 @@ def create_app():
         key = _candidate_key(c) if c else None
 
         def _suspend(note):
+            # §2+§4: only treat the range as suspended (and free its slot) once the broker CONFIRMS
+            # every VM is stopped. Accepted/pending/unknown leaves it running and slot-held, retryable.
             try:
-                ok, detail = broker.power_off(c, user_key=key)
+                confirmed, detail, outcome = broker.power_off(c, user_key=key)
             except Exception as e:  # noqa: BLE001
-                rr.detail = ("suspend failed, range left running: %s" % e)[:200]
+                rr.detail = ("suspend request failed, range left running: %s" % e)[:200]
                 return "failed"
-            if not ok:
-                rr.detail = ("suspend not confirmed, range left running: %s" % detail)[:200]
+            if not confirmed:
+                rr.detail = ("suspend %s, range left running: %s" % (outcome, detail))[:200]
                 return "failed"
             range_lifecycle.assert_transition(rr.status, "suspended")
             rr.status = "suspended"
@@ -1034,13 +1122,16 @@ def create_app():
                                 "preserve evidence")
             # A signed qualification record is persisted in the DB, independent of the VM disks, so a
             # legally-required destroy of the disks is now evidence-safe.
+        # §2+§4: only mark destroyed (and free the slot) once the broker CONFIRMS the range is absent.
+        # Accepted/pending/unknown leaves it in place and slot-held; the destructive DELETE is not
+        # auto-resent - the next maintenance pass retries.
         try:
-            ok, detail = broker.destroy_range(c, user_key=key)
+            confirmed, detail, outcome = broker.destroy_range(c, user_key=key)
         except Exception as e:  # noqa: BLE001
-            rr.detail = ("teardown failed, range left running: %s" % e)[:200]
+            rr.detail = ("teardown request failed, range left in place: %s" % e)[:200]
             return "failed"
-        if not ok:
-            rr.detail = ("teardown not confirmed, range left running: %s" % detail)[:200]
+        if not confirmed:
+            rr.detail = ("teardown %s, range left in place: %s" % (outcome, detail))[:200]
             return "failed"
         range_lifecycle.assert_transition(rr.status, "destroyed")
         rr.status = "destroyed"
@@ -1077,14 +1168,67 @@ def create_app():
                 reclaimed.append(rr.host or "primary")
         return reclaimed
 
+    def _cleanup_suspended():
+        """S6 §1 (post-closure): reclaim the DISKS of SUSPENDED ranges once they are past retention,
+        so a suspended range never keeps its disks indefinitely. A suspended range frees no RAM slot,
+        but its disks (and any in-range evidence) persist, so this closes the retention gap the
+        slot-only _expire_ranges left open.
+
+        Guarantees, in order:
+          - NEVER delete while an evidence hold is still open (preserve through the hold).
+          - Only after the hold ends does the retention grace (RANGE_SUSPENDED_RETENTION_HOURS) start.
+          - Before destroying, the signed qualification record must be durably preserved in the DB;
+            if it is not, the destroy is withheld (fail closed - evidence is never discarded).
+          - Destruction goes through the broker and is only recorded once remote ABSENCE is confirmed
+            (§2); an unconfirmed/failed op leaves the range suspended and is retried on a later pass.
+        """
+        if not RANGE_SUSPENDED_RETENTION_HOURS:
+            return []
+        now = _dt.datetime.now(_dt.timezone.utc)
+        cleaned = []
+        rows = RangeRequest.query.filter(RangeRequest.status == "suspended").all()
+        for rr in rows:
+            if rr.host == "shared":
+                continue
+            hold = _aware(rr.evidence_hold_until)
+            if hold is not None and hold > now:
+                continue  # evidence window still open: preserve the disks, never delete
+            # retention grace begins when the hold ends (or, with no hold, from last update/activity)
+            base = hold or _aware(rr.updated_at or rr.last_active_at or rr.created_at)
+            if base is not None and (now - base).total_seconds() / 3600.0 < RANGE_SUSPENDED_RETENTION_HOURS:
+                continue
+            c = Candidate.query.get(rr.candidate_id)
+            br = _board_result(c, rr.board, create=False) if c else None
+            if not (br and br.range_attestation):
+                # The signed qualification record is the durable evidence. If it is not persisted, do
+                # NOT destroy the disks - the range stays suspended and is surfaced for manual review.
+                rr.detail = ("retention reached but no persisted signed record; disks preserved "
+                             "(evidence not yet durable)")[:200]
+                continue
+            try:
+                confirmed, detail, outcome = broker.destroy_range(c, user_key=_candidate_key(c))
+            except Exception as e:  # noqa: BLE001
+                rr.detail = ("suspended cleanup destroy request failed, disks preserved: %s" % e)[:200]
+                continue
+            if not confirmed:
+                rr.detail = ("suspended cleanup destroy %s, disks preserved (retry): %s"
+                             % (outcome, detail))[:200]
+                continue
+            range_lifecycle.assert_transition(rr.status, "destroyed")
+            rr.status = "destroyed"
+            rr.detail = "suspended range retention reached; disks reclaimed (evidence preserved in record)"
+            cleaned.append(rr.host or "primary")
+        return cleaned
+
     def _maintenance():
         """One pass: start due cohorts, enforce the program window + inactivity,
-        advance in-flight deploys, reclaim stale ranges, then fill freed slots.
-        Used by the scheduler and the admin Reconcile button."""
+        advance in-flight deploys, reclaim stale ranges, clean up retired suspended
+        ranges, then fill freed slots. Used by the scheduler and the admin Reconcile button."""
         _activate_due_cohorts()
         _enforce_program()
         _poll_deploying()
         freed = _expire_ranges()
+        _cleanup_suspended()  # reclaim suspended-range disks past retention (evidence-safe, confirmed)
         db.session.flush()
         hosts = set(_known_hosts()) | set(freed)
         promoted = 0
@@ -1380,6 +1524,32 @@ def create_app():
     # (report approval) still applied by _evaluate_gate.
     ENTERPRISE_CASE_BOARD = 2
 
+    def _governed_credit_ok(c, n):
+        """S6 §4: whether a REAL (production) isolated-range objective may be credited. A real range
+        credits ONLY under scenario governance with a valid, approved, integrity-verified binding -
+        never off a legacy seed. Returns (ok, reason). (The offline test_fixture path is handled
+        separately and is inert outside an explicit test/ci environment, so it is never a production
+        bypass.)"""
+        if not _strata_portfolios_on():
+            return False, "portfolios disabled: a real range cannot credit outside governance"
+        from models import ScenarioBinding, ScenarioCatalogEntry
+        b = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
+             .order_by(ScenarioBinding.attempt.desc()).first())
+        if b is None:
+            return False, "no scenario binding"
+        if (b.status or "").lower() in ("revoked", "superseded", "void"):
+            return False, "binding %s" % b.status
+        try:
+            # resolve() fails closed on a tampered contract or a content_hash drift (superseded spec).
+            strata_assignment.resolve(b)
+        except Exception as e:  # noqa: BLE001
+            return False, "pinned contract invalid: %s" % e
+        entry = (ScenarioCatalogEntry.query
+                 .filter_by(spec_id=b.spec_id, content_hash=b.content_hash).first())
+        if entry is None or entry.status != "catalog_eligible":
+            return False, "bound scenario is not an approved catalog entry"
+        return True, "ok"
+
     def _record_objective(c, n, score):
         if int(n) == ENTERPRISE_CASE_BOARD:
             # Fail-closed chokepoint: no generic path awards Board 2 objective credit. The live
@@ -1421,9 +1591,17 @@ def create_app():
                     "pathway": (_co.pathway if _co else None) or "strata"})
             creditable, att = _ra.attest(c, n, rr, broker, cohort=c.cohort,
                                         attempt=attempt, scenario=scenario)
+            # §4: a REAL production range credits ONLY under governance with a valid approved binding.
+            # Even a technically-validated live range earns nothing off a legacy seed, a disabled
+            # portfolio, a revoked/superseded binding, a mismatched attempt or a tampered contract.
+            if att.get("mode") == _ra.MODE_REAL:
+                gov_ok, gov_reason = _governed_credit_ok(c, n)
+                if not gov_ok:
+                    creditable = False
+                    app.logger.info("isolated board %s real-range credit refused: %s", n, gov_reason)
             br.range_attestation = _json.dumps(att)   # signed assessment-time attestation (immutable)
             if not creditable:
-                passed = False   # simulated/unavailable/absent range never yields an isolated award
+                passed = False   # simulated/unavailable/absent/ungoverned range never yields an award
             # S6 §16: opening the assessment/evidence window pins an evidence hold on the range, so
             # idle/age reclamation preserves its disks (suspend, never destroy) until review closes.
             if rr is not None and RANGE_EVIDENCE_HOLD_HOURS:

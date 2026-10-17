@@ -69,8 +69,11 @@ accounting (a known test-harness characteristic, not a product defect; every sui
 process). `siem/tests/run_s6_acceptance.sh` runs each suite in a separate process, which is how CI
 should run them. The PG-backed suites skip without an authorized PG test server (expected).
 
-Offline acceptance totals (per-file): 65 S6 tests across 8 suites green; the S1-S5 suites the S6
-additions touch stay green (106 passed, 2 PG-only skips).
+Offline acceptance totals: 11 S6 suites green, in per-file runs AND as one combined process in
+forward and reversed order (80 passed, 1 PG-only skip each). The S1-S5 suites the S6 additions touch
+stay green. Category C (PostgreSQL transactional concurrency) is prepared but UNVERIFIED without an
+authorized PG server (its test skips); categories D (real Ludus/Proxmox) and E (candidate acceptance)
+remain unverified without a live host.
 
 ## 4. Go-live checklist (category D/E, operator, gated on separate approval)
 
@@ -123,6 +126,42 @@ milestone.
    provisioned capacity, and names the bigger/second host as the approval-gated overage.
 7. **Acceptance strengthened.** `test_strata_s6_closure.py` proves items 1-5 through integrated
    Flask/broker/assignment paths.
+
+## 4b. Post-closure correctness pass (second review)
+
+1. **Suspended-range retention cleanup.** `_cleanup_suspended()` (run in `_maintenance`) reclaims the
+   DISKS of suspended ranges once past retention (`RANGE_SUSPENDED_RETENTION_HOURS`, default 24h after
+   the evidence hold ends): never while a hold is open; only after the signed record is confirmed
+   persisted; destruction via the broker, recorded only once absence is CONFIRMED; retried safely.
+   Covered by `test_strata_s6_retention.py` (hold-open preserve, past-retention destroy, missing
+   evidence withheld, interrupted-then-confirmed, exit→cleanup, repeated-maintenance idempotent,
+   retention-disabled).
+2. **Accepted vs confirmed broker state.** `broker.power_off/power_on/destroy_range` return
+   `(confirmed, detail, outcome)` with outcomes `confirmed/accepted/pending/failed/unknown`. A slot is
+   freed on power-off only when VMs are confirmed stopped; a range is marked destroyed only when
+   absence is confirmed; resume reaches deployed only when VMs are confirmed running. Uncertain states
+   stay conservative and retryable and never auto-resend the destructive request. Verified against a
+   fault-injecting double; true confirmation cadence/paths need a real Ludus host (category D).
+3. **Atomic, RAM-weighted capacity.** `_admit()` takes a per-host `pg_advisory_xact_lock` and checks a
+   RAM-WEIGHTED budget (Raider 1 unit, capstone 2; host capacity in units), so a count of two never
+   implies RAM for any two ranges (two capstones are refused on a 2-unit host). The weighted policy is
+   verified offline (`test_strata_s6_capacity.py`); the transactional-concurrency guarantee requires a
+   PostgreSQL server and is UNVERIFIED offline (that test skips, never claims a pass).
+4. **Governance required for real credit.** `_record_objective` credits a MODE_REAL isolated range
+   ONLY under governance with a valid approved binding (`_governed_credit_ok`): portfolios enabled, an
+   un-revoked ScenarioBinding, an integrity-verified pinned contract, and an approved catalog entry.
+   A disabled portfolio flag, legacy-only seed, or revoked/unapproved binding earns no real credit.
+   The offline `test_fixture` path is preserved and, being inert outside test/ci, is never a
+   production bypass. Covered by `test_strata_s6_real_credit.py`.
+
+**Test-harness root cause (resolved).** The combined run was order-dependent because (a) `ADMIN_TOKEN`
+was set via `setdefault` at import, so import order fixed the process-wide token and `/admin/reconcile`
+returned 401, and (b) two lifecycle tests mutated app module globals (`MAX_CONCURRENT`, reclaim
+thresholds) without restoring them. Fixes: each suite sets its admin token explicitly per app; an
+autouse fixture snapshots/restores those globals; plus session hygiene (in-memory StaticPool, per-test
+`drop_all`, and a test client that expires the outer session after each request). The full combined
+single-process run now passes deterministically in forward and reversed order (80 passed, 1 PG-only
+skip each). Per-file execution (`run_s6_acceptance.sh`) remains the CI strategy.
 
 ## 5. Restrictions (unchanged)
 

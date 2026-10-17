@@ -516,30 +516,94 @@ def verify_range(candidate, expected, user_key=None):
     return result
 
 
-def power_off(candidate, user_key=None):
-    """Suspend the range = Proxmox power-off of all VMs. Disks are preserved;
-    this is NOT a snapshot-suspend (Ludus has none). Frees RAM on the host while
-    keeping the range's state and any planted evidence intact. Returns (ok, detail)."""
+# --- operation outcomes (S6 §2) ----------------------------------------------
+# A Ludus power/delete call being ACCEPTED is not the same as the remote state having CHANGED. These
+# five outcomes keep the two apart so callers only act on independently-confirmed state.
+OP_CONFIRMED = "confirmed"   # remote state independently verified (VMs stopped/running, range absent)
+OP_ACCEPTED = "accepted"     # request accepted by the API but remote state not yet confirmed
+OP_PENDING = "pending"       # in progress; remote state not yet the target state
+OP_FAILED = "failed"         # the request itself failed (definite)
+OP_UNKNOWN = "unknown"       # could not determine remote state (treat conservatively, retryable)
+
+_CONFIRM_POLLS = 3
+
+
+def _confirm(fn, *, want, attempts=_CONFIRM_POLLS):
+    """Poll a predicate `fn()` (returns True once the remote state matches the target) up to `attempts`
+    times. Returns (ok, outcome). Any probe error leaves the outcome UNKNOWN, never a false CONFIRMED.
+    Against real Ludus the poll cadence/paths need validation (category D)."""
+    for _ in range(max(1, attempts)):
+        try:
+            if fn():
+                return True, OP_CONFIRMED
+        except LudusError:
+            return False, OP_UNKNOWN
+        except Exception:  # noqa: BLE001
+            return False, OP_UNKNOWN
+    return False, OP_PENDING
+
+
+def _vm_power_states(detail):
+    out = {}
+    for vm in (detail.get("VMs") or detail.get("vms") or []):
+        if isinstance(vm, dict):
+            name = vm.get("name") or vm.get("Name") or ""
+            running = bool(vm.get("poweredOn") or vm.get("PoweredOn")
+                           or (vm.get("powerState") in ("running", "on")))
+            out[name] = running
+    return out
+
+
+def power_off(candidate, user_key=None, *, confirm=True):
+    """Suspend the range = Proxmox power-off of all VMs. Disks are preserved; this is NOT a
+    snapshot-suspend (Ludus has none). Returns (confirmed, detail, outcome).
+
+    §2: the POST being accepted does NOT mean the VMs are stopped. When `confirm`, poll the range
+    detail until every VM is confirmed powered off; a slot must not be freed until this returns
+    CONFIRMED. A partial/interrupted power-off is PENDING, a probe failure UNKNOWN - both conservative
+    and retryable, and neither re-sends the destructive request automatically."""
     if not is_live():
-        return (True, "mock: range powered off (suspend = Proxmox stop; disks preserved)")
+        return (True, "mock: range powered off (suspend = Proxmox stop; disks preserved)", OP_CONFIRMED)
     try:
         _req("POST", "/range/poweroff", {"userID": candidate.ludus_user_id, "machines": "all"},
              key=user_key or _admin_key())
-        return (True, "power-off accepted (VMs stopped; disks preserved)")
     except LudusError as e:
-        return (False, f"power-off error: {e}")
+        return (False, f"power-off request failed: {e}", OP_FAILED)
+    if not confirm:
+        return (False, "power-off accepted (VMs stopping; not yet confirmed)", OP_ACCEPTED)
+
+    def _all_stopped():
+        states = _vm_power_states(range_detail(candidate, user_key=user_key))
+        return bool(states) and not any(states.values())
+    ok, outcome = _confirm(_all_stopped, want=False)
+    msg = {OP_CONFIRMED: "power-off confirmed (all VMs stopped; disks preserved)",
+           OP_PENDING: "power-off accepted but VMs not yet confirmed stopped",
+           OP_UNKNOWN: "power-off accepted but remote state could not be confirmed"}[outcome]
+    return (ok, msg, outcome)
 
 
-def power_on(candidate, user_key=None):
-    """Resume the range = Proxmox power-on of all VMs (disks intact). Returns (ok, detail)."""
+def power_on(candidate, user_key=None, *, confirm=True):
+    """Resume the range = Proxmox power-on of all VMs (disks intact). Returns (confirmed, detail,
+    outcome). §2: a range is not treated as resumed/deployed until the required VMs are CONFIRMED
+    running; accepted-but-unconfirmed is ACCEPTED/PENDING, a probe failure UNKNOWN."""
     if not is_live():
-        return (True, "mock: range powered on (resume = Proxmox start)")
+        return (True, "mock: range powered on (resume = Proxmox start)", OP_CONFIRMED)
     try:
         _req("POST", "/range/poweron", {"userID": candidate.ludus_user_id, "machines": "all"},
              key=user_key or _admin_key())
-        return (True, "power-on accepted (VMs starting)")
     except LudusError as e:
-        return (False, f"power-on error: {e}")
+        return (False, f"power-on request failed: {e}", OP_FAILED)
+    if not confirm:
+        return (False, "power-on accepted (VMs starting; not yet confirmed)", OP_ACCEPTED)
+
+    def _all_running():
+        states = _vm_power_states(range_detail(candidate, user_key=user_key))
+        return bool(states) and all(states.values())
+    ok, outcome = _confirm(_all_running, want=True)
+    msg = {OP_CONFIRMED: "power-on confirmed (all VMs running)",
+           OP_PENDING: "power-on accepted but VMs not yet confirmed running",
+           OP_UNKNOWN: "power-on accepted but remote state could not be confirmed"}[outcome]
+    return (ok, msg, outcome)
 
 
 def wireguard_config(candidate, user_key=None):
@@ -555,19 +619,37 @@ def wireguard_config(candidate, user_key=None):
         return f"# wireguard fetch error: {e}\n"
 
 
-def destroy_range(candidate, user_key=None):
-    """Tear down the candidate's range (frees VMs/cost). Returns (ok, detail).
-    A 404 (already gone) is idempotent success."""
+def destroy_range(candidate, user_key=None, *, confirm=True):
+    """Tear down the candidate's range (frees VMs/cost). Returns (confirmed, detail, outcome).
+
+    §2: a DELETE being accepted does NOT mean the range is gone. A range must not be marked destroyed
+    (nor its slot/evidence considered reclaimed) until ABSENCE is independently confirmed. When
+    `confirm`, poll the range detail until it reports the range absent; a 404 on the DELETE itself, or
+    a confirmed-absent poll, is CONFIRMED; still-present is PENDING; a probe failure is UNKNOWN. The
+    destructive DELETE is never auto-resent on PENDING/UNKNOWN - the caller retries on a later pass."""
     if not is_live():
-        return (True, "mock: range destroyed")
+        return (True, "mock: range destroyed", OP_CONFIRMED)
     try:
         _req("DELETE", "/range", {"userID": candidate.ludus_user_id},
              key=user_key or _admin_key())
-        return (True, "range teardown accepted")
     except LudusNotFound:
-        return (True, "range already absent")
+        return (True, "range already absent (confirmed)", OP_CONFIRMED)
     except LudusError as e:
-        return (False, f"destroy error: {e}")
+        return (False, f"destroy request failed: {e}", OP_FAILED)
+    if not confirm:
+        return (False, "destroy accepted (range not yet confirmed absent)", OP_ACCEPTED)
+
+    def _absent():
+        try:
+            range_detail(candidate, user_key=user_key)
+        except LudusNotFound:
+            return True
+        return False
+    ok, outcome = _confirm(_absent, want=True)
+    msg = {OP_CONFIRMED: "range destruction confirmed (range absent)",
+           OP_PENDING: "destroy accepted but range not yet confirmed absent",
+           OP_UNKNOWN: "destroy accepted but remote state could not be confirmed"}[outcome]
+    return (ok, msg, outcome)
 
 
 # --- backwards-compat --------------------------------------------------------

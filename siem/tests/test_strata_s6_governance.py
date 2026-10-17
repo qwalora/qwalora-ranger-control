@@ -38,7 +38,7 @@ def _app():
     from models import db, AdminUser, Cohort
     application = appmod.create_app()
     ctx = application.app_context(); ctx.push()
-    db.create_all()
+    db.drop_all(); db.create_all()  # per-test schema reset: StaticPool shares one in-memory DB in a process
     for nm in ("2026-A", "2026-B"):
         if not Cohort.query.filter_by(name=nm).first():
             db.session.add(Cohort(name=nm, pathway="strata", status="active"))

@@ -25,6 +25,8 @@ os.environ.setdefault("ADMIN_TOKEN", "s6-clo-admin")
 
 import pytest  # noqa: E402
 
+from _s6util import expiring_client  # noqa: E402
+
 import scenarios as sc  # noqa: E402
 import broker  # noqa: E402
 import strata_assignment as asn  # noqa: E402
@@ -34,7 +36,7 @@ from siem import board_variants as bv  # noqa: E402
 @pytest.fixture(autouse=True)
 def _env_guard():
     keys = ("RANGER_STRATA_PORTFOLIOS", "RANGER_ENV", "RANGER_S6_ATTEST_TEST",
-            "LUDUS_API_URL", "LUDUS_ADAPTER_VERIFIED", "CI_TOKEN")
+            "LUDUS_API_URL", "LUDUS_ADAPTER_VERIFIED", "CI_TOKEN", "ADMIN_TOKEN")
     saved = {k: os.environ.get(k) for k in keys}
     try:
         yield
@@ -46,9 +48,12 @@ def _env_guard():
 def _app():
     import app as appmod
     from models import db, Cohort, AdminUser
+    # Explicit per-app admin token (not setdefault): immune to cross-suite import order so the admin
+    # Bearer header matches the app's configured token instead of 401-ing.
+    os.environ["ADMIN_TOKEN"] = "s6-clo-admin"
     application = appmod.create_app()
     ctx = application.app_context(); ctx.push()
-    db.create_all()
+    db.drop_all(); db.create_all()  # per-test schema reset: StaticPool shares one in-memory DB in a process
     for nm in ("2026-A", "2026-B"):
         if not Cohort.query.filter_by(name=nm).first():
             db.session.add(Cohort(name=nm, pathway="strata", status="active"))
@@ -135,7 +140,7 @@ def test_1_NEG_governed_deploy_without_binding_fails_closed():
         from models import RangeRequest
         _portfolio(db, application, "2026-A", 5, n=2)
         c = _cand(db, "clo1b", 5)
-        client = application.test_client()
+        client = expiring_client(application, db)
         hdr = {"X-Candidate-Token": c.token}
         # start the lab WITHOUT opening the dataset first -> no ScenarioBinding exists
         r = client.post("/labs/start", json={"handle": c.handle}, headers=hdr)
@@ -172,7 +177,7 @@ def test_2_NEG_mode_real_noncreditable_until_full_probe(monkeypatch):
 # ============================================================ §3 + §4: destructive paths ===========
 def _start_governed(appmod, application, db, c, board=5):
     _portfolio(db, application, "2026-A", board, n=2)
-    client = application.test_client()
+    client = expiring_client(application, db)
     hdr = {"X-Candidate-Token": c.token}
     assert client.post("/labs/dataset", json={"handle": c.handle}, headers=hdr).status_code == 200
     r = client.post("/labs/start", json={"handle": c.handle}, headers=hdr)
@@ -222,13 +227,15 @@ def test_4_NEG_failed_broker_teardown_does_not_change_state_or_free_slot(monkeyp
         client, hdr = _start_governed(appmod, application, db, c)
         rr = RangeRequest.query.filter_by(candidate_id=c.id, board=5).first()
         assert rr.status == "deployed"
-        # fault-inject: the broker destroy does not confirm
-        monkeypatch.setattr(broker, "destroy_range", lambda *a, **k: (False, "network interrupted"))
+        # fault-inject: the broker destroy is accepted but remote absence is NOT confirmed (§2/§4)
+        monkeypatch.setattr(broker, "destroy_range",
+                            lambda *a, **k: (False, "destroy accepted but not confirmed absent",
+                                             broker.OP_PENDING))
         admin = {"Authorization": "Bearer s6-clo-admin", "Accept": "application/json"}
         client.post(f"/admin/ranges/{c.id}", data={"action": "force_destroy"}, headers=admin)
         rr = RangeRequest.query.filter_by(candidate_id=c.id, board=5).first()
         assert rr.status == "deployed", "an unconfirmed teardown must not mark the range destroyed"
-        assert "not confirmed" in (rr.detail or "")
+        assert "pending" in (rr.detail or "") or "not confirmed" in (rr.detail or "")
     finally:
         ctx.pop()
 

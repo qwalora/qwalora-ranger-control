@@ -26,6 +26,8 @@ os.environ.pop("LUDUS_API_URL", None)
 
 import pytest  # noqa: E402
 
+from _s6util import expiring_client  # noqa: E402
+
 import scenarios as sc  # noqa: E402
 import broker  # noqa: E402
 import range_lifecycle as L  # noqa: E402
@@ -49,7 +51,7 @@ def _app():
     from models import db, Cohort, AdminUser
     application = appmod.create_app()
     ctx = application.app_context(); ctx.push()
-    db.create_all()
+    db.drop_all(); db.create_all()  # per-test schema reset: StaticPool shares one in-memory DB in a process
     if not Cohort.query.filter_by(name="2026-A").first():
         db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
     if not Cohort.query.filter_by(name="2026-B").first():
@@ -117,7 +119,7 @@ def test_NEG_mock_range_earns_no_isolated_credit_and_no_promotion():
     appmod, application, db, ctx = _app()
     try:
         from models import BoardResult, Candidate
-        client = application.test_client()
+        client = expiring_client(application, db)
         c = _cand(db, "accN1", 5)
         hdr = {"X-Candidate-Token": c.token}
         g = client.post("/grade/submit", json={"handle": c.handle,
@@ -135,7 +137,7 @@ def test_NEG_ci_callback_refuses_isolated_boards():
     os.environ["CI_TOKEN"] = "acc-ci-tok"
     appmod, application, db, ctx = _app()
     try:
-        client = application.test_client()
+        client = expiring_client(application, db)
         hdr = {"X-CI-Token": "acc-ci-tok"}  # authenticate past the token gate to reach the refusal
         for board in (5, 6):
             c = _cand(db, f"accN2b{board}", board)
@@ -240,7 +242,7 @@ def test_POS_attested_real_range_awards_and_promotes_once():
     appmod, application, db, ctx = _app()
     try:
         from models import BoardResult, Candidate
-        client = application.test_client()
+        client = expiring_client(application, db)
         c = _cand(db, "accP1", 5)
         hdr = {"X-Candidate-Token": c.token}
         sub = _correct_flags_legacy(c, client, 5)
