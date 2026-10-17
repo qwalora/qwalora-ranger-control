@@ -165,3 +165,25 @@ code changed in S5.1. This work is kept separate from PARALLAX F4; F1-F3 are unt
 
 Status: LIVE VALIDATION REMAINS BLOCKED pending a disposable 2.17.1 node. Preflight and plan are
 complete; execution stops here per the authorized scope.
+
+---
+
+## 8. CI automation and its current outcome
+
+`.github/workflows/strata-s5-real-opensearch.yml` provisions a disposable real OpenSearch 2.17.1
+node on a GitHub-hosted Ubuntu runner (open egress, so it can pull the image this sandbox cannot),
+runs the full real-OS suite against `siem.live.LiveCluster`, and fails the job via
+`siem/tests/ci_check_junit.py` on any skipped/failed/errored/zero/partial result. Evidence is
+uploaded even on failure; the disposable node is always torn down. A separate `fast-regression` job
+runs the offline S5 + F5 suites and cannot substitute for the real-OS job.
+
+Current CI outcome: **BLOCKED (account billing lock), not GREEN.** The workflow registers, parses,
+and triggers correctly, but GitHub will not start the hosted runners. Both jobs ended in ~2-3s with
+the annotation: "The job was not started because your account is locked due to a billing issue." No
+test executed, so no real-OpenSearch assertion is validated.
+
+To unblock (founder action, outside this scope): resolve the GitHub Actions billing/spending-limit
+lock on the `qwalora` org (GitHub -> Settings -> Billing; clear any failed payment or raise the
+Actions spending limit), then re-run via `workflow_dispatch` or any code push to the branch. The
+workflow needs no production secrets and uses only a GitHub-hosted runner. This billing lock was not
+worked around; no self-hosted runner or Railway substitution was used.

@@ -10,6 +10,9 @@ on:
   push:
     branches:
       - feature/strata-s5-real-opensearch-validation
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
     paths:
       - 'siem/**'
