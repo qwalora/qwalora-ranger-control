@@ -463,15 +463,21 @@ def get(board, version=None):
 
 
 def for_binding(binding, *, broker_mod=None):
-    """A scenario-AWARE mission package for a candidate's actual assignment. Overlays the approved,
-    candidate-safe variant context (cohort identity, pinned scenario version, variant title and
-    business context) onto the board mission, WITHOUT revealing the hidden incident family, truth,
-    ground-truth ids, attack sequence or intended detection gaps. Returns None when the board has no
+    """A scenario-BOUND mission package for a candidate's actual assignment.
+
+    This is a CANDIDATE-FACING projection. It overlays only the cohort identity, the pinned scenario
+    version and an OPAQUE, keyed scenario reference onto the generic, S2-approved board mission. It
+    deliberately does NOT surface the variant id, the variant spec id, or the variant's own title and
+    business_context, because the public variant library (siem/board_variants.py) authors those per
+    incident type: the Board 2 variant titles and contexts name the incident-family composition
+    (privileged-identity takeover, service-account exfiltration, stealth lateral movement) and, for
+    the insider-exfil variant, the hidden detection gap ("whether current detections covered it").
+    Disclosing them to the assigned candidate would reveal which scenario they were given before they
+    investigate. The generic board mission already states the legitimate scope, role, deliverables and
+    authorized investigation activities, so the brief stays professional and useful without that leak.
+    The hidden incident family, truth, ground-truth ids, attack sequence and intended detection gaps
+    are never stored on the binding and never surfaced here. Returns None when the board has no
     mission package. `binding` is a models.ScenarioBinding."""
-    try:
-        from siem import board_variants as bv
-    except Exception:  # noqa: BLE001
-        bv = None
     board = int(binding.board)
     pkg = get(board)
     if not pkg:
@@ -479,17 +485,13 @@ def for_binding(binding, *, broker_mod=None):
     out = dict(pkg)
     out["cohort"] = binding.cohort
     out["scenario_version"] = binding.spec_version
-    out["scenario_ref"] = binding.spec_id
-    out["variant_id"] = binding.variant_id
-    # candidate-safe variant framing (never the family/truth): the variant's own business_context is
-    # authored to describe the mission, not solve it.
-    if bv is not None:
-        vtitle = bv.title(board, binding.variant_id)
-        vctx = bv.business_context(board, binding.variant_id)
-        if vtitle:
-            out["title"] = vtitle
-        if vctx:
-            out["business_context"] = vctx
+    # Opaque, keyed, non-invertible reference only. NEVER binding.spec_id / variant_id (which map to
+    # the publicly readable incident-family composition), and NEVER the variant title/business_context.
+    try:
+        from siem import schema as _schema
+        out["scenario_ref"] = _schema.case_ref(binding.github_id, board, binding.seed)
+    except Exception:  # noqa: BLE001 - reference is best-effort display metadata
+        out["scenario_ref"] = None
     out["scenario_bound"] = True
     return out
 

@@ -1149,5 +1149,170 @@ def test_concurrent_authorized_decision_is_idempotent_postgres():
         assert br is not None and br.objective_passed, "exactly one award recorded"
 
 
+# =============================================================================================
+# Cross-module compatibility (S5 final): candidate-safe scenario disclosure + case-ref separation.
+# =============================================================================================
+def _b2_prohibited_tokens():
+    """Every candidate-PROHIBITED scenario descriptor derivable from the PUBLIC variant library:
+    variant ids, their authored titles and business_context, and every incident-family name. These
+    are publicly readable, so a candidate-facing projection must expose none of them (knowing any one
+    identifies the assigned Board 2 scenario and its hidden detection-gap composition)."""
+    from siem import board_variants as bv
+    toks = set()
+    for vid in bv.variants_for(2):
+        toks.add(vid)
+        v = bv.get(2, vid) or {}
+        for s in (v.get("title"), v.get("business_context")):
+            if s:
+                toks.add(s)
+        for key in (v.get("gen_params", {}), v.get("diversity", {})):
+            for fam in key.get("families", []) or []:
+                toks.add(fam)
+    # the explicit hidden-detection-gap phrasing authored in the insider-exfil variant
+    toks.add("whether current detections covered it")
+    return {t for t in toks if t}
+
+
+def test_xmod1_candidate_mission_projection_discloses_no_variant_or_family():
+    """strata_missions.for_binding() is a candidate-facing projection and must disclose NO variant id,
+    variant title, variant business_context, or incident-family name from the public library. It must
+    still carry the generic, approved board mission (legitimate scope/role/deliverables) plus an
+    OPAQUE scenario reference (never the spec_id/variant_id)."""
+    application, db, ctx, admin = _app()
+    try:
+        prohibited = _b2_prohibited_tokens()
+        # cover BOTH cohorts' approved variants so the assertion is not specific to one assignment
+        for handle, cohort in (("mp_a", "2026-A"), ("mp_b", "2026-B")):
+            c = _cand(db, handle, cohort)
+            a = b2.resolve_assignment(db, c)
+            from models import ScenarioBinding
+            binding = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=2)
+                       .order_by(ScenarioBinding.attempt.desc()).first())
+            assert binding is not None
+            import strata_missions as sm
+            pkg = sm.for_binding(binding)
+            assert pkg is not None
+            blob = _json.dumps(pkg).lower()
+            hits = sorted(t for t in prohibited if t.lower() in blob)
+            assert not hits, f"candidate mission projection leaked: {hits}"
+            # no variant-identifying keys at all
+            assert "variant_id" not in pkg, "variant_id must not be in the candidate projection"
+            # scenario_ref is the OPAQUE keyed ref, never the variant spec id
+            assert pkg.get("scenario_ref") and pkg["scenario_ref"] != binding.spec_id
+            assert pkg["scenario_ref"] != binding.variant_id
+            # the professional brief is still useful: generic board mission is present
+            assert pkg.get("title") == "Enterprise SOC investigation"
+            assert pkg.get("business_context")
+            assert pkg.get("scenario_bound") is True
+    finally:
+        ctx.pop()
+
+
+def test_xmod1b_me_mission_http_renders_no_prohibited_scenario_info():
+    """The candidate HTTP surface GET /me/mission (portfolios ON, bound attempt) renders the mission
+    brief WITHOUT any prohibited variant/family/detection-gap disclosure, while remaining a useful
+    professional brief."""
+    application, db, ctx, admin = _app()
+    saved = os.environ.get("RANGER_STRATA_PORTFOLIOS")
+    os.environ["RANGER_STRATA_PORTFOLIOS"] = "1"   # read at request time by _strata_portfolios_on()
+    try:
+        prohibited = _b2_prohibited_tokens()
+        c = _cand(db, "http_mp", "2026-A")
+        b2.resolve_assignment(db, c)   # creates the authoritative ScenarioBinding for board 2
+        client = application.test_client()
+        with client.session_transaction() as s:
+            s["cand"] = c.id
+        r = client.get("/me/mission")
+        assert r.status_code == 200, r.data
+        html = r.get_data(as_text=True)
+        low = html.lower()
+        hits = sorted(t for t in prohibited if t.lower() in low)
+        assert not hits, f"/me/mission rendered prohibited scenario info: {hits}"
+        # the brief is still present and professional (generic board mission copy is shown)
+        assert "Enterprise SOC investigation" in html
+    finally:
+        if saved is None:
+            os.environ.pop("RANGER_STRATA_PORTFOLIOS", None)
+        else:
+            os.environ["RANGER_STRATA_PORTFOLIOS"] = saved
+        ctx.pop()
+
+
+def test_xmod2_case_ref_separated_from_f5_scenario_ref():
+    """Driving the REAL case_routes._ensure_case (via HTTP GET /case, S5 binding flag ON): the opaque
+    case correlation is written to Case.case_ref, while Case.scenario_ref keeps its F5
+    approved-scenario-metadata meaning (left None for an S5 cohort case, so F5 reports instructions via
+    the mission rather than resolving the opaque value as a bogus catalog lookup). A genuine F5
+    workbench case is unaffected, and the STRATA signed-evidence reference remains the opaque value and
+    still verifies."""
+    import workbench_scenarios as wsc
+    import workbench_core as wc
+    import case_routes as _cr  # noqa: F401 - register() is reached through create_app()
+    flags = {"RANGER_CASE_UI": "1", "RANGER_B2_BINDING": "1"}
+    saved = {k: os.environ.get(k) for k in flags}
+    os.environ.update(flags)
+    import app as appmod
+    from models import db, Candidate, Case, AdminUser, Cohort
+    application = appmod.create_app()
+    ctx = application.app_context(); ctx.push()
+    try:
+        db.create_all()
+        if not Cohort.query.filter_by(name="2026-A").first():
+            db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
+        ad = AdminUser(github_id="gid-admin", login="alice", role="reviewer")
+        db.session.add(ad); db.session.commit()
+        for e in cat.register_all(db, boards=(2,)):
+            cat.approve(db, e, ad)
+        db.session.commit()
+        asn.set_cohort_portfolio(db, "2026-A", 2, COHORTS["2026-A"], admin=ad)
+        cand = Candidate(handle="cref", name="cref", email="cref@e", cohort="2026-A",
+                         github_id="g-cref", status="active", current_board=2, token="tok-cref")
+        db.session.add(cand); db.session.commit()
+        a = b2.resolve_assignment(db, Candidate.query.get(cand.id))
+        expected_opaque = b2.schema.case_ref(a.slug, 2, a.seed)
+
+        client = application.test_client()
+        with client.session_transaction() as s:
+            s["cand"] = cand.id
+        # the REAL _ensure_case runs here (S5 binding path)
+        r = client.get("/case")
+        assert r.status_code == 200, r.data
+        case = Case.query.filter_by(candidate_id=cand.id, board=2, plane="qualification").first()
+        assert case is not None
+        # (1) the opaque correlation is in case_ref, NOT scenario_ref
+        assert case.case_ref == expected_opaque
+        assert case.scenario_ref is None, "S5 must not store the opaque ref in the F5 scenario_ref"
+        # (2) the opaque value is NOT an F5 workbench scenario key (never resolves as metadata)
+        assert wsc.get(case.case_ref, case.scenario_version) is None
+        # (3) F5 reads scenario_ref (None here) and reports an accurate 'not available' state rather
+        #     than resolving the opaque correlation as if it were approved scenario metadata
+        assert wc.case_meta(case) is None
+        el = (wc.scenario_eligibility(case, None) if hasattr(wc, "scenario_eligibility")
+              else wsc.eligibility(case.scenario_ref, case.scenario_version))
+        assert el["ok"] is False and el["status"] == "no_scenario"
+        # (4) a genuine F5 workbench case (real approved scenario_ref) is unaffected by the change
+        ref0 = "strata-soc-triage" if wsc.get("strata-soc-triage", 1) else None
+        if ref0:
+            fcase = Case(candidate_id=cand.id, board=1, cohort="2026-A", plane="assessment",
+                         workflow="assigned", index_name="idx-f5", seed="s", scenario_version=1,
+                         rubric_version=1, attempt=1, status="assigned", scenario_ref=ref0)
+            db.session.add(fcase); db.session.commit()
+            assert wc.case_meta(fcase) is not None, "F5 approved-scenario resolution must still work"
+            assert fcase.case_ref is None
+        # (5) the signed-evidence reference is still the opaque value and verifies end-to-end
+        cluster = FakeCluster(); b2.provision(cluster, a)
+        payload = _correct_submission(a, cluster)
+        _case2, sub = _submit_signed(db, Candidate.query.get(cand.id), a, cluster, payload)
+        rec = _json.loads(sub.evidence_record)
+        assert rec["scenario_ref"] == expected_opaque
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        ctx.pop()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

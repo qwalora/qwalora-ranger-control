@@ -2958,9 +2958,11 @@ def create_app():
         if not c.is_active:
             abort(403)
         n = c.current_board
-        # scenario-aware mission: when portfolios are enabled and this attempt is bound to an
-        # approved variant, overlay the variant's candidate-safe context (cohort, scenario version,
-        # business context) without revealing the hidden family or truth.
+        # scenario-bound mission: when portfolios are enabled and this attempt is bound to an
+        # approved variant, project the generic board mission with cohort identity, pinned scenario
+        # version and an opaque scenario reference only. The variant id/spec id/title/business_context
+        # are deliberately NOT surfaced (see strata_missions.for_binding) because they would reveal
+        # the assigned incident family and detection gaps before the candidate investigates.
         pkg = None
         if _strata_portfolios_on():
             from models import ScenarioBinding

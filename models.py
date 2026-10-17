@@ -86,6 +86,9 @@ def ensure_schema(db):
             ("binding_id", "INTEGER"),
             ("content_hash", "VARCHAR(64)"),
             ("variant_id", "VARCHAR(60)"),
+            # S5 cross-module fix: opaque, keyed case-correlation reference kept DISTINCT from the
+            # F5 scenario_ref. S5 cohort cases carry this (not an F5 scenario-metadata identifier).
+            ("case_ref", "VARCHAR(80)"),
         ],
         "cohort_scenario_plans": [
             # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
@@ -999,8 +1002,16 @@ class Case(db.Model):
     scenario_version = db.Column(db.Integer, nullable=False, default=1)
     # F5.1: reference to APPROVED, candidate-safe scenario metadata (scope/objectives/requirements).
     # Resolves, with scenario_version, to a versioned entry in workbench_scenarios; NEVER holds truth.
-    # When unset/unknown, the candidate sees an accurate "instructions not available" state.
+    # When unset/unknown, the candidate sees an accurate "instructions not available" state. S5 cohort
+    # Board 2 cases leave this None: their instructions come from the approved mission brief, not the
+    # F5 workbench catalog, so there is no F5 scenario-metadata entry to point at.
     scenario_ref = db.Column(db.String(60), nullable=True)
+    # S5 cross-module fix: an OPAQUE, keyed, non-invertible case-correlation reference, kept strictly
+    # distinct from scenario_ref. It correlates a case/record without being an F5 scenario-metadata
+    # identifier and without revealing the seed or hidden truth. It is NOT a workbench_scenarios key,
+    # so it is never resolved as scenario metadata. The signed-evidence record computes the same
+    # opaque value independently from (slug, board, seed); this column is the persisted correlation.
+    case_ref = db.Column(db.String(80), nullable=True)
     # S5: definitive association to the S3/S4 authoritative ScenarioBinding, so /soc, /case and
     # grading all share one pinned scenario identity. Nullable for legacy/non-cohort cases.
     binding_id = db.Column(db.Integer, nullable=True, index=True)

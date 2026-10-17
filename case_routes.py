@@ -157,7 +157,9 @@ def register(app, candidate_model, db, helpers):
                     case.binding_id = a.binding_id
                     case.content_hash = a.content_hash
                     case.variant_id = a.variant_id
-                    case.scenario_ref = b2.schema.case_ref(a.slug, CASE_BOARD, a.seed)
+                    # Opaque case correlation only. scenario_ref is left untouched (F5
+                    # approved-scenario-metadata meaning); the opaque ref lives in case_ref.
+                    case.case_ref = b2.schema.case_ref(a.slug, CASE_BOARD, a.seed)
                     db.session.commit()
                 return case
             case = Case(candidate_id=c.id, board=CASE_BOARD, cohort=a.cohort,
@@ -167,7 +169,9 @@ def register(app, candidate_model, db, helpers):
                         attempt=a.attempt, status="assigned",
                         binding_id=a.binding_id, content_hash=a.content_hash,
                         variant_id=a.variant_id,
-                        scenario_ref=b2.schema.case_ref(a.slug, CASE_BOARD, a.seed))
+                        # opaque case correlation (NOT an F5 scenario-metadata ref); scenario_ref
+                        # stays None for S5 cohort cases so F5 reports instructions via the mission.
+                        case_ref=b2.schema.case_ref(a.slug, CASE_BOARD, a.seed))
             db.session.add(case)
             db.session.commit()
             return case
