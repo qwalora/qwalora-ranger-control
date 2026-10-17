@@ -163,9 +163,25 @@ delegates to `score_capstone`; covered by `test_strata_s6_capstone.py` (versioni
 full-pass, the crown gate, each mandatory individually required, brief exposure without flag leak,
 reproducibility).
 
+## §19 - Board 5/6 mission briefs + status surfaces (implemented)
+
+Both isolated boards carry an approved, versioned, candidate-safe ten-section mission brief
+(`strata_missions.py`, boards 5 and 6) with genuinely distinct content (Raider single-domain red-team
+vs Vanguard multi-forest capstone). Updated for consistency with the rest of S6:
+- Board 6's submission/evaluation now disclose the §18 capstone rubric truthfully - the mandatory
+  end-to-end milestones and the critical-failure gate that caps a high-point-but-incomplete attempt -
+  without leaking any solution, command, or attack path.
+- Both briefs now state the §9/§13 reality: objective credit is awarded only against a real, validated
+  isolated range (a simulated/unvalidated environment records no credit), and clearance also requires
+  report approval.
+- Both briefs explain the §16 lifecycle to the candidate: a range suspended to free capacity preserves
+  its disks and progress and resumes from the board workspace.
+- The candidate/admin range-status surface renders the new `suspended` state (`_RANGE_UI`), alongside
+  the existing deployed/deploying/queued/configured/failed/destroyed.
+
 ## Deferred to later phases
 
-Still outstanding: distinct Board 5/6 ten-section mission briefs + candidate/admin status surfaces (§19);
+Still outstanding:
 the operational cost/capacity model (§20); and the comprehensive acceptance suite + handoff (§21).
 Categories D (actual Ludus/Proxmox provisioning + REST-path confirmation) and E (candidate acceptance)
 remain UNVERIFIED without a live host and must not be claimed as done. No merge, deploy, live Ludus

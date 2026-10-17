@@ -339,12 +339,17 @@ MISSIONS = {
             "The Ranger backend re-derives the expected flags for your assignment and scores your "
             "captures, points-weighted. The STRATA objective standard is 95 percent. Because each "
             "flag is a cryptographic proof of a specific action on your own range, the score reflects "
-            "the objectives you genuinely completed; guessing cannot reach the bar.",
+            "the objectives you genuinely completed; guessing cannot reach the bar. Objective credit "
+            "is awarded only against a real, validated isolated range: a simulated or unvalidated "
+            "environment records no credit, regardless of score, and board clearance also requires "
+            "report approval.",
         "support":
             "Range provisioning, WireGuard connectivity, and flag retrieval faults are "
             "technical-support matters: check your tunnel and range status in your board workspace "
-            "and retry. How to complete an objective is the assessment itself and is not supported, "
-            "and no hints, commands, or attack paths are provided.",
+            "and retry. If your range is suspended to free capacity while you are away, your disks "
+            "and progress are preserved; resume it from your board workspace to continue. How to "
+            "complete an objective is the assessment itself and is not supported, and no hints, "
+            "commands, or attack paths are provided.",
         "references": _COMMON_REFS + [
             _ref("Game of Active Directory (GOAD)", "Orange Cyberdefense",
                  "The open AD lab project this range is built on. Reference for the environment's "
@@ -393,16 +398,26 @@ MISSIONS = {
             "to the capstone.",
         "submission":
             "Submit captured flags through your board workspace, mapped to their objective ids. "
-            "Scoring is points-weighted by capstone objective. Guessed or fabricated flags do not "
-            "score.",
+            "Unlike Board 5's flat points sum, the capstone is graded by a versioned capstone rubric: "
+            "a set of MANDATORY end-to-end milestones (child-domain compromise, cross-domain trust "
+            "abuse, forest-root takeover, forest persistence, cross-forest pivot, and crown-jewel "
+            "capture) must ALL be demonstrated. Missing any mandatory milestone is a critical failure "
+            "that caps your score below the pass bar regardless of points earned on other objectives. "
+            "Guessed or fabricated flags do not score.",
         "evaluation":
-            "The Ranger backend re-derives the capstone's expected flags and scores your captures, "
-            "points-weighted. The STRATA objective standard is 95 percent. The capstone's distinct "
-            "derivation ensures it measures capstone competency specifically, separate from Board 5.",
+            "The Ranger backend re-derives the capstone's expected flags and scores your captures "
+            "under the versioned capstone rubric (points-weighted, with the mandatory-milestone "
+            "critical-failure gate above). The STRATA objective standard is 95 percent. The capstone's "
+            "distinct derivation and rubric ensure it measures capstone competency specifically, "
+            "separate from Board 5. Objective credit is awarded only against a real, validated isolated "
+            "range: a simulated or unvalidated environment records no credit, and clearance also "
+            "requires report approval.",
         "support":
             "Range, tunnel, and flag faults are technical-support matters: check range status in your "
-            "board workspace and retry. How to complete a capstone objective is the assessment itself "
-            "and is not supported; no hints, commands, or attack paths are provided.",
+            "board workspace and retry. If your range is suspended to free capacity while you are "
+            "away, your disks and progress are preserved; resume it from your board workspace. How to "
+            "complete a capstone objective is the assessment itself and is not supported; no hints, "
+            "commands, or attack paths are provided.",
         "references": _COMMON_REFS + [
             _ref("Game of Active Directory (GOAD)", "Orange Cyberdefense",
                  "The multi-forest lab project this capstone range extends. Reference only."),

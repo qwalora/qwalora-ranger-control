@@ -1877,6 +1877,7 @@ def create_app():
         "deploying": ("Deploying", "pill-amber", "dot-amber"),
         "queued_slot": ("Queued for a slot", "pill-amber", "dot-amber"),
         "configured": ("Configured", "pill-violet", "dot-violet"),
+        "suspended": ("Suspended (resume to continue)", "pill-violet", "dot-violet"),
         "failed": ("Failed", "pill-amber", "dot-amber"),
         "destroyed": ("Destroyed", "pill", "dot"),
         "queued": ("Configured", "pill-violet", "dot-violet"),  # legacy
