@@ -1505,6 +1505,68 @@ def create_app():
                        current_board=c.current_board, status=c.status,
                        note="Report approval is also required to clear the board."), 200
 
+    def _b2_qual_ui_on():
+        """S5: the authorized Board 2 qualification route (default off -> 404). Even when on, a
+        decision is only 'authorized' (awards objective) with a valid signed activation; otherwise it
+        is 'proposed' (computed + signed, never awards)."""
+        return os.environ.get("RANGER_B2_QUAL_UI", "").strip().lower() in ("1", "true", "yes", "on")
+
+    @app.post("/admin/cases/submission/<int:sid>/qualify")
+    def admin_case_qualify(sid):
+        """Reviewer-triggered Board 2 qualification decision (S5). Gated:
+          * route 404 unless RANGER_B2_QUAL_UI is on;
+          * reviewer session required (authenticated authorized principal);
+          * 'authorized' mode (which may award objective) requires a valid SIGNED activation
+            authorization loaded from the environment AND the activation's own gate; without it the
+            decision is 'proposed' and awards nothing.
+        Promotion still also requires the separate human report-approval gate (via _evaluate_gate)."""
+        if not _b2_qual_ui_on():
+            abort(404)
+        if not session.get("admin"):
+            abort(403)
+        import json as _json
+        import strata_qualification as sq
+        import strata_board2 as b2
+        import case_routes as _cr
+        from models import Case, CaseSubmission
+        sub = CaseSubmission.query.get(sid)
+        if not sub:
+            abort(404)
+        case = Case.query.get(sub.case_id)
+        if not case or int(case.board) != 2:
+            abort(404)
+        cand = Candidate.query.get(case.candidate_id)
+        if not cand:
+            abort(404)
+        try:
+            assignment = b2.resolve_assignment(db, cand, attempt=case.attempt)
+        except b2.Board2AssignmentError as e:
+            return jsonify(ok=False, error="no authoritative assignment", detail=str(e)), 409
+        # the case must be the one pinned to this assignment (no silent scenario swap)
+        if case.binding_id and case.binding_id != assignment.binding_id:
+            return jsonify(ok=False, error="case is not pinned to the resolved binding"), 409
+        reader = _cr._reader_factory(case)
+        activation = sq.load_activation()
+        mode = "authorized" if activation is not None else "proposed"
+        try:
+            decision = sq.decide(db, case, sub, assignment, reader,
+                                 principal={"github_id": session.get("admin_gid"), "role": "reviewer"},
+                                 rubric_version=case.rubric_version, activation=activation, mode=mode)
+        except sq.QualificationNotActivated as e:
+            return jsonify(ok=False, error="qualification gate closed", detail=str(e)), 409
+        except (sq.QualificationAuthError, sq.QualificationEvidenceError) as e:
+            return jsonify(ok=False, error="qualification refused", detail=str(e)), 422
+        promoted = False
+        if decision.awarded_objective:
+            promoted = _evaluate_gate(cand)   # still needs report approval to actually clear
+            db.session.commit()
+        return jsonify(ok=True, mode=decision.mode, score=decision.score, passed=decision.passed,
+                       awarded_objective=decision.awarded_objective,
+                       critical_failures=(_json.loads(decision.critical_failures)
+                                          if decision.critical_failures else []),
+                       promoted=promoted, current_board=cand.current_board,
+                       decision_id=decision.id), 200
+
     # --- admin ---------------------------------------------------------------
     @app.get("/admin/login")
     def admin_login():

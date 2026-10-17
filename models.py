@@ -82,6 +82,10 @@ def ensure_schema(db):
         ],
         "cases": [
             ("scenario_ref", "VARCHAR(60)"),   # F5.1: approved candidate-safe scenario metadata ref
+            # S5: definitive binding association (additive; release-gated migration in docs/).
+            ("binding_id", "INTEGER"),
+            ("content_hash", "VARCHAR(64)"),
+            ("variant_id", "VARCHAR(60)"),
         ],
         "cohort_scenario_plans": [
             # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
@@ -485,6 +489,46 @@ class ScenarioBinding(db.Model):
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "board", "attempt",
                                           name="uq_binding_per_attempt"),)
+
+
+class QualificationDecision(db.Model):
+    """S5 - a governed, signed Board 2 qualification decision. SEPARATE from the shadow score
+    (CaseSubmission.shadow_*): a shadow score is advisory and never awards credit, whereas a
+    QualificationDecision in mode 'authorized' is the ONLY record that may drive Board 2 objective
+    credit, and only when the activation gate is open. It pins the exact scenario identity it was
+    computed against and carries an Ed25519 signature over its own content, so the award is auditable
+    and idempotent.
+
+    Additive table: created by create_all offline; a production deployment needs the one-off
+    migration in docs/ (release gate), not applied here."""
+    __tablename__ = "qualification_decisions"
+    id = db.Column(db.Integer, primary_key=True)
+    case_id = db.Column(db.Integer, db.ForeignKey("cases.id"), nullable=False, index=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    submission_id = db.Column(db.Integer, nullable=False)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    board = db.Column(db.Integer, nullable=False, default=2)
+    rubric_version = db.Column(db.Integer, nullable=False)
+    mode = db.Column(db.String(20), nullable=False)          # proposed | authorized
+    score = db.Column(db.Float, nullable=False)
+    normalized = db.Column(db.Float, nullable=True)
+    passed = db.Column(db.Boolean, nullable=False, default=False)
+    critical_failures = db.Column(db.Text, nullable=True)    # JSON list
+    scenario_fingerprint = db.Column(db.String(64), nullable=False)
+    spec_id = db.Column(db.String(80), nullable=True)
+    spec_version = db.Column(db.Integer, nullable=True)
+    content_hash = db.Column(db.String(64), nullable=True)
+    variant_id = db.Column(db.String(60), nullable=True)
+    principal = db.Column(db.String(120), nullable=True)
+    decision_record = db.Column(db.Text, nullable=False)     # canonical JSON that was signed
+    decision_sig = db.Column(db.Text, nullable=False)        # Ed25519 signature over the record
+    awarded_objective = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    # One decision per (case, attempt, submission, rubric, mode) makes the award idempotent.
+    __table_args__ = (db.UniqueConstraint("case_id", "attempt", "submission_id",
+                                          "rubric_version", "mode",
+                                          name="uq_qual_decision"),)
 
 
 class Notification(db.Model):
@@ -957,6 +1001,11 @@ class Case(db.Model):
     # Resolves, with scenario_version, to a versioned entry in workbench_scenarios; NEVER holds truth.
     # When unset/unknown, the candidate sees an accurate "instructions not available" state.
     scenario_ref = db.Column(db.String(60), nullable=True)
+    # S5: definitive association to the S3/S4 authoritative ScenarioBinding, so /soc, /case and
+    # grading all share one pinned scenario identity. Nullable for legacy/non-cohort cases.
+    binding_id = db.Column(db.Integer, nullable=True, index=True)
+    content_hash = db.Column(db.String(64), nullable=True)   # pinned spec content hash
+    variant_id = db.Column(db.String(60), nullable=True)     # pinned approved variant
     rubric_version = db.Column(db.Integer, nullable=False, default=2)
     attempt = db.Column(db.Integer, nullable=False, default=1)
     # Lifecycle state (see case_contract.CASE_STATES / CASE_TRANSITIONS).

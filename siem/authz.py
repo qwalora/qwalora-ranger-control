@@ -25,6 +25,16 @@ def candidate_index_pattern(cohort: str, candidate_id: str) -> str:
     return f"{INDEX_PREFIX}-{_slug(cohort)}-{_slug(candidate_id)}-b*".lower()
 
 
+def qualification_index_name(cohort: str, candidate_id: str, board: int, attempt: int) -> str:
+    """S5: the GRADED qualification index for one candidate-board-attempt, kept distinct from the
+    operational SOC index (…-b{board}) so qualification assessment data and operational SOC
+    collaboration never share an index. Still inside the candidate's own `…-b*` role pattern, so
+    per-candidate role + DLS authorization is unchanged. One index per (candidate, board, attempt)
+    makes provisioning idempotent and prevents two modules minting equivalent indices."""
+    return (f"{INDEX_PREFIX}-{_slug(cohort)}-{_slug(candidate_id)}"
+            f"-b{int(board)}-q{int(attempt)}").lower()
+
+
 def role_name(candidate_id: str) -> str:
     return f"cand_{_slug(candidate_id)}".lower()
 
