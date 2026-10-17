@@ -31,7 +31,7 @@ import os
 
 import signing
 
-ATTESTATION_VERSION = 2
+ATTESTATION_VERSION = 3
 MODE_REAL = "real"
 MODE_MOCK = "mock"
 MODE_UNAVAILABLE = "unavailable"
@@ -73,7 +73,7 @@ def test_override_active() -> bool:
             and _truthy(os.environ.get("RANGER_S6_ATTEST_TEST")))
 
 
-def technical_validation(candidate, board, rr, broker_mod, *, expected_vms=None):
+def technical_validation(candidate, board, rr, broker_mod, *, expected_vms=None, window=None):
     """Independent post-deployment technical validation (section 13). Returns a structured result.
 
     A broker-reported `deployed` is NOT enough. Against a REAL live range the adapter would probe:
@@ -83,9 +83,15 @@ def technical_validation(candidate, board, rr, broker_mod, *, expected_vms=None)
     host and is NOT implemented here, so a live range returns `passed=False` (fail closed) until the
     real adapter lands - we never fabricate a pass. Offline, the checks are SIMULATED and explicitly
     labeled `simulated=True`."""
-    check_names = ("vms_present", "domains_roles_present", "services_reachable",
-                   "scenario_artifacts_present", "account_flag_preflight", "network_segmentation",
-                   "candidate_attempt_ownership")
+    try:
+        import broker as _bk
+        check_names = tuple(_bk.PROBE_CONTRACT.keys())
+    except Exception:  # noqa: BLE001
+        check_names = ("candidate_attempt_ownership", "expected_vms_present", "vm_count",
+                       "all_powered_on", "range_deployed", "assessment_window_valid",
+                       "domains_trusts_roles_present", "required_services_reachable",
+                       "account_acl_configuration", "flag_placement_preflight",
+                       "network_segmentation_isolation")
     live = bool(broker_mod is not None and broker_mod.is_live())
     if live:
         # The real probe (broker.verify_range, S6 §15) inspects the live range's VMs/power/state. It
@@ -103,11 +109,13 @@ def technical_validation(candidate, board, rr, broker_mod, *, expected_vms=None)
                 "reason": "live range present but Ludus adapter is UNVERIFIED "
                           "(set LUDUS_ADAPTER_VERIFIED=1 on a confirmed host); fail closed",
             }
-        expected = {}
+        expected = {"require_powered_on": True,
+                    "owner_user_id": getattr(candidate, "ludus_user_id", None)}
         if expected_vms:
             expected["vms"] = list(expected_vms)
             expected["expected_vm_count"] = len(expected_vms)
-        expected["require_powered_on"] = True
+        if window:
+            expected["assessment_window"] = window
         try:
             probe = broker_mod.verify_range(candidate, expected)
         except Exception as e:  # noqa: BLE001
@@ -158,19 +166,32 @@ def attest(candidate, board, rr, broker_mod, *, cohort=None, attempt=1, scenario
     assessment window, the actual range mode, a server-side evidence reference, and the signing-key
     version. It never contains flags, seeds, grader truth or WireGuard keys."""
     scenario = scenario or {}
-    tv = technical_validation(candidate, board, rr, broker_mod, expected_vms=expected_vms)
-    mode = _mode(broker_mod, tv)
     now = _now()
+    window = window or _default_window(now)
+    tv = technical_validation(candidate, board, rr, broker_mod, expected_vms=expected_vms, window=window)
+    mode = _mode(broker_mod, tv)
     claim = {
         "attestation_version": ATTESTATION_VERSION,
         "kind": "range_attestation",
         "handle": getattr(candidate, "handle", None),
+        # Immutable candidate identity (§5): the GitHub id, which (unlike the display handle) a
+        # candidate cannot change, so a renamed handle can never detach an award from its person.
+        "candidate_github_id": getattr(candidate, "github_id", None),
         "cohort": cohort if cohort is not None else getattr(candidate, "cohort", None),
+        "pathway": scenario.get("pathway"),
         "board": int(board),
         "attempt": int(attempt or 1),
+        # Full governed-attempt binding (§5): the exact ScenarioBinding, approved spec identity, the
+        # immutable content hash, the pinned generation-contract integrity hash, and the grading
+        # rubric version - so an attestation proves WHICH pinned scenario+contract+rubric graded it,
+        # not just a loose scenario reference, and cannot be replayed against another attempt.
+        "binding_id": scenario.get("binding_id"),
+        "spec_id": scenario.get("spec_id"),
         "scenario_ref": scenario.get("scenario_ref"),
         "scenario_version": scenario.get("scenario_version"),
         "scenario_content_hash": scenario.get("content_hash"),
+        "gen_contract_hash": scenario.get("gen_contract_hash"),
+        "rubric_version": scenario.get("rubric_version"),
         "ludus_user_id": getattr(candidate, "ludus_user_id", None),
         "range_id": getattr(rr, "ludus_range_id", None) if rr is not None else None,
         "blueprint": (getattr(rr, "template", None) if rr is not None else None)
@@ -212,13 +233,26 @@ def _parse(ts):
         return None
 
 
+# Identity fields that a GOVERNED attestation must carry and that grading/promotion must match. Each
+# maps the attestation field to the keyword a caller supplies the expected value under.
+_FULL_BINDING_FIELDS = ("candidate_github_id", "pathway", "binding_id", "spec_id",
+                        "scenario_content_hash", "gen_contract_hash", "rubric_version")
+
+
 def verify_stored(record, *, handle, board, cohort, attempt=1, scenario_ref=None, range_id=None,
-                  now=None):
-    """Verify a STORED attestation at objective grading / promotion (section 13 'Qualification
-    safety'). Returns (ok, reason). Verifies the signature; matches the exact candidate/board/cohort/
-    attempt (and scenario/range when provided); checks freshness against the assessment window; and
-    accepts only a creditable mode. Rejects forged/altered (bad signature), foreign/superseded
-    (identity mismatch), expired, simulated/unvalidated, and mock. Never mints a new attestation."""
+                  now=None, require_full_binding=False, expect=None, valid_range_states=None):
+    """Verify a STORED attestation at objective grading / promotion (sections 13 + §5). Returns
+    (ok, reason). Verifies the signature; matches the exact candidate/board/cohort/attempt (and
+    scenario/range when provided); checks freshness against the assessment window; and accepts only a
+    creditable mode. Rejects forged/altered (bad signature), foreign/superseded (identity mismatch),
+    expired, simulated/unvalidated, and mock. Never mints a new attestation.
+
+    When `require_full_binding` (the GOVERNED qualification path), additionally require that every
+    mandatory identity field is PRESENT (a missing field fails closed, never passes as unknown), that
+    the assessment window carries an expiry, that the recorded range state is not stale, and that each
+    expected value in `expect` (candidate_github_id / pathway / binding_id / spec_id /
+    scenario_content_hash / gen_contract_hash / rubric_version) matches - so a genuine but UNRELATED
+    signed attestation cannot qualify another scenario or attempt."""
     if not isinstance(record, dict):
         return False, "no stored attestation"
     sig = record.get("signature")
@@ -253,8 +287,25 @@ def verify_stored(record, *, handle, board, cohort, attempt=1, scenario_ref=None
     # freshness
     win = record.get("assessment_window") or {}
     exp = _parse(win.get("expires_at")) if win.get("expires_at") else None
+    if require_full_binding and exp is None:
+        return False, "attestation has no assessment-window expiry"
     if exp is not None and exp < (now or _now()):
         return False, "assessment window expired"
+    # governed full-binding enforcement (§5)
+    if require_full_binding:
+        if int(record.get("attestation_version") or 0) < 3:
+            return False, "attestation predates the governed binding contract (version < 3)"
+        for field in _FULL_BINDING_FIELDS:
+            if record.get(field) in (None, ""):
+                return False, f"attestation missing mandatory identity field {field!r}"
+        for field, want in (expect or {}).items():
+            if want is not None and record.get(field) != want:
+                return False, f"attestation {field} mismatch (foreign/superseded/unrelated)"
+        allowed_states = valid_range_states or ("deployed", "validated", "ready", "active",
+                                                "suspended", "resumed")
+        if record.get("deployment_outcome") not in allowed_states:
+            return False, (f"attestation range state {record.get('deployment_outcome')!r} is stale/"
+                           "invalid for crediting")
     return True, "ok"
 
 

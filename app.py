@@ -751,11 +751,23 @@ def create_app():
         if _slots_used_excluding(rr.host, rr.id) >= MAX_CONCURRENT:
             rr.detail = f"at capacity on {rr.host} (cap {MAX_CONCURRENT}); range stays suspended, retry shortly"
             return rr.status
+        # Reserve-before-launch (§4): flip to a slot-occupying state and FLUSH before the slow
+        # power-on, so two concurrent resumes/deploys cannot both pass the cap check and oversubscribe
+        # the host. On a failed/unconfirmed power-on the reservation is released back to suspended
+        # (the disks and evidence are untouched), never left falsely holding a slot.
+        prev = rr.status
+        range_lifecycle.assert_transition(prev, "deploying")
+        rr.status = "deploying"
+        rr.detail = "slot reserved; resuming"
+        db.session.flush()
         now = _dt.datetime.now(_dt.timezone.utc)
         try:
             ok, detail = broker.power_on(c, user_key=_candidate_key(c))
         except Exception as e:  # noqa: BLE001
-            rr.detail = ("resume failed: %s" % e)[:200]
+            range_lifecycle.assert_transition(rr.status, "suspended")
+            rr.status = "suspended"
+            rr.detail = ("resume failed, range left suspended: %s" % e)[:200]
+            db.session.flush()
             return rr.status
         if ok:
             range_lifecycle.assert_transition(rr.status, "deployed")
@@ -764,7 +776,10 @@ def create_app():
             rr.last_active_at = now
             rr.last_checked_at = now
         else:
-            rr.detail = "resume failed: " + detail
+            range_lifecycle.assert_transition(rr.status, "suspended")
+            rr.status = "suspended"
+            rr.detail = "resume not confirmed, range left suspended: " + detail
+        db.session.flush()
         return rr.status
 
     def _try_deploy(c, rr):
@@ -802,25 +817,32 @@ def create_app():
             # live range.
             tvars = None
             if scenarios.kind(rr.board) == "flags":
-                # Under cohort governance (S6 section 14), an isolated board is pinned to an approved
-                # ScenarioBinding: plant the flags for the BINDING's seed and the family's pinned
-                # gen_params, so the range the candidate faces matches exactly what the grader scores
-                # and the ACL locks reference the family's approved accounts. Fall back to the legacy
-                # per-candidate seed when no binding governs this attempt.
+                # S6 §1: provision the range EXCLUSIVELY from the assigned, integrity-verified
+                # generation contract. strata_assignment.resolve() returns the PINNED
+                # (board, variant_id, seed, gen_params) captured at bind time and verified against the
+                # contract MAC and the approved spec's content_hash; it raises on a tampered contract
+                # or a content_hash drift (variant edited/superseded after assignment). The range is
+                # therefore planted from the identical seed+gen_params the grader and attestation pin,
+                # so /labs/dataset, config, flag planting, grading and attestation all agree.
                 seed = None
                 gp = None
                 if _strata_portfolios_on():
                     from models import ScenarioBinding
                     _b = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=rr.board)
                           .order_by(ScenarioBinding.attempt.desc()).first())
-                    if _b is not None:
-                        seed = _b.seed
-                        from siem import board_variants as _bv
-                        try:
-                            gp = _bv.gen_params(rr.board, _b.variant_id)
-                        except Exception:  # noqa: BLE001
-                            gp = None
-                if not seed:
+                    if _b is None:
+                        # Governed isolated board with no binding: FAIL CLOSED, no legacy-seed path.
+                        raise RuntimeError("no bound scenario for this governed isolated board; the "
+                                           "candidate must open their dataset (which binds the "
+                                           "approved scenario) before the range can be provisioned")
+                    if (_b.status or "").lower() in ("revoked", "superseded", "void"):
+                        raise RuntimeError("the bound scenario for this attempt is %s; refusing to "
+                                           "provision a revoked/superseded binding" % _b.status)
+                    # resolve() fails closed on a tampered/mismatched contract (raises AssignmentError).
+                    _, _vid, seed, gp = strata_assignment.resolve(_b)
+                else:
+                    # Ungoverned/dev mode only (portfolios off): the legacy per-candidate seed. This
+                    # is never a qualification path - governance is required for real credit.
                     seed = _current_seed(c)
                 if seed:
                     tvars = {"ranger_flags": scenarios.flags_for_board(rr.board, seed)}
@@ -954,17 +976,83 @@ def create_app():
                         "Your range is deployed. Download WireGuard from your dashboard and begin.")
         return changed
 
+    def _retire_range(rr, c=None, *, reason, force=False):
+        """The single evidence-safe, broker-CONFIRMED retirement path for an isolated range
+        (S6 §3 + §4). Every destructive call site (reclaim, teardown, promotion, exit, admin, rebuild)
+        routes through here so none can bypass the guards.
+
+        Evidence preservation (§3): the signed qualification record (BoardResult.range_attestation)
+        lives in the database, independent of the VM disks, so retiring a range never loses the award.
+        While an evidence window is OPEN (rr.evidence_hold_until in the future), an ordinary retirement
+        SUSPENDS (power-off; frees the RAM slot, keeps the disks) instead of destroying - a candidate
+        advancing, graduating, being removed or timing out must not delete their in-range evidence. A
+        forced (legally-required) teardown first CONFIRMS the signed record is persisted in the DB;
+        if it is not, the destroy is withheld and the range is suspended instead, so the only evidence
+        is never discarded.
+
+        Broker confirmation (§4): the DB status and slot are changed ONLY after the broker reports the
+        remote op succeeded. A failed, partial or timed-out op leaves the range in its current
+        slot-holding state (no silent slot release), so capacity accounting never frees a VM that is
+        still running, and a crash between the remote op and the commit re-runs safely (the next pass
+        re-confirms remote state via range_status/reclaim).
+
+        Returns the action actually taken: 'suspended' | 'destroyed' | 'preserved' | 'failed' | 'noop'.
+        """
+        if rr is None or rr.host == "shared" or rr.status not in RangeRequest.OCCUPIES_SLOT:
+            return "noop"
+        if c is None:
+            c = Candidate.query.get(rr.candidate_id)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        hold_open = (rr.evidence_hold_until is not None
+                     and _aware(rr.evidence_hold_until) is not None
+                     and _aware(rr.evidence_hold_until) > now)
+        key = _candidate_key(c) if c else None
+
+        def _suspend(note):
+            try:
+                ok, detail = broker.power_off(c, user_key=key)
+            except Exception as e:  # noqa: BLE001
+                rr.detail = ("suspend failed, range left running: %s" % e)[:200]
+                return "failed"
+            if not ok:
+                rr.detail = ("suspend not confirmed, range left running: %s" % detail)[:200]
+                return "failed"
+            range_lifecycle.assert_transition(rr.status, "suspended")
+            rr.status = "suspended"
+            rr.detail = note[:200]
+            return "suspended"
+
+        if hold_open and not force:
+            return _suspend("evidence window open: %s -> suspended (disks + signed record preserved)"
+                            % reason)
+        if hold_open and force:
+            br = _board_result(c, rr.board, create=False) if c else None
+            if not (br and br.range_attestation):
+                # The only evidence is the live disks and no signed record is persisted: withhold the
+                # forced destroy and suspend to preserve it, rather than destroying irreplaceably.
+                return _suspend("forced teardown withheld (no persisted signed record); suspended to "
+                                "preserve evidence")
+            # A signed qualification record is persisted in the DB, independent of the VM disks, so a
+            # legally-required destroy of the disks is now evidence-safe.
+        try:
+            ok, detail = broker.destroy_range(c, user_key=key)
+        except Exception as e:  # noqa: BLE001
+            rr.detail = ("teardown failed, range left running: %s" % e)[:200]
+            return "failed"
+        if not ok:
+            rr.detail = ("teardown not confirmed, range left running: %s" % detail)[:200]
+            return "failed"
+        range_lifecycle.assert_transition(rr.status, "destroyed")
+        rr.status = "destroyed"
+        rr.detail = reason[:200]
+        return "destroyed"
+
     def _expire_ranges():
         """Reclaim isolated ranges that are past the hard age cap or have been
         idle too long, so a stalled ranger never permanently clogs a slot. Board
-        progress is untouched; the ranger just redeploys when they return."""
+        progress is untouched; the ranger just redeploys when they return. Evidence
+        preservation and broker confirmation are enforced by _retire_range."""
         now = _dt.datetime.now(_dt.timezone.utc)
-
-        def _aware(d):  # SQLite drops tzinfo; treat stored times as UTC
-            if d is not None and d.tzinfo is None:
-                return d.replace(tzinfo=_dt.timezone.utc)
-            return d
-
         reclaimed = []
         rows = RangeRequest.query.filter(RangeRequest.status.in_(RangeRequest.OCCUPIES_SLOT)).all()
         for rr in rows:
@@ -981,28 +1069,12 @@ def create_app():
                 reason = "idle"
             if not reason:
                 continue
-            # S6 §16: the evidence-preservation guard decides destroy vs suspend. While an
-            # assessment/evidence window is open (evidence_hold_until in the future), the range's
-            # disks hold candidate evidence, so reclamation SUSPENDS (power-off, frees the slot,
-            # preserves disks) instead of destroying. Outside the window, destroy as before.
-            decision = range_lifecycle.reclaim_decision(
-                state=rr.status, now=now,
-                evidence_hold_until=_aware(rr.evidence_hold_until), reason=reason)
-            if decision["action"] == "hold":
-                continue
             c = Candidate.query.get(rr.candidate_id)
-            try:
-                if c:
-                    if decision["action"] == "suspend":
-                        broker.power_off(c, user_key=_candidate_key(c))
-                    else:
-                        broker.destroy_range(c, user_key=_candidate_key(c))
-            except Exception:  # noqa: BLE001
-                pass
-            range_lifecycle.assert_transition(rr.status, decision["to_state"])
-            rr.status = decision["to_state"]
-            rr.detail = decision["reason"]
-            reclaimed.append(rr.host or "primary")
+            # _retire_range suspends under an open evidence window, else destroys, and only changes
+            # DB state + frees the slot after the broker confirms the op. A failed op frees nothing.
+            action = _retire_range(rr, c, reason="reclaimed (%s)" % reason)
+            if action in ("suspended", "destroyed"):
+                reclaimed.append(rr.host or "primary")
         return reclaimed
 
     def _maintenance():
@@ -1054,16 +1126,19 @@ def create_app():
         db.session.add(b)
         return b
 
-    def _teardown_ranges(c):
-        """Destroy all of the candidate's isolated ranges and free their slots."""
-        key = _candidate_key(c)
+    def _teardown_ranges(c, *, force=False):
+        """Retire all of the candidate's isolated ranges and free their slots, through the
+        evidence-safe, broker-confirmed _retire_range path. An open evidence window SUSPENDS (keeps
+        the disks + the signed record) rather than destroying, so a candidate exit never discards
+        in-range evidence; pass force=True only for a legally-required teardown (which still confirms
+        the signed record is persisted first). A range whose broker op does not confirm is left in
+        place (its slot not freed)."""
         freed_hosts = set()
         for rr in RangeRequest.query.filter_by(candidate_id=c.id).all():
             if rr.host != "shared" and rr.status in RangeRequest.OCCUPIES_SLOT:
-                broker.destroy_range(c, user_key=key)
-                rr.status = "destroyed"
-                rr.detail = "torn down"
-                freed_hosts.add(rr.host or "primary")
+                action = _retire_range(rr, c, reason="torn down", force=force)
+                if action in ("suspended", "destroyed"):
+                    freed_hosts.add(rr.host or "primary")
         return freed_hosts
 
     def _active_cohort():
@@ -1181,11 +1256,14 @@ def create_app():
         # two RAM slots, and pull a queued range into the freed slot.
         rr = _board_range(c, n)
         if rr and rr.host != "shared" and rr.status in RangeRequest.OCCUPIES_SLOT:
-            broker.destroy_range(c, user_key=_candidate_key(c))
-            rr.status = "destroyed"
-            rr.detail = "torn down on promotion"
+            # Evidence-safe retirement: if the cleared board's evidence window is still open, the range
+            # is SUSPENDED (disks + signed record preserved), not destroyed, even though the candidate
+            # advanced. Either way the slot is freed only after the broker confirms the op.
+            host = rr.host or "primary"
+            action = _retire_range(rr, c, reason="torn down on promotion")
             db.session.flush()
-            _reconcile(rr.host or "primary")
+            if action in ("suspended", "destroyed"):
+                _reconcile(host)
 
         if n >= P.LAST_BOARD:
             _mint_badge(c, P.CERTIFIED["level"], P.CERTIFIED["name"], P.CERTIFIED["role"])
@@ -1249,10 +1327,30 @@ def create_app():
             if stored is None:
                 app.logger.info("isolated board %s promotion gate refused: no stored attestation", n)
                 return False
+            # §5: on the governed path, re-verify the FULL pinned attempt identity against the current
+            # binding, not just handle/board/cohort. A genuine but unrelated signed attestation, a
+            # superseded binding, or any missing mandatory field fails closed here.
+            require_full = _strata_portfolios_on()
+            expect = None
+            attempt = getattr(br, "attempt", 1)
+            if require_full:
+                from models import ScenarioBinding, Cohort
+                _b = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
+                      .order_by(ScenarioBinding.attempt.desc()).first())
+                if _b is None:
+                    app.logger.info("isolated board %s gate refused: no binding under governance", n)
+                    return False
+                attempt = _b.attempt
+                _co = Cohort.query.filter_by(name=c.cohort).first()
+                expect = {"binding_id": _b.id, "spec_id": _b.spec_id,
+                          "scenario_content_hash": _b.content_hash, "gen_contract_hash": _b.gen_hash,
+                          "candidate_github_id": c.github_id, "rubric_version": scenarios.rubric_version(n),
+                          "pathway": (_co.pathway if _co else None) or "strata"}
             ok, reason = _ra.verify_stored(
                 stored, handle=c.handle, board=n, cohort=c.cohort,
-                attempt=getattr(br, "attempt", 1), scenario_ref=_scenario_ref(c, n),
-                range_id=(rr.ludus_range_id if rr else None))
+                attempt=attempt, scenario_ref=_scenario_ref(c, n),
+                range_id=(rr.ludus_range_id if rr else None),
+                require_full_binding=require_full, expect=expect)
             if not ok:
                 app.logger.info("isolated board %s promotion gate refused: %s", n, reason)
                 return False
@@ -1301,9 +1399,28 @@ def create_app():
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
             scenario = {"scenario_ref": _scenario_ref(c, n),
-                        "blueprint": (P.board_meta(n) or {}).get("template")}
+                        "blueprint": (P.board_meta(n) or {}).get("template"),
+                        "rubric_version": scenarios.rubric_version(n)}
+            attempt = getattr(br, "attempt", 1)
+            # §5: under governance, bind the attestation to the FULL pinned attempt identity (the
+            # ScenarioBinding, approved spec id+version, immutable content hash, pinned
+            # generation-contract integrity hash, pathway). Fail closed if the governed board has no
+            # binding - credit must never rest on the legacy seed when governance is enabled.
+            if _strata_portfolios_on():
+                from models import ScenarioBinding, Cohort
+                _b = (ScenarioBinding.query.filter_by(candidate_id=c.id, board=n)
+                      .order_by(ScenarioBinding.attempt.desc()).first())
+                if _b is None:
+                    raise RuntimeError("no bound scenario for this governed isolated board; cannot "
+                                       "attest an objective without the pinned generation contract")
+                attempt = _b.attempt
+                _co = Cohort.query.filter_by(name=c.cohort).first()
+                scenario.update({
+                    "binding_id": _b.id, "spec_id": _b.spec_id, "scenario_version": _b.spec_version,
+                    "content_hash": _b.content_hash, "gen_contract_hash": _b.gen_hash,
+                    "pathway": (_co.pathway if _co else None) or "strata"})
             creditable, att = _ra.attest(c, n, rr, broker, cohort=c.cohort,
-                                        attempt=getattr(br, "attempt", 1), scenario=scenario)
+                                        attempt=attempt, scenario=scenario)
             br.range_attestation = _json.dumps(att)   # signed assessment-time attestation (immutable)
             if not creditable:
                 passed = False   # simulated/unavailable/absent range never yields an isolated award
@@ -2329,14 +2446,20 @@ def create_app():
             st, sdetail = broker.range_status(c, user_key=key)
             rr.status, rr.detail = st, sdetail
             rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
-        elif action == "destroy" and rr is not None:
+        elif action in ("destroy", "force_destroy") and rr is not None:
             host = rr.host or "primary"
             if rr.host != "shared":
-                broker.destroy_range(c, user_key=key)
-            rr.status = "destroyed"
-            rr.detail = "torn down by admin"
+                # Admin teardown preserves evidence by default (suspends under an open evidence
+                # window); an explicit force_destroy performs a legally-required teardown that still
+                # confirms the signed record is persisted before destroying. Slot freed only on a
+                # confirmed broker op.
+                act = _retire_range(rr, c, reason="torn down by admin",
+                                    force=(action == "force_destroy"))
+            else:
+                act = "noop"
             db.session.flush()
-            _reconcile(host)  # a freed slot pulls in a queued range
+            if act in ("suspended", "destroyed"):
+                _reconcile(host)  # a freed slot pulls in a queued range
         db.session.commit()
         return redirect(url_for("admin_ranges"))
 

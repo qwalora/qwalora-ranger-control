@@ -59,9 +59,18 @@ python -m pytest siem/tests/test_strata_s6_acceptance.py \
                  siem/tests/test_strata_s6_lifecycle.py \
                  siem/tests/test_strata_s6_capstone.py \
                  siem/tests/test_strata_s6_families.py \
-                 siem/tests/test_strata_s6_flag_placement.py -q
+                 siem/tests/test_strata_s6_flag_placement.py \
+                 siem/tests/test_strata_s6_closure.py -q
 ```
-All green offline. The PG-backed suites skip without an authorized PG test server (expected).
+Each S6 suite creates a Flask app (and its SQLAlchemy singleton) per test, so the slot/reclaim-
+sensitive lifecycle and closure suites must run in their OWN process - sharing one interpreter with
+many other app-creating suites lets a prior app's DB/session singleton skew global range-slot
+accounting (a known test-harness characteristic, not a product defect; every suite is green in its own
+process). `siem/tests/run_s6_acceptance.sh` runs each suite in a separate process, which is how CI
+should run them. The PG-backed suites skip without an authorized PG test server (expected).
+
+Offline acceptance totals (per-file): 65 S6 tests across 8 suites green; the S1-S5 suites the S6
+additions touch stay green (106 passed, 2 PG-only skips).
 
 ## 4. Go-live checklist (category D/E, operator, gated on separate approval)
 
@@ -76,6 +85,44 @@ All green offline. The PG-backed suites skip without an authorized PG test serve
 5. Deploy one range, run `verify_range` against it, and confirm the expected VMs/power/state.
 6. Pilot a single candidate end to end (category E) with human report approval before any cohort
    activation.
+
+## 4a. Final integrity closure (reviewer items 1-7)
+
+A focused integrity closure was applied after the first acceptance review; no redesign, no new
+milestone.
+
+1. **Pinned generation contract at deploy.** `_try_deploy` provisions governed boards 5/6
+   EXCLUSIVELY from `strata_assignment.resolve(binding)` (the integrity-verified pinned seed +
+   gen_params), with no legacy-seed fallback; a missing/revoked/mismatched/tampered binding fails
+   closed. `/labs/dataset`, config, flag planting, grading and attestation now share the identical
+   pinned contract. Proven by a variant-revision test: a live variant edit after assignment does not
+   change the candidate's world or grade.
+2. **Complete real-range probe contract.** `broker.PROBE_CONTRACT` enumerates all mandatory checks,
+   split into Ludus-direct (VM inventory, power, state, ownership, window) and guest/scenario
+   (domains/trusts/roles, service reachability, account/ACL, flag-placement preflight, segmentation/
+   isolation). `verify_range` records every check, treats any missing/unknown result as NOT a pass,
+   and requires all-true. MODE_REAL stays non-creditable until the adapter is confirmed AND the full
+   contract (including a guest-probe not yet implemented) verifies.
+3. **Evidence-preservation on every destructive path.** A single `_retire_range` helper is the only
+   teardown path; `_expire_ranges`, `_teardown_ranges`, `_promote`, `_exit_candidate` and the admin
+   teardown route all route through it. An open evidence window SUSPENDS (preserves disks + the
+   DB-resident signed record) instead of destroying, even on advance/graduate/remove/timeout; a
+   forced legally-required teardown confirms the signed record is persisted before destroying.
+4. **Broker-op confirmation.** `_retire_range` and `_resume_range` change DB status / free or take a
+   slot ONLY after the broker confirms the remote op; a failed/partial/unconfirmed op leaves the
+   range in place (no phantom capacity). Resume uses reserve-before-launch to prevent concurrent
+   oversubscription. Proven with a fault-injecting broker through the real Flask route.
+5. **Full attestation binding.** Attestation v3 binds candidate github id, cohort+pathway,
+   board+attempt, ScenarioBinding id, spec id+version, content hash, pinned gen-contract hash,
+   technical-validation results, assessment window+expiry, rubric version and signing-key version.
+   The governed gate re-verifies all of it (`require_full_binding`), rejecting missing fields, missing
+   expiry, stale range state, foreign/superseded/unrelated attestations. Proven: a genuine but
+   unrelated signed attestation cannot qualify another attempt.
+6. **Corrected capacity model.** `STRATA_S6_COST_AND_CAPACITY.md` section 2 fixes the arithmetic: a
+   64 GB host holds 2 Raider OR 1 capstone (not 2 capstones), distinguishes theoretical RAM from
+   provisioned capacity, and names the bigger/second host as the approval-gated overage.
+7. **Acceptance strengthened.** `test_strata_s6_closure.py` proves items 1-5 through integrated
+   Flask/broker/assignment paths.
 
 ## 5. Restrictions (unchanged)
 

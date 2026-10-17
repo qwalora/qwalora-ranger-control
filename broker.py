@@ -401,18 +401,49 @@ def range_detail(candidate, user_key=None):
                 key=user_key or _admin_key(), idempotent=True)
 
 
-def verify_range(candidate, expected, user_key=None):
-    """Independent technical probe of a LIVE range (S6 §15). A broker-reported
-    `deployed` is not trusted on its own; this inspects the range detail and
-    checks it against the expected shape.
+# The complete mandatory technical-validation contract (S6 §2). Every check must be verified TRUE for
+# a range to back qualification credit; a missing/unknown result is NEVER a pass. Each check is tagged
+# by how it can be verified:
+#   "ludus"          - verifiable through the Ludus API from the range detail (VM inventory, power,
+#                      range state, candidate/user ownership, assessment window).
+#   "guest_scenario" - requires in-guest or scenario-specific validation (AD domains/trusts/roles,
+#                      service reachability, account/ACL configuration, flag-placement preflight,
+#                      network segmentation/candidate isolation). These need a guest-probe the adapter
+#                      must supply; until it does they are UNKNOWN and the range cannot be credited.
+PROBE_CONTRACT = {
+    "candidate_attempt_ownership": "ludus",
+    "expected_vms_present": "ludus",
+    "vm_count": "ludus",
+    "all_powered_on": "ludus",
+    "range_deployed": "ludus",
+    "assessment_window_valid": "ludus",
+    "domains_trusts_roles_present": "guest_scenario",
+    "required_services_reachable": "guest_scenario",
+    "account_acl_configuration": "guest_scenario",
+    "flag_placement_preflight": "guest_scenario",
+    "network_segmentation_isolation": "guest_scenario",
+}
 
-    `expected` is a dict with optional keys: vms (list of expected VM names),
-    expected_vm_count (int), require_powered_on (bool). Returns a structured
-    result {ok, observed_vms, checks, reason}. NEVER passes a mock range, and
-    NEVER passes while the adapter is unverified (fail-closed honesty) - the
-    probe code exists but is not trusted until an operator confirms the REST
-    paths on a real Ludus node (LUDUS_ADAPTER_VERIFIED=1)."""
-    result = {"ok": False, "observed_vms": [], "checks": {}, "reason": ""}
+
+def verify_range(candidate, expected, user_key=None):
+    """Independent technical probe of a LIVE range against the COMPLETE mandatory contract (S6 §2).
+
+    A broker-reported `deployed` is never trusted on its own. This runs every check in PROBE_CONTRACT:
+    the Ludus-direct checks from the range detail, and the guest/scenario checks from whatever verified
+    guest-probe results the adapter supplies via `expected["guest_results"]`. A check with no verified
+    result is recorded as None (UNKNOWN) and is NEVER treated as a pass.
+
+    `expected` keys: vms (expected VM names), expected_vm_count, require_powered_on, owner_user_id (the
+    candidate's Ludus user the range must belong to), assessment_window ({expires_at}), and
+    guest_results (a dict of guest_scenario check -> bool from a TRUSTED guest probe). Returns
+    {ok, observed_vms, checks, unknown, categories, reason}.
+
+    NEVER passes a mock range, and NEVER passes while the adapter is unverified or while ANY mandatory
+    check is false or unknown (fail-closed honesty): a real pass requires a confirmed adapter
+    (LUDUS_ADAPTER_VERIFIED=1) AND every mandatory check verified true, including the guest/scenario
+    checks that need a guest-probe not yet implemented."""
+    result = {"ok": False, "observed_vms": [], "checks": {}, "unknown": [],
+              "categories": dict(PROBE_CONTRACT), "reason": ""}
     if not is_live():
         result["reason"] = "mock: no live range to validate"
         return result
@@ -426,8 +457,7 @@ def verify_range(candidate, expected, user_key=None):
         result["reason"] = f"range detail fetch failed: {e}"
         return result
     vms = detail.get("VMs") or detail.get("vms") or []
-    observed = []
-    powered = []
+    observed, powered = [], []
     for vm in vms:
         if isinstance(vm, dict):
             name = vm.get("name") or vm.get("Name") or ""
@@ -437,7 +467,15 @@ def verify_range(candidate, expected, user_key=None):
         elif isinstance(vm, str):
             observed.append(vm)
     result["observed_vms"] = observed
-    checks = {}
+
+    # Every mandatory check starts UNKNOWN (None); only a positively verified result sets True/False.
+    checks = {k: None for k in PROBE_CONTRACT}
+
+    # --- Ludus-direct checks ---
+    owner = expected.get("owner_user_id")
+    detail_owner = detail.get("userID") or detail.get("user_id") or detail.get("userId")
+    if owner is not None and detail_owner is not None:
+        checks["candidate_attempt_ownership"] = (str(detail_owner) == str(owner))
     exp_names = list(expected.get("vms") or [])
     if exp_names:
         checks["expected_vms_present"] = all(
@@ -449,9 +487,32 @@ def verify_range(candidate, expected, user_key=None):
         checks["all_powered_on"] = bool(observed) and len(powered) == len(observed)
     state = (detail.get("rangeState") or detail.get("state") or "").upper()
     checks["range_deployed"] = state in ("SUCCESS", "DEPLOYED")
+    win = expected.get("assessment_window") or {}
+    if win.get("expires_at"):
+        try:
+            import datetime as _d
+            checks["assessment_window_valid"] = (
+                _d.datetime.fromisoformat(win["expires_at"]) > _d.datetime.now(_d.timezone.utc))
+        except Exception:  # noqa: BLE001
+            checks["assessment_window_valid"] = False
+
+    # --- guest/scenario checks: only trusted, verified guest-probe results count as a pass ---
+    guest = expected.get("guest_results") or {}
+    for name, cat in PROBE_CONTRACT.items():
+        if cat == "guest_scenario" and name in guest:
+            checks[name] = bool(guest[name])
+
     result["checks"] = checks
-    result["ok"] = bool(checks) and all(checks.values())
-    result["reason"] = "live technical validation ran" if result["ok"] else "one or more checks failed"
+    result["unknown"] = [k for k, v in checks.items() if v is None]
+    # A pass requires EVERY mandatory check verified exactly True. Any False or UNKNOWN fails closed.
+    result["ok"] = all(v is True for v in checks.values())
+    if result["ok"]:
+        result["reason"] = "all mandatory technical-validation checks verified"
+    elif result["unknown"]:
+        result["reason"] = ("incomplete technical validation: unverified checks %s (guest/scenario "
+                            "probe required); fail closed" % ", ".join(result["unknown"]))
+    else:
+        result["reason"] = "one or more mandatory technical-validation checks failed"
     return result
 
 

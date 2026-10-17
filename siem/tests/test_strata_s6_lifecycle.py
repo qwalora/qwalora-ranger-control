@@ -172,22 +172,36 @@ def test_verify_range_fails_closed_mock_and_unverified():
     assert r2["ok"] is False and "UNVERIFIED" in r2["reason"]
 
 
-def test_verify_range_passes_only_when_live_verified_and_detail_matches(monkeypatch):
+def test_verify_range_requires_the_complete_contract(monkeypatch):
+    # §2: the probe must verify EVERY mandatory check. Ludus-direct checks alone (VMs/power/state/
+    # ownership) are NOT enough: the guest/scenario checks are UNKNOWN until a guest-probe supplies
+    # them, and an unknown check is never a pass.
     os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
     os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
     c = _C()
-    good = {"rangeState": "SUCCESS",
+    good = {"userID": c.ludus_user_id, "rangeState": "SUCCESS",
             "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02", "poweredOn": True}]}
     monkeypatch.setattr(broker, "range_detail", lambda *a, **k: good)
-    r = broker.verify_range(c, {"vms": ["DC01", "SRV02"], "expected_vm_count": 2,
-                                "require_powered_on": True})
-    assert r["ok"] is True and set(r["observed_vms"]) == {"DC01", "SRV02"}
-    # a powered-off VM fails the probe
-    bad = {"rangeState": "SUCCESS",
+    base = {"vms": ["DC01", "SRV02"], "expected_vm_count": 2, "require_powered_on": True,
+            "owner_user_id": c.ludus_user_id,
+            "assessment_window": {"expires_at": "2099-01-01T00:00:00+00:00"}}
+    # ludus-direct all pass but guest/scenario checks unknown -> fail closed
+    r = broker.verify_range(c, dict(base))
+    assert r["ok"] is False and r["unknown"], "unknown guest/scenario checks must not pass"
+    # supply all guest/scenario results true -> passes, nothing unknown
+    guest = {k: True for k, cat in broker.PROBE_CONTRACT.items() if cat == "guest_scenario"}
+    r_full = broker.verify_range(c, dict(base, guest_results=guest))
+    assert r_full["ok"] is True and not r_full["unknown"]
+    # a powered-off VM fails even with full guest results
+    bad = {"userID": c.ludus_user_id, "rangeState": "SUCCESS",
            "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02", "poweredOn": False}]}
     monkeypatch.setattr(broker, "range_detail", lambda *a, **k: bad)
-    r2 = broker.verify_range(c, {"vms": ["DC01", "SRV02"], "require_powered_on": True})
+    r2 = broker.verify_range(c, dict(base, guest_results=guest))
     assert r2["ok"] is False
+    # a foreign owner fails ownership
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: good)
+    r3 = broker.verify_range(c, dict(base, owner_user_id="SOMEONE-ELSE", guest_results=guest))
+    assert r3["ok"] is False
 
 
 def test_power_off_on_are_power_toggles_not_snapshots():

@@ -36,32 +36,50 @@ reserved + provisioning + deployed ranges per host. The lifecycle controls that 
 | `RANGE_MAX_AGE_HOURS` | 48 | hard age cap; same reclaim path |
 | `RANGE_EVIDENCE_HOLD_HOURS` | 72 | after a submission, reclamation SUSPENDS (power-off) rather than destroys, so disk persists but RAM is freed |
 
-Sizing a single GOAD host to the capstone footprint (the larger of the two): a **~64 GB** host holds
-~2 concurrent capstone ranges (or more Raider ranges), which matches `MAX_CONCURRENT=2`. The §16
-suspend-on-reclaim behaviour is what keeps RAM demand at or below the cap even when more candidates
-are mid-assessment than the cap: only actively-worked ranges stay powered on; idle ones suspend and
-free their slot while preserving evidence for the 72h window.
+**Theoretical RAM sum vs genuinely provisioned capacity.** A host's advertised RAM is not all
+schedulable: the hypervisor/host OS reserves ~4-8 GB, and these are Windows AD VMs where memory
+ballooning is unreliable, so each range must be sized at its full footprint, not an optimistic
+average. Provisioned capacity on a host is therefore roughly `(host_RAM - host_overhead) /
+per_range_RAM`, rounded DOWN, with no over-commit.
 
-Throughput, not just instantaneous capacity, is the real constraint. With a 2-range cap and ranges
-that are suspended after 8h idle, a single host serves a cohort serially: a candidate deploys, works,
-is suspended when idle, resumes on return. A cohort larger than ~2 simultaneously-active red-teamers
-queues (`queued_slot`) until a slot frees - correct behaviour, surfaced to the candidate, never an
-oversubscription.
+Correcting the earlier arithmetic on a **~64 GB** host (host overhead ~6 GB, ~58 GB schedulable):
+
+| Range type | Per-range RAM (est.) | Concurrent ranges a 64 GB host genuinely holds |
+|---|---|---|
+| Raider (board 5) | ~24-28 GB | **2** (48-56 GB, fits within ~58 GB) |
+| Vanguard capstone (board 6) | ~36-48 GB | **1** (a second would need 72-96 GB; it does NOT fit) |
+
+So `MAX_CONCURRENT=2` is realistic on a 64 GB host **only for Raider ranges**. It is NOT valid for two
+concurrent capstones - the earlier model's claim that a 64 GB host supports two capstones was wrong.
+Two concurrent capstones need roughly a **96-128 GB** host. For a single 64 GB host, either run one
+capstone at a time (an effective per-host cap of 1 for board 6), or size up. The control
+(`MAX_CONCURRENT_RANGES`) must be set per the host RAM and the board mix actually running, and the host
+must refuse to over-commit; the counter alone does not create RAM that is not there.
+
+The §16 suspend-on-reclaim behaviour keeps RAM demand at or below the real cap even when more
+candidates are mid-assessment than the cap: only actively-worked ranges stay powered on; idle ones
+suspend (power-off) and free their RAM while preserving disk + evidence for the 72h window.
+
+Throughput, not instantaneous capacity, is the real constraint. A single host serves a cohort serially:
+a candidate deploys, works, is suspended when idle, resumes on return; anyone over the cap queues
+(`queued_slot`) until a slot frees - surfaced to the candidate, never an over-subscription.
 
 ## 3. Projected monthly cost (estimates)
 
 | Component | Host (estimate) | Est. $/mo |
 |---|---|---|
-| GOAD/Ludus host, ~64 GB, hosts ~2 concurrent GOAD at `MAX_CONCURRENT=2` | Hetzner dedicated (EX/AX class) | $45-60 |
+| GOAD/Ludus host, ~64 GB (holds 2 concurrent Raider OR 1 capstone) | Hetzner dedicated (EX/AX class) | $45-60 |
 | Snapshots / extra volumes / egress for the ranges | Hetzner | $3-10 |
 | **S6 range subtotal** | | **~$50-70/mo** |
 
 Combined with the control plane and shared SIEM covered elsewhere (~$20-50/mo together), the whole
 platform baseline is **well inside the $300/mo target**, with headroom. The dominant and most variable
-cost is the GOAD host; a **second GOAD host** (to raise concurrent capacity beyond ~2 capstone ranges
-for a larger cohort) is the most likely overage trigger and would roughly double the range subtotal to
-~$100-130/mo - still inside $300/mo, but it is surfaced for approval before being added rather than
-provisioned automatically.
+cost is the GOAD host. The most likely overage trigger is needing **concurrent capstones** or serving
+a larger cohort: because one 64 GB host holds only a single capstone (see section 2), two concurrent
+capstones require either a **~96-128 GB host** or a **second host**. Either step roughly doubles the
+range subtotal to ~$100-130/mo - still inside $300/mo, but surfaced for approval before being added,
+never provisioned automatically. A single 64 GB host with board 6 effectively capped at one concurrent
+capstone needs no extra spend; it just serializes capstone candidates (throughput, not a cost).
 
 ## 4. Honest trade-offs
 
@@ -72,9 +90,11 @@ provisioned automatically.
   window trades disk (cheap) for the guarantee that a candidate's evidence survives reclamation. If a
   cohort submits faster than ranges age out, suspended-range disk can accumulate; the age cap and the
   bounded hold window keep this finite, and destroy reclaims disk once the window closes.
-- **Capacity vs cost is one dial.** Raising `MAX_CONCURRENT` beyond what one host's RAM supports would
-  oversubscribe and is refused by the host sizing, not just the counter; real additional capacity means
-  another host and another ~$50-70/mo.
+- **Capacity vs cost is one dial, and the counter is not RAM.** `MAX_CONCURRENT_RANGES` must be set to
+  what the host's schedulable RAM genuinely holds for the board mix running (2 Raider or 1 capstone on
+  a 64 GB host), and the host must refuse over-commit. Setting the counter higher than the RAM supports
+  does not create capacity; it would oversubscribe. Real additional capacity means a bigger or second
+  host and another ~$50-70/mo.
 - **Rebuild is expensive, resume is cheap.** A rebuild (destroy + deploy) re-runs the full GOAD
   provisioning (tens of minutes of host CPU); resume (power-on) is seconds. The lifecycle prefers
   resume for a returning candidate precisely to avoid paying rebuild cost (and to preserve evidence).

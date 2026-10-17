@@ -1006,6 +1006,15 @@ _B6_MANDATORY = ("child_da", "trust_abuse", "parent_ea", "forest_persist", "cros
 _CAPSTONE_FAIL_CEILING = 94.9  # strictly below PASS_BAR (95.0)
 
 
+BOARD5_RUBRIC_VERSION = "b5-flat-v1"   # board 5 (Raider): flat points-weighted sum at the 95 bar
+
+
+def rubric_version(board):
+    """The versioned grading rubric id for a flag-capture board, bound into the attestation (§5).
+    Board 6 uses the capstone rubric; board 5 uses the flat points-weighted sum."""
+    return CAPSTONE_RUBRIC_VERSION if int(board) == 6 else BOARD5_RUBRIC_VERSION
+
+
 def capstone_rubric():
     """The versioned Board 6 capstone rubric, candidate-safe (no flags). Describes the mandatory
     end-to-end milestones and the critical-failure rule, so it can be shown in the mission brief and
