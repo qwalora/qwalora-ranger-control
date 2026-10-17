@@ -305,7 +305,7 @@ def register(app, candidate_model, db, helpers):
                 "scenario_ref": _schema.case_ref(_slug(c), CASE_BOARD, case.seed),
                 "scenario_version": case.scenario_version,
                 "rubric_version": case.rubric_version, "case_id": case.id,
-                "submitted_at": now_iso}
+                "attempt": case.attempt, "submitted_at": now_iso}
         record, sig = cc.preserve_and_sign(payload, reader, case.index_name, meta)
         if sub is None:
             sub = CaseSubmission(case_id=case.id, candidate_id=c.id, attempt=case.attempt,

@@ -34,9 +34,13 @@ import strata_catalog as cat
 from siem import authz, schema
 
 BOARD = 2
-# The fixed identifier of the per-index metadata document that stamps an index with the assignment
-# it was provisioned for. Lives in the candidate's own index (DLS-scoped), carries no truth.
-META_DOC_ID = "__ranger_qual_meta__"
+# Integrity metadata (fingerprint, variant/spec identity, completion state) lives in a PROTECTED
+# SYSTEM index, NOT in the candidate's own index. Its name is dotted and carries no cohort/slug/-b
+# segment, so it is not matched by any candidate role pattern (ranger-<cohort>-<slug>-b*) and cannot
+# be read by a candidate's scoped OpenSearch role at all - by document id, search, or any index API.
+# Only the broker (cluster admin) reads/writes it. This keeps variant ids and incident-family
+# metadata off every candidate-readable surface, enforced by authorization, not a frontend filter.
+SYSTEM_META_INDEX = ".ranger-qualmeta"
 DATA_PLANE = "qualification"
 
 
@@ -135,28 +139,61 @@ def resolve_assignment(db, candidate, *, attempt=1, cohort=None, rubric_version=
 
 
 # ------------------------------------------------------------------ world generation + truth -----
+def _resolve_pinned(assignment: Board2Assignment):
+    """Load the binding and return the integrity-verified PINNED generation inputs, validating that
+    the binding still matches the assignment's full identity. Generation parameters come ONLY from
+    the pinned ScenarioBinding.gen_contract (via strata_assignment.resolve, which verifies the keyed
+    contract MAC and fails closed on tamper/drift), never from live board_variants.gen_params."""
+    from models import ScenarioBinding
+    binding = ScenarioBinding.query.get(assignment.binding_id)
+    if binding is None:
+        raise Board2ProvisionError(f"pinned binding {assignment.binding_id} not found (fail closed)")
+    # the binding must match the assignment's candidate/board/scenario identity exactly
+    identity = {
+        "github_id": (binding.github_id, assignment.github_id),
+        "board": (int(binding.board), BOARD),
+        "attempt": (int(binding.attempt), int(assignment.attempt)),
+        "seed": (binding.seed, assignment.seed),
+        "spec_id": (binding.spec_id, assignment.spec_id),
+        "spec_version": (int(binding.spec_version), int(assignment.spec_version)),
+        "content_hash": (binding.content_hash, assignment.content_hash),
+        "variant_id": (binding.variant_id, assignment.variant_id),
+    }
+    mism = [k for k, (a, b) in identity.items() if a != b]
+    if mism:
+        raise Board2ProvisionError(f"pinned binding does not match assignment on {mism} (fail closed)")
+    try:
+        board, variant_id, seed, gp = asn.resolve(binding)   # verifies the pinned contract MAC
+    except asn.AssignmentError as e:
+        raise Board2ProvisionError(f"pinned contract failed integrity validation: {e}") from e
+    if board != BOARD or variant_id != assignment.variant_id or seed != assignment.seed:
+        raise Board2ProvisionError("resolved pinned contract disagrees with the assignment identity")
+    if "families" not in gp:
+        raise Board2ProvisionError("pinned contract carries no families for a board-2 scenario")
+    return binding, seed, gp
+
+
 def generate_world(assignment: Board2Assignment, *, candidate_id=None):
     """The pinned (events, truth) for an assignment. events carry NO truth labels and NO seed; truth
-    stays server-side for grading. Deterministic from the binding's pinned (variant, seed)."""
-    from siem import board_variants as bv
+    stays server-side for grading. The incident families + seed come from the integrity-verified
+    PINNED contract, so a variant edited after assignment cannot change an existing case's world."""
     from siem import enterprise
-    gp = bv.gen_params(BOARD, assignment.variant_id)
-    if gp is None:
-        raise Board2ProvisionError(f"variant {assignment.variant_id} unknown to the generator")
+    _binding, seed, gp = _resolve_pinned(assignment)
+    profile = gp.get("profile") or _profile()
     subject = candidate_id or assignment.github_id
-    events, truth = enterprise.generate(subject, BOARD, assignment.seed,
-                                        gp.get("profile", _profile()), families=gp["families"])
+    events, truth = enterprise.generate(subject, BOARD, seed, profile, families=gp["families"])
     return events, truth
 
 
 def _meta_doc(assignment: Board2Assignment, count: int, status: str) -> dict:
-    """The index stamp. Carries the fingerprint and identity, NEVER the seed or any truth. `_source`
-    shape is DLS-scoped to the candidate so their own role can read it."""
-    return {"_id": META_DOC_ID, "_source": {
-        "ranger": {"candidate_id": assignment.slug, "board": BOARD,
-                   "meta": True, "scenario_ref": schema.case_ref(assignment.slug, BOARD, assignment.seed)},
+    """The system-side index stamp, stored in SYSTEM_META_INDEX keyed by the qualification index
+    name. Carries the fingerprint + assignment identity (variant/spec/etc.), NEVER the seed or truth.
+    It is never written to the candidate index and is unreadable by any candidate role."""
+    return {"_id": assignment.index_name, "_source": {
+        "ranger": {"candidate_id": "__system__", "board": BOARD, "meta": True},
         "data": {"synthetic": True, "plane": DATA_PLANE, "meta": True},
-        "qual": {"fingerprint": assignment.dataset_fingerprint, "spec_id": assignment.spec_id,
+        "qual": {"index": assignment.index_name, "candidate": assignment.slug,
+                 "fingerprint": assignment.dataset_fingerprint, "spec_id": assignment.spec_id,
                  "spec_version": assignment.spec_version, "content_hash": assignment.content_hash,
                  "variant_id": assignment.variant_id, "attempt": assignment.attempt,
                  "cohort": assignment.cohort, "event_count": count, "status": status}}}
@@ -176,15 +213,10 @@ def _stamp_plane(events: list) -> list:
 
 
 def read_index_meta(cluster, index):
-    """Return the stored qual-meta for an index, or None. Uses the admin reader (the broker)."""
+    """Return the stored qual-meta for a qualification index from the PROTECTED system meta index, or
+    None. Read with the broker (admin) credential; candidates can never reach this index."""
     try:
-        if not cluster.index_exists(index):
-            return None
-    except Exception:  # noqa: BLE001
-        return None
-    # A direct _doc GET by the meta id.
-    try:
-        code, body = cluster._req("GET", f"/{index}/_doc/{META_DOC_ID}")
+        code, body = cluster._req("GET", f"/{SYSTEM_META_INDEX}/_doc/{index}")
         if code == 200 and isinstance(body, dict) and body.get("found"):
             return (body.get("_source") or {}).get("qual")
     except Exception:  # noqa: BLE001
@@ -205,32 +237,62 @@ def provision(cluster, assignment: Board2Assignment, *, batch=1000):
       * Never deletes or re-indexes an index that is not our own incomplete qualification index.
     Returns a dict describing what happened."""
     idx = assignment.index_name
-    existing_meta = read_index_meta(cluster, idx)
-    if existing_meta is not None:
-        if existing_meta.get("fingerprint") != assignment.dataset_fingerprint:
+    idx_exists = cluster.index_exists(idx)
+    meta = read_index_meta(cluster, idx)
+
+    # Fail-closed classification. An index is only ours if the PROTECTED system meta says so and its
+    # fingerprint matches; an unknown pre-existing index is never proof of ownership.
+    if meta is not None:
+        if meta.get("fingerprint") != assignment.dataset_fingerprint:
             raise Board2ProvisionError(
-                f"index {idx} already holds a DIFFERENT assignment "
-                f"(stored fp {str(existing_meta.get('fingerprint'))[:12]} != "
-                f"{assignment.dataset_fingerprint[:12]}); refusing to reuse or overwrite")
-        if existing_meta.get("status") == "complete":
-            return {"index": idx, "action": "reused", "event_count": existing_meta.get("event_count")}
-        # same assignment, but a prior ingest did not complete -> converge (idempotent upsert).
+                f"index {idx} is claimed by a DIFFERENT assignment "
+                f"(stored fp {str(meta.get('fingerprint'))[:12]} != "
+                f"{assignment.dataset_fingerprint[:12]}); refusing (no write/delete/reindex)")
+        status = meta.get("status")
+        if status == "complete":
+            # verify the document inventory before trusting reuse; a count mismatch = corrupted.
+            expected = int(meta.get("event_count") or -1)
+            try:
+                actual = int(cluster.count(idx))     # broker count, no candidate scoping
+            except Exception as e:  # noqa: BLE001
+                raise Board2ProvisionError(f"cannot verify inventory of {idx}: {e}")
+            if expected < 0 or actual != expected:
+                raise Board2ProvisionError(
+                    f"index {idx} completion record is corrupted "
+                    f"(expected {expected} docs, found {actual}); refusing to reuse")
+            return {"index": idx, "action": "reused", "event_count": expected}
+        if status != "incomplete":
+            raise Board2ProvisionError(
+                f"index {idx} has a corrupted completion state {status!r}; refusing")
+        # verified same-assignment INCOMPLETE -> safe to converge (idempotent upsert).
+    elif idx_exists:
+        # index exists but NO system meta claims it -> unknown/foreign. Do not touch it.
+        raise Board2ProvisionError(
+            f"index {idx} already exists but is not claimed by any S5 assignment "
+            f"(no system meta); refusing to write, delete or re-index an unknown index")
 
     events, _truth = generate_world(assignment)
     indexed = _stamp_plane(events)
 
+    # mark the claim as INCOMPLETE in the system meta BEFORE ingesting, so a crash mid-ingest leaves
+    # a verifiable same-assignment incomplete index (retryable) rather than an unknown one.
+    cluster.create_index(SYSTEM_META_INDEX)
+    cluster.bulk_index(SYSTEM_META_INDEX, [_meta_doc(assignment, len(indexed), "incomplete")])
     if not cluster.index_exists(idx):
         cluster.create_index(idx, schema.INDEX_MAPPING)
-    # ingest in batches; bulk upsert by _id makes a retried/partial ingest converge.
-    total = 0
     for i in range(0, len(indexed), batch):
         res = cluster.bulk_index(idx, indexed[i:i + batch])
         if isinstance(res, dict) and res.get("errors"):
             raise Board2ProvisionError(f"bulk ingest into {idx} reported errors: {res}")
-        total += len(indexed[i:i + batch])
-    # write the completion stamp LAST so an interrupted run is detectable and converges on retry.
-    cluster.bulk_index(idx, [_meta_doc(assignment, len(indexed), "complete")])
     cluster.refresh(idx)
+    # confirm the full inventory landed, then stamp complete LAST.
+    actual = int(cluster.count(idx))
+    if actual != len(indexed):
+        raise Board2ProvisionError(
+            f"ingest into {idx} is incomplete ({actual}/{len(indexed)}); left claim incomplete "
+            f"for a safe retry")
+    cluster.bulk_index(SYSTEM_META_INDEX, [_meta_doc(assignment, len(indexed), "complete")])
+    cluster.refresh(SYSTEM_META_INDEX)
     return {"index": idx, "action": "provisioned", "event_count": len(indexed)}
 
 

@@ -22,6 +22,9 @@ os.environ.setdefault("SECRET_KEY", "s5")
 os.environ.setdefault("DEFAULT_COHORT", "2026-A")
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["RANGER_B2_PROFILE"] = "A"      # fast, approved TEST profile; real qual = Profile B
+# this process is an explicitly-permitted ISOLATED TEST env for Board 2 qualification (never prod)
+os.environ["RANGER_ALLOW_TEST_QUAL"] = "1"
+os.environ.pop("RANGER_ENV", None)
 
 import json as _json  # noqa: E402
 
@@ -52,7 +55,7 @@ def _app():
             db.session.add(Cohort(name=nm, pathway="strata", status="active"))
     admin = AdminUser(github_id="gid-admin", login="alice", role="reviewer")
     db.session.add(admin); db.session.commit()
-    for e in cat.register_all(db):
+    for e in cat.register_all(db, boards=(2,)):   # S5 exercises Board 2 only; keep setup fast
         cat.approve(db, e, admin)
     db.session.commit()
     for cohort, variants in COHORTS.items():
@@ -77,10 +80,7 @@ def _submit_signed(db, c, assignment, cluster, payload, *, status="submitted", a
     """Create a signed CaseSubmission bound to the assignment, as the real /case submit path does."""
     from models import Case, CaseSubmission
     reader = _reader(cluster)
-    meta = {"candidate": assignment.slug, "board": 2, "cohort": assignment.cohort,
-            "scenario_ref": b2.schema.case_ref(assignment.slug, 2, assignment.seed),
-            "submitted_at": "2026-03-02T00:00:00Z"}
-    record, sig = cc.preserve_and_sign(payload, reader, assignment.index_name, meta)
+    # create/pin the case FIRST so the signed record can bind its id (mirrors the real submit path)
     case = Case.query.filter_by(candidate_id=c.id, board=2, plane="qualification").first()
     if case is None:
         case = Case(candidate_id=c.id, board=2, cohort=assignment.cohort, plane="qualification",
@@ -92,6 +92,11 @@ def _submit_signed(db, c, assignment, cluster, payload, *, status="submitted", a
     else:
         case.status = status
     db.session.commit()
+    meta = {"candidate": assignment.slug, "board": 2, "cohort": assignment.cohort,
+            "scenario_ref": b2.schema.case_ref(assignment.slug, 2, assignment.seed),
+            "case_id": case.id, "attempt": attempt, "scenario_version": assignment.spec_version,
+            "rubric_version": cc.RUBRIC_VERSION, "submitted_at": "2026-03-02T00:00:00Z"}
+    record, sig = cc.preserve_and_sign(payload, reader, assignment.index_name, meta)
     sub = CaseSubmission(case_id=case.id, candidate_id=c.id, attempt=attempt,
                          submission_status=status, rubric_version=cc.RUBRIC_VERSION,
                          payload=_json.dumps(payload),
@@ -379,18 +384,27 @@ def test_two_cohorts_materially_different_and_isolated():
 # =============================================================================================
 # 3/10. Provisioning integrity + safe failure.
 # =============================================================================================
-def test_provision_idempotent_and_refuses_foreign_index():
+def test_provision_idempotent_and_refuses_foreign_and_unknown_index():
     application, db, ctx, admin = _app()
     try:
         c = _cand(db, "prov", "2026-A")
         a = b2.resolve_assignment(db, c); cluster = FakeCluster()
         r1 = b2.provision(cluster, a); r2 = b2.provision(cluster, a)
         assert r1["action"] == "provisioned" and r2["action"] == "reused"
-        # forge a DIFFERENT assignment's fingerprint into the same index -> provision must refuse
+        # FOREIGN: a different assignment's fingerprint claims the same index name -> refuse
         import dataclasses
         foreign = dataclasses.replace(a, dataset_fingerprint="f" * 64)
         with pytest.raises(b2.Board2ProvisionError):
             b2.provision(cluster, foreign)
+        # UNKNOWN: an index that exists with NO system-meta claim is never assumed ours -> refuse,
+        # and provisioning must not have written to it.
+        c2 = _cand(db, "prov2", "2026-A")
+        a2 = b2.resolve_assignment(db, c2)
+        cluster.create_index(a2.index_name)
+        cluster.bulk_index(a2.index_name, [{"_id": "x", "_source": {"junk": True}}])
+        with pytest.raises(b2.Board2ProvisionError):
+            b2.provision(cluster, a2)
+        assert cluster.count(a2.index_name) == 1   # untouched (only the pre-existing junk doc)
     finally:
         ctx.pop()
 
@@ -400,16 +414,37 @@ def test_provision_converges_after_interrupted_ingest():
     try:
         c = _cand(db, "retry", "2026-A")
         a = b2.resolve_assignment(db, c); cluster = FakeCluster()
-        # simulate an interrupted ingest: create the index + a few events, NO completion meta
+        # a PROPER interruption: the incomplete system-meta claim is written + a partial batch, as
+        # provision() itself would leave on a crash (a verified same-assignment incomplete index).
         events, _t = b2.generate_world(a)
+        indexed = b2._stamp_plane(events)
+        cluster.create_index(b2.SYSTEM_META_INDEX)
+        cluster.bulk_index(b2.SYSTEM_META_INDEX, [b2._meta_doc(a, len(indexed), "incomplete")])
         cluster.create_index(a.index_name)
-        cluster.bulk_index(a.index_name, b2._stamp_plane(events[:50]))
-        assert b2.read_index_meta(cluster, a.index_name) is None   # incomplete
-        # a normal provision converges to the full, complete world (idempotent upsert)
+        cluster.bulk_index(a.index_name, indexed[:50])
+        m0 = b2.read_index_meta(cluster, a.index_name)
+        assert m0["status"] == "incomplete" and m0["fingerprint"] == a.dataset_fingerprint
+        # re-provision converges to the full, complete world (idempotent upsert)
         r = b2.provision(cluster, a)
-        assert r["action"] == "provisioned"
+        assert r["action"] == "provisioned" and cluster.count(a.index_name) == len(indexed)
         meta = b2.read_index_meta(cluster, a.index_name)
         assert meta["status"] == "complete" and meta["fingerprint"] == a.dataset_fingerprint
+    finally:
+        ctx.pop()
+
+
+def test_provision_rejects_corrupted_completion_record():
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "corrupt", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster()
+        b2.provision(cluster, a)
+        # corrupt the completion inventory: claim more docs than the index actually holds
+        cluster.create_index(b2.SYSTEM_META_INDEX)
+        bad = b2._meta_doc(a, 999999, "complete")
+        cluster.bulk_index(b2.SYSTEM_META_INDEX, [bad])
+        with pytest.raises(b2.Board2ProvisionError):
+            b2.provision(cluster, a)
     finally:
         ctx.pop()
 
@@ -476,6 +511,263 @@ def test_fingerprint_binds_full_identity_not_just_params():
 
 
 # =============================================================================================
+# Integrity-closure regressions (gaps 1,2,3,5) + full HTTP chain (gap 6).
+# =============================================================================================
+def test_gap1_pinned_contract_survives_variant_revision():
+    """generate_world uses the PINNED contract, so a variant edited after assignment does not change
+    an existing case's telemetry or truth; a tampered pinned contract fails closed."""
+    application, db, ctx, admin = _app()
+    try:
+        from siem import board_variants as bv
+        from models import ScenarioBinding
+        c = _cand(db, "pin1", "2026-A")
+        a = b2.resolve_assignment(db, c)
+        e0, t0 = b2.generate_world(a)
+        ids0 = [e["_id"] for e in e0]; fams0 = [i["family"] for i in t0["incidents"]]
+        # revise the LIVE variant's families after assignment
+        vid = a.variant_id
+        orig = bv.VARIANTS[2][vid]["gen_params"]
+        bv.VARIANTS[2][vid]["gen_params"] = {**orig, "families": ["detection-failure",
+                                                                  "data-exfiltration"]}
+        try:
+            e1, t1 = b2.generate_world(a)   # still the pinned world
+            assert [e["_id"] for e in e1] == ids0
+            assert [i["family"] for i in t1["incidents"]] == fams0
+        finally:
+            bv.VARIANTS[2][vid]["gen_params"] = orig
+        # a tampered pinned contract fails closed
+        b = ScenarioBinding.query.get(a.binding_id)
+        gc = _json.loads(b.gen_contract); gc["gen_params"]["families"] = ["detection-failure"]
+        b.gen_contract = _json.dumps(gc); db.session.commit()
+        with pytest.raises(b2.Board2ProvisionError):
+            b2.generate_world(a)
+    finally:
+        ctx.pop()
+
+
+def test_gap2_payload_modified_after_signing_fails_closed():
+    """Editing the stored payload (conclusions/timeline/citations) after signing - without touching
+    the signed evidence record - must make qualification fail closed (full-payload digest)."""
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "pay", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        payload = _correct_submission(a, cluster)
+        case, sub = _submit_signed(db, c, a, cluster, payload)
+        # tamper ONLY the stored payload (conclusion), leave the signed evidence_record intact
+        tampered = _json.loads(sub.payload)
+        tampered["overall_conclusion"] = "actually there was no incident"
+        tampered["incidents"][0]["analyst_conclusion"] = "benign"
+        sub.payload = _json.dumps(tampered); db.session.commit()
+        with pytest.raises(sq.QualificationEvidenceError):
+            sq.decide(db, case, sub, a, _reader(cluster), principal=admin,
+                      mode="authorized", activation=_test_activation())
+    finally:
+        ctx.pop()
+
+
+def test_gap2_record_case_or_version_mismatch_fails_closed():
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "mism", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        case, sub = _submit_signed(db, c, a, cluster, _correct_submission(a, cluster))
+        # decide against an assignment whose scenario_version differs from the signed record
+        import dataclasses
+        wrong = dataclasses.replace(a, spec_version=a.spec_version + 1)
+        with pytest.raises(sq.QualificationEvidenceError):
+            sq.decide(db, case, sub, wrong, _reader(cluster), principal=admin,
+                      mode="authorized", activation=_test_activation())
+    finally:
+        ctx.pop()
+
+
+def test_gap3_candidate_role_cannot_read_variant_or_fingerprint():
+    """The candidate's own scoped OpenSearch role cannot read the integrity metadata (variant/spec/
+    fingerprint/family) by document id, search, or index API - it lives in a protected system index
+    outside the candidate role pattern, and the candidate index carries none of it."""
+    application, db, ctx, admin = _app()
+    try:
+        from siem.live import AuthzError
+        c = _cand(db, "dls", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        # provision the candidate's scoped role exactly as the gateway does
+        role = "cand_" + a.slug
+        cluster.put_role(role, [b2.authz.candidate_index_pattern(a.cohort, a.slug)],
+                         dls={"ranger.candidate_id": a.slug})
+        cluster.put_rolesmapping(role, users=[a.slug])
+        auth = (a.slug, "pw")
+        # (a) the candidate index holds ONLY their events, none carrying variant/spec/fingerprint, and
+        # no qual-metadata document (events legitimately carry data.plane="qualification").
+        docs = cluster.search(a.index_name, auth=auth)
+        blob = _json.dumps(docs)
+        assert a.variant_id not in blob, "variant id leaked into candidate-readable events"
+        assert a.spec_id not in blob, "spec id leaked into candidate-readable events"
+        assert a.dataset_fingerprint not in blob, "fingerprint leaked into candidate-readable events"
+        for d in docs:
+            assert "qual" not in d, "qual metadata block present in a candidate event"
+            assert not (d.get("ranger") or {}).get("meta"), "meta doc readable by the candidate"
+        # (b) the protected system meta index is NOT in the candidate role pattern -> 403 on read
+        with pytest.raises(AuthzError):
+            cluster.search(b2.SYSTEM_META_INDEX, auth=auth)
+        # (c) a direct _doc GET of the meta (by the index-name id) through the candidate scope: the
+        # candidate cannot address the system index, and the candidate index has no such doc
+        assert a.variant_id not in _json.dumps(cluster.dump(a.index_name))
+        # the broker CAN read the protected meta (server-side only)
+        meta = b2.read_index_meta(cluster, a.index_name)
+        assert meta["variant_id"] == a.variant_id and meta["fingerprint"] == a.dataset_fingerprint
+    finally:
+        ctx.pop()
+
+
+def test_gap5_activation_and_principal_hardening():
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "act", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        case, sub = _submit_signed(db, c, a, cluster, _correct_submission(a, cluster))
+        reader = _reader(cluster)
+        # a test activation is refused when the permitted-test flag is absent
+        os.environ.pop("RANGER_ALLOW_TEST_QUAL", None)
+        try:
+            with pytest.raises(sq.QualificationNotActivated):
+                sq.decide(db, case, sub, a, reader, principal=admin,
+                          mode="authorized", activation=_test_activation())
+        finally:
+            os.environ["RANGER_ALLOW_TEST_QUAL"] = "1"
+        # a production activation fails closed when RANGER_ENV is missing/unrecognized
+        prod_act = sq.build_activation(cc.RUBRIC_VERSION, approved_by="alice", environment="production",
+                                       deployment_id="dep-1", calibration_ref="c", shadow_run_ref="s")
+        os.environ.pop("RANGER_ENV", None)
+        with pytest.raises(sq.QualificationNotActivated):
+            sq.decide(db, case, sub, a, reader, principal=admin, mode="authorized", activation=prod_act)
+        # a service principal without a valid token is rejected (no bare {service, trusted})
+        os.environ.pop("RANGER_EVALUATOR_TOKEN", None)
+        with pytest.raises(sq.QualificationAuthError):
+            sq.decide(db, case, sub, a, reader,
+                      principal={"service": "x", "trusted": True}, mode="proposed")
+        # with a configured service token, the service identity is accepted
+        os.environ["RANGER_EVALUATOR_TOKEN"] = "svc-secret"
+        try:
+            d = sq.decide(db, case, sub, a, reader,
+                          principal={"service": "evaluator", "token": "svc-secret"}, mode="proposed")
+            assert d.mode == "proposed"
+        finally:
+            os.environ.pop("RANGER_EVALUATOR_TOKEN", None)
+    finally:
+        ctx.pop()
+
+
+def test_gap6_full_candidate_to_reviewer_http_chain():
+    """The complete HTTP chain: candidate session -> /soc/launch (binding provisioning) -> query own
+    telemetry -> /case -> draft -> verify -> /case/<id>/submit (signed) -> reviewer qualify route
+    (test-only authorized award) -> report approval -> Board 2 clearance -> exactly-once promotion.
+    Only infrastructure boundaries are injected (OpenSearch double); candidate+reviewer HTTP behavior
+    is exercised, not bypassed."""
+    import base64
+    import case_routes as _cr
+    import soc_gateway as _soc
+    cluster = FakeCluster()
+    # a real RSA PEM so the gateway's JWT mint works (the Dashboards HTTP call then fails and is
+    # swallowed as best-effort); the key is ephemeral and test-only.
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization as _ser
+    _pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        _ser.Encoding.PEM, _ser.PrivateFormat.TraditionalOpenSSL, _ser.NoEncryption())
+    # the /soc test-login route and the gateway are registered from env AT create_app() time, so set
+    # every flag BEFORE building the app.
+    flags = {"RANGER_CASE_UI": "1", "RANGER_B2_BINDING": "1", "RANGER_B2_QUAL_UI": "1",
+             "RANGER_SOC_TEST_KEY": "soc-test-key",
+             "RANGER_JWT_PRIVATE_B64": base64.b64encode(_pem).decode(),
+             "OPENSEARCH_ADMIN_PASSWORD": "x",
+             "RANGER_B2_QUAL_ACTIVATION": base64.b64encode(
+                 _json.dumps(_test_activation()).encode()).decode()}
+    saved = {k: os.environ.get(k) for k in flags}
+    os.environ.update(flags)
+    import app as appmod
+    from models import db, Candidate, Case, CaseSubmission, BoardResult, QualificationDecision
+    from models import AdminUser, Cohort
+    application = appmod.create_app()
+    ctx = application.app_context(); ctx.push()
+    _soc.set_cluster_factory(lambda: cluster)
+    _cr.set_reader_factory(lambda case: _reader(cluster))
+    try:
+        db.create_all()
+        if not Cohort.query.filter_by(name="2026-A").first():
+            db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
+        ad = AdminUser(github_id="gid-admin", login="alice", role="reviewer")
+        db.session.add(ad); db.session.commit()
+        for e in cat.register_all(db, boards=(2,)):
+            cat.approve(db, e, ad)
+        db.session.commit()
+        asn.set_cohort_portfolio(db, "2026-A", 2, COHORTS["2026-A"], admin=ad)
+        # pre-create the candidate (name/email) so the test-login route reuses it
+        cand = Candidate(handle="chain", name="chain", email="chain@e", cohort="2026-A",
+                         github_id="test-chain", status="active", current_board=2, token="tok-chain")
+        db.session.add(cand); db.session.commit()
+        client = application.test_client()
+        # 1. authorized candidate session (test-only bootstrap, still authorized on every request)
+        r = client.get("/soc-test/login?key=soc-test-key&cand=chain", follow_redirects=False)
+        assert r.status_code in (301, 302)
+        cand = Candidate.query.filter_by(handle="chain").first()
+        cand.cohort = "2026-A"; db.session.commit()
+        # 2. /soc/launch provisions through the S5 binding into the qualification index
+        r = client.get("/soc/launch", follow_redirects=False)
+        assert r.status_code in (301, 302), r.data
+        a = b2.resolve_assignment(db, Candidate.query.get(cand.id))
+        assert cluster.index_exists(a.index_name) and cluster.count(a.index_name) > 100
+        # 3. candidate queries their OWN telemetry through their scoped role (isolation holds).
+        # The gateway maps the role to the candidate's OpenSearch user (cand_<slug>).
+        cand_user = b2.authz.user_name(a.slug)
+        assert cluster.count(a.index_name, auth=(cand_user, "pw")) > 0
+        # 4. /case assignment pinned to the binding
+        r = client.get("/case"); assert r.status_code == 200
+        case = Case.query.filter_by(candidate_id=cand.id, board=2).first()
+        assert case.binding_id == a.binding_id and case.index_name == a.index_name
+        # 5-7. draft -> verify -> submit (signed) through the real routes
+        with client.session_transaction() as s:
+            s["csrf"] = "t"
+        hdr = {"X-CSRF-Token": "t", "Content-Type": "application/json"}
+        events, truth = b2.generate_world(a)
+        payload = b2.board2_reference_submission(events, truth, a.index_name)
+        client.get(f"/case/{case.id}")   # move to investigating
+        rd = client.post(f"/case/{case.id}/draft", data=_json.dumps(payload), headers=hdr)
+        assert rd.status_code == 200, rd.data
+        rv = client.post(f"/case/{case.id}/verify", data=_json.dumps(payload), headers=hdr)
+        assert rv.status_code == 200, rv.data
+        rs = client.post(f"/case/{case.id}/submit", data=_json.dumps(payload), headers=hdr)
+        assert rs.status_code == 200, rs.data
+        sub = CaseSubmission.query.filter_by(case_id=case.id).order_by(
+            CaseSubmission.id.desc()).first()
+        assert sub.evidence_sig
+        # 8-9. reviewer evaluates through the actual protected route (test-only authorized award)
+        with client.session_transaction() as s:
+            s.clear(); s["admin"] = True; s["admin_gid"] = ad.github_id; s["csrf"] = "t"
+        rq = client.post(f"/admin/cases/submission/{sub.id}/qualify", headers={"X-CSRF-Token": "t"})
+        qb = rq.get_json()
+        assert rq.status_code == 200, qb
+        assert qb["mode"] == "authorized" and qb["awarded_objective"] is True and qb["passed"]
+        # objective recorded, but NOT yet promoted (report approval still required)
+        assert Candidate.query.get(cand.id).current_board == 2
+        # 10. separate human report approval
+        br = BoardResult.query.filter_by(candidate_id=cand.id, board=2).first()
+        br.report_status = "approved"; db.session.add(br); db.session.commit()
+        # 11-12. re-run qualify (idempotent) -> gate now promotes exactly once
+        rq2 = client.post(f"/admin/cases/submission/{sub.id}/qualify", headers={"X-CSRF-Token": "t"})
+        assert rq2.status_code == 200
+        assert Candidate.query.get(cand.id).current_board == 3
+        assert QualificationDecision.query.filter_by(case_id=case.id, mode="authorized").count() == 1
+    finally:
+        _soc.set_cluster_factory(None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        ctx.pop()
+
+
+# =============================================================================================
 # 10. Reviewer/evaluator concurrency - against REAL PostgreSQL (skips if none authorized).
 # =============================================================================================
 def test_concurrent_authorized_decision_is_idempotent_postgres():
@@ -483,6 +775,7 @@ def test_concurrent_authorized_decision_is_idempotent_postgres():
     ok, reason = _pgtest.authorization_status()
     if not ok:
         pytest.skip(f"no authorized PG test server: {reason}")
+    os.environ["RANGER_EVALUATOR_TOKEN"] = "svc-secret-" + os.urandom(4).hex()
     import app as appmod
     from models import (db, ensure_schema, AdminUser, Cohort, Candidate, Case, CaseSubmission,
                         QualificationDecision, BoardResult)
@@ -495,7 +788,7 @@ def test_concurrent_authorized_decision_is_idempotent_postgres():
                 db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
             admin = AdminUser(github_id="gid-admin", login="alice", role="reviewer")
             db.session.add(admin); db.session.commit()
-            for e in cat.register_all(db):
+            for e in cat.register_all(db, boards=(2,)):
                 cat.approve(db, e, admin)
             db.session.commit()
             asn.set_cohort_portfolio(db, "2026-A", 2, COHORTS["2026-A"], admin=admin)
@@ -518,7 +811,8 @@ def test_concurrent_authorized_decision_is_idempotent_postgres():
                     ca = Candidate.query.get(cid)
                     asg = b2.resolve_assignment(db, ca)
                     d = sq.decide(db, cs, su, asg, LiveReader(cluster),
-                                  principal={"service": "test-evaluator", "trusted": True},
+                                  principal={"service": "test-evaluator",
+                                             "token": os.environ["RANGER_EVALUATOR_TOKEN"]},
                                   mode="authorized", activation=act)
                     results.append(d.id)
                 except Exception as e:  # noqa

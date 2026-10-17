@@ -89,8 +89,20 @@ def _ca_path():
     return p
 
 
+_cluster_factory = None
+
+
+def set_cluster_factory(fn):
+    """Test-only: inject the broker cluster (e.g. an in-process OpenSearch double) instead of a live
+    LiveCluster. Never used in production, where the real admin credential builds a LiveCluster."""
+    global _cluster_factory
+    _cluster_factory = fn
+
+
 def _admin_cluster():
     """Broker identity (portal holds the OpenSearch admin credential)."""
+    if _cluster_factory is not None:
+        return _cluster_factory()
     return LiveCluster(OS_URL, os.environ.get("OPENSEARCH_ADMIN_USER", "admin"),
                        os.environ["OPENSEARCH_ADMIN_PASSWORD"], ca_path=_ca_path(), timeout=30)
 
