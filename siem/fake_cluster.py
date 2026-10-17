@@ -163,13 +163,20 @@ class FakeCluster:
     # --- transport shim (_req) used by strata_board2.read_index_meta and the case_routes LiveReader ---
     def _req(self, method, path, body=None, auth=None, ndjson=False, bearer=None, timeout=None):
         parts = path.strip("/").split("/")
-        # GET /{index}/_doc/{id}
+        # GET /{index}/_doc/{id} - enforce the SAME scoped-role + DLS authorization as search. A
+        # direct document read is not a bypass: an unauthorized candidate is denied (AuthzError, as
+        # the real Security plugin returns 403), and a document outside the role's DLS term is hidden
+        # (404), while the broker admin reads unrestricted.
         if method == "GET" and len(parts) == 3 and parts[1] == "_doc":
             index, _id = parts[0], parts[2]
+            dls = self._authorize_read(index, auth)   # raises AuthzError if the role may not read it
             src = self._idx.get(index, {}).get(_id)
             if src is None:
                 return 404, {"found": False}
-            # admin read of a specific doc (meta). DLS not applied to admin.
+            if dls:
+                f, v = next(iter(dls.items()))
+                if _get(src, f) != v:
+                    return 404, {"found": False}       # DLS hides a document outside the term
             return 200, {"found": True, "_id": _id, "_source": src}
         # GET /{index}/_search
         if method == "GET" and len(parts) == 2 and parts[1] == "_search":

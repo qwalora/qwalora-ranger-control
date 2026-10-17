@@ -443,3 +443,48 @@ def verify_decision(decision) -> bool:
         return signing.verify(json.loads(decision.decision_record), decision.decision_sig)
     except Exception:  # noqa: BLE001
         return False
+
+
+def verify_authorized_clearance(db, candidate, *, attempt=None):
+    """The SHARED Board 2 promotion boundary. Returns (ok, reason). True only when there is an
+    authorized, signed, passing QualificationDecision for the candidate's Board 2 case whose
+    candidate/case/attempt/scenario/rubric identity AND signed underlying submission still validate -
+    so NO promotion path (the qualify route or report approval) may clear Board 2 on
+    BoardResult.objective_passed alone. This re-runs the same source + identity checks decide() uses,
+    so a submission altered after a valid award, or a decision that no longer matches the pinned
+    scenario, fails closed. It never re-grades and never re-awards."""
+    from models import Case, CaseSubmission, QualificationDecision
+    board = b2.BOARD
+    case = (Case.query.filter_by(candidate_id=candidate.id, board=board, plane="qualification")
+            .order_by(Case.attempt.desc()).first())
+    if case is None:
+        return False, "no qualification case"
+    try:
+        assignment = b2.resolve_assignment(db, candidate, attempt=case.attempt)
+    except b2.Board2AssignmentError as e:
+        return False, f"assignment invalid: {e}"
+    if case.binding_id != assignment.binding_id:
+        return False, "case is not pinned to the resolved binding"
+    sub = (CaseSubmission.query.filter_by(case_id=case.id, attempt=case.attempt)
+           .order_by(CaseSubmission.id.desc()).first())
+    if sub is None:
+        return False, "no submission"
+    decision = QualificationDecision.query.filter_by(
+        case_id=case.id, attempt=case.attempt, submission_id=sub.id,
+        rubric_version=case.rubric_version, mode="authorized").first()
+    if decision is None:
+        return False, "no authorized decision for the current submission"
+    if not (decision.passed and decision.awarded_objective):
+        return False, "authorized decision did not pass / award"
+    if not verify_decision(decision):
+        return False, "authorized decision signature is invalid"
+    if (decision.scenario_fingerprint != assignment.dataset_fingerprint
+            or decision.content_hash != assignment.content_hash
+            or decision.variant_id != assignment.variant_id):
+        return False, "authorized decision pins a different scenario than the current assignment"
+    try:
+        _check_case_binding(case, assignment, case.rubric_version)
+        _check_submission_binding(sub, case, assignment, case.rubric_version)
+    except QualificationError as e:
+        return False, f"source re-validation failed: {e}"
+    return True, "ok"

@@ -685,13 +685,17 @@ def test_gap3_candidate_role_cannot_read_variant_or_fingerprint():
         for d in docs:
             assert "qual" not in d, "qual metadata block present in a candidate event"
             assert not (d.get("ranger") or {}).get("meta"), "meta doc readable by the candidate"
-        # (b) the protected system meta index is NOT in the candidate role pattern -> 403 on read
+        # (b) the protected system meta index is NOT in the candidate role pattern -> 403 on SEARCH
         with pytest.raises(AuthzError):
             cluster.search(b2.SYSTEM_META_INDEX, auth=auth)
-        # (c) a direct _doc GET of the meta (by the index-name id) through the candidate scope: the
-        # candidate cannot address the system index, and the candidate index has no such doc
-        assert a.variant_id not in _json.dumps(cluster.dump(a.index_name))
-        # the broker CAN read the protected meta (server-side only)
+        # (c) a direct _doc GET of the meta (by the index-name id) under the candidate's scoped role
+        # is ALSO denied (not just search); the candidate must not read the protected metadata.
+        with pytest.raises(AuthzError):
+            cluster._req("GET", f"/{b2.SYSTEM_META_INDEX}/_doc/{a.index_name}", auth=auth)
+        # a _doc GET of the candidate's OWN index for the meta id returns not-found (no meta there)
+        code, body = cluster._req("GET", f"/{a.index_name}/_doc/__ranger_qual_meta__", auth=auth)
+        assert code == 404 and not body.get("found")
+        # the broker (admin) CAN read the protected meta server-side
         meta = b2.read_index_meta(cluster, a.index_name)
         assert meta["variant_id"] == a.variant_id and meta["fingerprint"] == a.dataset_fingerprint
     finally:
@@ -847,6 +851,157 @@ def test_gap6_full_candidate_to_reviewer_http_chain():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        ctx.pop()
+
+
+def test_gapf1_shared_promotion_gate_report_route():
+    """The report-approval route (/admin/reports/<id>) shares the promotion boundary with the qualify
+    route. (A) a submission altered after a valid award -> approving the report does NOT clear Board 2;
+    (B) an intact award -> approving the report promotes to Board 3 exactly once; (missing) objective
+    credit without a valid signed decision does not promote."""
+    import base64
+    import case_routes as _cr
+    import soc_gateway as _soc
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization as _ser
+    cluster = FakeCluster()
+    _pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        _ser.Encoding.PEM, _ser.PrivateFormat.TraditionalOpenSSL, _ser.NoEncryption())
+    flags = {"RANGER_CASE_UI": "1", "RANGER_B2_BINDING": "1", "RANGER_B2_QUAL_UI": "1",
+             "RANGER_SOC_TEST_KEY": "soc-test-key", "ADMIN_TOKEN": "test-admin-token",
+             "RANGER_JWT_PRIVATE_B64": base64.b64encode(_pem).decode(),
+             "OPENSEARCH_ADMIN_PASSWORD": "x",
+             "RANGER_B2_QUAL_ACTIVATION": base64.b64encode(
+                 _json.dumps(_test_activation()).encode()).decode()}
+    saved = {k: os.environ.get(k) for k in flags}
+    os.environ.update(flags)
+    import app as appmod
+    import program as P
+    from models import (db, Candidate, Case, CaseSubmission, BoardResult, Report, AdminUser, Cohort)
+    application = appmod.create_app()
+    ctx = application.app_context(); ctx.push()
+    _soc.set_cluster_factory(lambda: cluster)
+    _cr.set_reader_factory(lambda case: _reader(cluster))
+
+    def _award(handle, *, alter=False, award=True):
+        """Drive a candidate through the HTTP chain to an awarded objective decision; return (cand,
+        sub). If alter, mutate the stored payload after the award. If not award, skip the qualify
+        step (objective stays unearned)."""
+        cand = Candidate(handle=handle, name=handle, email=f"{handle}@e", cohort="2026-A",
+                         github_id="test-" + handle, status="active", current_board=2,
+                         token="tok-" + handle)
+        db.session.add(cand); db.session.commit()
+        cl = application.test_client()
+        cl.get(f"/soc-test/login?key=soc-test-key&cand={handle}")
+        cl.get("/soc/launch")
+        a = b2.resolve_assignment(db, Candidate.query.get(cand.id))
+        with cl.session_transaction() as s:
+            s["csrf"] = "t"
+        hdr = {"X-CSRF-Token": "t", "Content-Type": "application/json"}
+        cl.get("/case")
+        case = Case.query.filter_by(candidate_id=cand.id, board=2).first()
+        events, truth = b2.generate_world(a)
+        payload = b2.board2_reference_submission(events, truth, a.index_name)
+        cl.get(f"/case/{case.id}")
+        cl.post(f"/case/{case.id}/draft", data=_json.dumps(payload), headers=hdr)
+        cl.post(f"/case/{case.id}/submit", data=_json.dumps(payload), headers=hdr)
+        sub = CaseSubmission.query.filter_by(case_id=case.id).order_by(
+            CaseSubmission.id.desc()).first()
+        if award:
+            with cl.session_transaction() as s:
+                s.clear(); s["admin"] = True; s["admin_gid"] = "gid-admin"; s["csrf"] = "t"
+            rq = cl.post(f"/admin/cases/submission/{sub.id}/qualify", headers={"X-CSRF-Token": "t"})
+            assert rq.get_json()["awarded_objective"] is True, rq.get_json()
+        else:
+            # simulate a stale objective_passed with NO valid decision (must not be trusted)
+            br = BoardResult.query.filter_by(candidate_id=cand.id, board=2).first() or \
+                BoardResult(candidate_id=cand.id, board=2)
+            br.objective_passed = True; br.objective_score = 100.0
+            db.session.add(br); db.session.commit()
+        if alter:
+            tam = _json.loads(sub.payload); tam["overall_conclusion"] = "no incident"
+            sub.payload = _json.dumps(tam); db.session.commit()
+        return cand, case, sub
+
+    def _approve_report(cand):
+        r = Report(candidate_id=cand.id, board=P.bstr(2), role=P.role_of(2),
+                   body="investigation report", status="pending")
+        db.session.add(r); db.session.commit()
+        cl = application.test_client()
+        with cl.session_transaction() as s:
+            s["admin"] = True; s["admin_gid"] = "gid-admin"; s["csrf"] = "t"
+        return cl.post(f"/admin/reports/{r.id}", data={"action": "approve", "csrf": "t"},
+                       headers={"X-CSRF-Token": "t"})
+
+    try:
+        db.create_all()
+        if not Cohort.query.filter_by(name="2026-A").first():
+            db.session.add(Cohort(name="2026-A", pathway="strata", status="active"))
+        ad = AdminUser(github_id="gid-admin", login="alice", role="reviewer")
+        db.session.add(ad); db.session.commit()
+        for e in cat.register_all(db, boards=(2,)):
+            cat.approve(db, e, ad)
+        db.session.commit()
+        asn.set_cohort_portfolio(db, "2026-A", 2, COHORTS["2026-A"], admin=ad)
+
+        # A. award valid decision, ALTER the stored submission, approve report -> NOT cleared
+        candA, caseA, subA = _award("ga", alter=True)
+        _approve_report(candA)
+        assert Candidate.query.get(candA.id).current_board == 2
+        assert not (BoardResult.query.filter_by(candidate_id=candA.id, board=2).first().cleared)
+
+        # B. award valid decision, intact, approve report -> promoted to Board 3 exactly once
+        candB, caseB, subB = _award("gb", alter=False)
+        _approve_report(candB)
+        assert Candidate.query.get(candB.id).current_board == 3
+        # a second approval does not double-promote
+        _approve_report(candB)
+        assert Candidate.query.get(candB.id).current_board == 3
+
+        # missing: objective_passed set but NO valid signed decision -> report approval does not clear
+        candC, caseC, subC = _award("gc", award=False)
+        _approve_report(candC)
+        assert Candidate.query.get(candC.id).current_board == 2
+    finally:
+        _soc.set_cluster_factory(None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        ctx.pop()
+
+
+def test_gapf1b_shared_gate_rejects_bad_decisions():
+    """The shared Board 2 boundary (verify_authorized_clearance) rejects missing / unsigned / wrong-
+    candidate / wrong-scenario authorized decisions, so objective_passed alone never promotes."""
+    application, db, ctx, admin = _app()
+    try:
+        c = _cand(db, "bad", "2026-A")
+        a = b2.resolve_assignment(db, c); cluster = FakeCluster(); b2.provision(cluster, a)
+        case, sub = _submit_signed(db, c, a, cluster, _correct_submission(a, cluster))
+        # missing decision -> not cleared
+        ok, _ = sq.verify_authorized_clearance(db, c)
+        assert not ok
+        # a legitimate authorized decision -> cleared
+        d = sq.decide(db, case, sub, a, _reader(cluster), principal=admin, mode="authorized",
+                      activation=_test_activation())
+        ok, _ = sq.verify_authorized_clearance(db, c)
+        assert ok
+        # unsigned/invalid signature -> rejected
+        good_sig = d.decision_sig
+        d.decision_sig = "AAAA"; db.session.add(d); db.session.commit()
+        ok, _ = sq.verify_authorized_clearance(db, c)
+        assert not ok
+        d.decision_sig = good_sig; db.session.add(d); db.session.commit()
+        # wrong-scenario (decision pins a different fingerprint) -> rejected
+        good_fp = d.scenario_fingerprint
+        d.scenario_fingerprint = "f" * 64; db.session.add(d); db.session.commit()
+        ok, _ = sq.verify_authorized_clearance(db, c)
+        assert not ok
+        d.scenario_fingerprint = good_fp; db.session.add(d); db.session.commit()
+        assert sq.verify_authorized_clearance(db, c)[0]
+    finally:
         ctx.pop()
 
 

@@ -1153,6 +1153,16 @@ def create_app():
         br = _board_result(c, n, create=False)
         if not br or not br.objective_passed or br.report_status != "approved":
             return False
+        # Board 2: objective_passed alone is NOT sufficient proof at the shared promotion boundary.
+        # Every route that reaches this gate (the qualify route AND report approval) must also show a
+        # valid, signed, source-intact authorized qualification decision; a submission altered after
+        # an award, or a decision that no longer matches the pinned scenario, fails closed here.
+        if int(n) == ENTERPRISE_CASE_BOARD:
+            import strata_qualification as _sq
+            ok, reason = _sq.verify_authorized_clearance(db, c)
+            if not ok:
+                app.logger.info("board2 promotion gate refused: %s", reason)
+                return False
         return _promote(c)
 
     # Board 2 (enterprise SOC investigation) is graded ONLY through the signed-citation case
