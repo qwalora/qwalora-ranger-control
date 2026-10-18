@@ -234,3 +234,48 @@ def test_persisted_run_signature_tamper_detected(ctx):
     db.session.commit()
     import signing
     assert signing.verify(json.loads(row.run_record), row.signature, kid=row.signing_kid) is False
+
+
+# ------------------------------- Phase 2C: model health + isolation limits -------------------------
+def test_model_health_stub(ctx):
+    _app, db, client = ctx
+    _login(client, db, "gh-alice")
+    h = client.get("/parallax/research/model/health").get_json()
+    assert h["is_real"] is False and h["backend_provenance"] == "simulated" and h["live"] is False
+
+
+def test_model_health_real_endpoint(ctx):
+    _app, db, client = ctx
+    _login(client, db, "gh-alice")
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    class _H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0); self.rfile.read(n)
+            b = json.dumps({"response": "OK"}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    srv = HTTPServer(("127.0.0.1", 0), _H); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    os.environ["RANGER_RESEARCH_MODEL_URL"] = "http://127.0.0.1:%d" % port
+    try:
+        h = client.get("/parallax/research/model/health").get_json()
+        assert h["is_real"] is True and h["backend_provenance"] == "infrastructure_backed"
+        assert h["live"] is True and h["backend"] == "http"
+    finally:
+        os.environ.pop("RANGER_RESEARCH_MODEL_URL", None); srv.shutdown()
+
+
+def test_run_rate_limit_enforced(ctx):
+    _app, db, client = ctx
+    import parallax_routes as pr
+    pr._RUN_HITS.clear()
+    _login(client, db, "gh-alice")
+    os.environ["RANGER_RESEARCH_RUN_LIMIT_PER_MIN"] = "1"
+    try:
+        r1 = client.post("/parallax/research/run", json={"repetitions": 1}, headers={"X-CSRF-Token": "t"})
+        r2 = client.post("/parallax/research/run", json={"repetitions": 1}, headers={"X-CSRF-Token": "t"})
+        assert r1.status_code == 201 and r2.status_code == 429
+    finally:
+        os.environ.pop("RANGER_RESEARCH_RUN_LIMIT_PER_MIN", None); pr._RUN_HITS.clear()

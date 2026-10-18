@@ -43,6 +43,27 @@ def _admins():
     return {a.strip() for a in os.environ.get("RANGER_PARALLAX_ADMINS", "").split(",") if a.strip()}
 
 
+# Per-candidate research-run rate limiting (Phase 2C isolation control). Best-effort in-process window;
+# a multi-worker deployment would use a shared store (documented as a limitation in the 2C report).
+_RUN_HITS: dict = {}
+
+
+def _rate_limited(key: str) -> bool:
+    import time as _t
+    try:
+        limit = int(os.environ.get("RANGER_RESEARCH_RUN_LIMIT_PER_MIN", "20") or "20")
+    except ValueError:
+        limit = 20
+    now = _t.time()
+    window = [t for t in _RUN_HITS.get(key, []) if now - t < 60.0]
+    if len(window) >= limit:
+        _RUN_HITS[key] = window
+        return True
+    window.append(now)
+    _RUN_HITS[key] = window
+    return False
+
+
 def register(app, candidate_model=None, db=None, helpers=None):
     from parallax import laba_assessment as A, governance
     from parallax import laba_blueprint as BP
@@ -279,6 +300,8 @@ def register(app, candidate_model=None, db=None, helpers=None):
         rid = _resolve_candidate_key()
         if not rid:
             return jsonify(error="active authenticated researcher session required"), 401
+        if _rate_limited("run:%s" % rid):
+            return jsonify(error="research-run rate limit exceeded; try again shortly"), 429
         from parallax.research import harness as _h, corpus as _corpus, model_backend as _mb
         from parallax.research import store as _rstore
         body = request.get_json(silent=True) or {}
@@ -329,3 +352,36 @@ def register(app, candidate_model=None, db=None, helpers=None):
                        pathway_qualified=False), 200
     app.add_url_rule("/parallax/research/run/<run_id>", "parallax_research_get", parallax_research_get,
                      methods=["GET"])
+
+    # ---- Phase 2C: model readiness/health for the research workspace (nonprod + flag gated) --------
+    # Reports the configured backend's identity/provenance. For a REAL backend it performs a tiny
+    # liveness generation with the backend's own timeout and reports the result honestly; a failure is
+    # surfaced (live=False + error), never faked. For the stub it reports simulated / not a finding.
+    def parallax_research_model_health():
+        if not _nonprod():
+            return ("not found", 404)
+        rid = _resolve_candidate_key()
+        if not rid:
+            return jsonify(error="active authenticated researcher session required"), 401
+        from parallax.research import model_backend as _mb
+        try:
+            be = _mb.from_config()
+        except _mb.ModelBackendError as e:
+            return jsonify(ok=False, configured=False, error=str(e)), 200
+        ident = be.identity()
+        info = {"ok": True, "backend": ident["backend"], "is_real": ident["is_real"],
+                "model_id": ident["model_id"], "runtime": ident["runtime"],
+                "backend_provenance": "infrastructure_backed" if ident["is_real"] else "simulated"}
+        if ident["is_real"]:
+            try:
+                r = be.generate(_mb.GenRequest(system="You are a helpful assistant.", developer="",
+                                               task="Reply with the single word OK.", context=[],
+                                               max_tokens=8))
+                info.update(live=True, sample_len=len(r.text or ""), latency_s=r.meta.get("latency_s"))
+            except _mb.ModelBackendError as e:
+                info.update(live=False, error=str(e))
+        else:
+            info.update(live=False, note="no real model configured; deterministic stub (not a finding)")
+        return jsonify(info), 200
+    app.add_url_rule("/parallax/research/model/health", "parallax_research_model_health",
+                     parallax_research_model_health, methods=["GET"])

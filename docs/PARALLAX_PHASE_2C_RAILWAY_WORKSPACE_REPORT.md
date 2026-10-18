@@ -16,6 +16,15 @@ model was deployed and no real inference was run (that is gated on approval and 
 then). The primary acceptance criterion (a user conducting a real investigation backed by Railway
 inference) is therefore **BLOCKED pending approval**, with everything up to that gate **PREPARED**.
 
+**Update - founder approvals received (this session):** provisioning APPROVED with idle-scaling; isolation
+target APPROVED as a new `parallax-nonprod` environment; first model APPROVED as Qwen2.5-0.5B-Instruct.
+A new, narrower prerequisite then surfaced: the available Railway MCP tooling has **no
+create-environment operation** (it exposes create-project/service/volume/deployment/variables, not
+environment creation). Creating the `parallax-nonprod` environment is therefore an **operator action**
+(Section 2). Once it exists, the inference service, volume, variables, and deployment can be provisioned
+through MCP within that environment, and inference verified via the nonprod portal. Live provisioning is
+held at this operator prerequisite; no production environment was used as a substitute.
+
 ---
 
 ## 1. Existing Railway inventory (VERIFIED, read-only)
@@ -53,10 +62,16 @@ separate target is required.
 
 Design:
 1. **Separate Railway environment `parallax-nonprod`** in the same project (isolated variables,
-   services, and deploys). Railway environments are created in the dashboard (Project -> Environments ->
-   New) or via the Railway CLI (`railway environment new parallax-nonprod`). The available MCP tooling
-   here does not expose an environment-create operation, and creating an environment is a gated
-   configuration change, so it is **documented, not performed**.
+   services, and deploys). The available MCP tooling exposes no environment-create operation, so this is
+   an operator step, confirmed not performed here. Exact procedure (Railway CLI):
+   ```
+   railway link --project ee093894-30f7-4c82-ab5d-d7ef4d1a6454
+   railway environment new parallax-nonprod          # creates the isolated environment
+   ```
+   Then hand back the new environment id (or it will be listed), after which the inference service,
+   volume, variables, and deployment are provisioned through MCP within `parallax-nonprod` (never
+   production). Do NOT fork production variables into it wholesale: set only what the nonprod portal and
+   inference service need, with a fresh signing key and a dedicated database (below).
 2. **Separate PostgreSQL** for `parallax-nonprod` (new service or a dedicated database), so research runs
    never touch production records. The research persistence already isolates by `researcher_id` and is
    owner-scoped; environment separation adds the hard boundary.
@@ -115,14 +130,23 @@ that the portal resolves and reaches `parallax-inference.railway.internal` is a 
 
 ## 7. Workspace interface and implemented routes (PREPARED, deferred to post-approval)
 
-Per the execution sequence, the user-facing workspace (overview, assessment brief, experiment workspace,
-investigation history, evidence submission, assessment status) is built AFTER inference is verified, to
-avoid shipping a console with no genuine model behind it ("do not claim the workspace is ready merely
-because its UI renders"). It will reuse the existing portal navigation, branding, GitHub OAuth,
+Per the execution sequence, the full user-facing workspace (overview, assessment brief, experiment
+workspace, investigation history, evidence submission, assessment status) is built AFTER inference is
+verified, to avoid shipping a console with no genuine model behind it ("do not claim the workspace is
+ready merely because its UI renders"). It reuses the existing portal navigation, branding, GitHub OAuth,
 authenticated candidate sessions, CSRF, `_nonprod` gating, the `parallax/research/` harness, the single
 `HTTPBackend` model client, and the existing signed research-run persistence and routes - no second
-governance framework and no duplicate model client. The route surface is specified in Section 15 as a
-founder decision to confirm before implementation.
+governance framework and no duplicate model client.
+
+Implemented and tested this phase (non-billable backend, model-independent):
+- **`GET /parallax/research/model/health`** (VERIFIED) - nonprod-gated, authenticated; reports the
+  configured backend's identity and provenance, and for a real backend performs a tiny liveness
+  generation with the backend timeout, surfacing failures honestly (never faked). Tested against both
+  the deterministic stub (reports `simulated`/not-live) and a real loopback endpoint (reports
+  `infrastructure_backed`/live).
+- This is the integration seam the workspace will call to show "target model: live" before an
+  experiment; it talks to the same single `HTTPBackend`, so the Railway endpoint drops in with no code
+  change via `RANGER_RESEARCH_MODEL_URL`.
 
 ## 8. Candidate research workflow (PREPARED)
 
@@ -144,15 +168,23 @@ governance is introduced.
 
 ## 10. Security controls (PREPARED)
 
-Specified for the workspace implementation: GitHub-authenticated access; candidate-scoped, server-side
-session ownership; research-run rate limiting; maximum inference duration (enforced via the
-`HTTPBackend` timeout and a server-side cap); request/response size limits; compute/concurrency quotas; 
-experiment cancellation/timeout; synthetic-only corpus (already the case); no production credentials in
-the nonproduction environment; no arbitrary external URL fetching by the model path (the model sees only
-the harness-assembled, trust-fenced prompt); no model tool execution; no cross-candidate evidence access
-(owner-scoped, already enforced); no production database mutation (environment isolation); signed
-evidence and audit records (existing). Ollama's admin API is never exposed to candidates - the portal is
-the only private-network client.
+Implemented and tested this phase:
+- **Research-run rate limiting** (VERIFIED) - per-candidate, server-side, window-based
+  (`RANGER_RESEARCH_RUN_LIMIT_PER_MIN`, default 20); a test sets the limit to 1 and confirms the second
+  run returns HTTP 429. Best-effort in-process (a multi-worker deployment would use a shared store; noted
+  as a limitation).
+- **Candidate-scoped, server-side session ownership** and **no cross-candidate evidence access**
+  (VERIFIED, from Phase 2A/2B) - identity is the authenticated session, runs are owner-scoped, a
+  non-owner gets 404.
+
+Specified, PREPARED for the workspace implementation: maximum inference duration (the `HTTPBackend`
+timeout plus a server-side cap); request/response size limits on submitted lower-trust document content;
+compute/concurrency quotas; experiment cancellation/timeout; synthetic-only corpus (already the case);
+no production credentials in the nonproduction environment (environment isolation); no arbitrary external
+URL fetching by the model path (the model sees only the harness-assembled, trust-fenced prompt); no model
+tool execution; no production database mutation (environment isolation); signed evidence and audit
+records (existing). Ollama's admin API is never exposed to candidates - the portal is the only
+private-network client.
 
 ## 11. End-to-end experimental verification
 
@@ -160,10 +192,13 @@ the only private-network client.
 
 ## 12. Full regression results (VERIFIED)
 
-No application code changed this phase (only `deploy/` config and `docs/`). The Phase 2B PG-on baseline
-stands at **417 passed / 17 skipped / 0 failed**; the research + real-path suites were re-confirmed green
-in this container (21 passed / 1 skipped). The 1 skip remains the `TransformersBackend` execution test
-(no CPU torch here). Tests exercising a genuine trained model: **0**.
+Additive backend changes this phase (`parallax_routes.py`: model-health route + per-candidate run rate
+limiting) are covered by 3 new tests. Full PG-on regression (disposable PostgreSQL 16.15,
+`ranger_test_sentinel` boundary): **420 passed / 17 skipped / 0 failed / 0 errors** - the 417 baseline
+plus the 3 new Phase 2C tests, skips unchanged. The 1 model-execution skip remains the
+`TransformersBackend` test (no CPU torch here). Tests exercising a genuine trained model: **0** (no model
+is deployed yet). Real model execution is distinguished from simulation throughout: the health route and
+run route report `backend_provenance` and the stub is always labeled `simulated`/not-a-finding.
 
 ## 13. Remaining limitations
 
@@ -185,18 +220,21 @@ or stored (variable names only).
 
 ## 15. Deployment readiness and founder decisions (APPROVAL GATE)
 
-Everything up to provisioning is PREPARED. The following require explicit founder decisions before any
-billable or deploy action:
+Founder decisions received this session: **provisioning APPROVED (idle-scaled)**, **isolation = new
+`parallax-nonprod` environment**, **model = Qwen2.5-0.5B-Instruct**, region us-west2 (default).
 
-1. **Provisioning approval** for the `parallax-inference` service (~$30-50/month always-on, within the
-   $300 budget): approve, approve with idle-scaling, or hold.
-2. **Isolation target**: create a new `parallax-nonprod` environment (recommended) with its own
-   PostgreSQL and signing key, versus another isolation approach.
-3. **Model**: confirm Qwen2.5-0.5B-Instruct (Apache-2.0) as the first model, or name an alternative.
-4. **Region**: us-west2 (co-located with existing services) unless otherwise directed.
+The remaining blocker is the **operator environment-creation step**, because the available Railway MCP
+tooling cannot create an environment (Section 2). Required operator action, in order:
+1. Create the `parallax-nonprod` environment (`railway environment new parallax-nonprod`).
+2. Add a dedicated PostgreSQL to that environment and a fresh PARALLAX signing key
+   (`RANGER_JWT_PRIVATE_B64`), so research runs never touch production records or the production signing
+   authority.
+3. Hand back the new environment id.
 
-On approval, the sequence resumes: create the nonproduction environment -> deploy the private inference
-service -> verify Railway can pull the model and serve genuine generations -> wire
-`RANGER_RESEARCH_MODEL_URL` on the nonproduction portal -> build and test the workspace -> run the benign
-control and adversarial trial against the genuine model -> validate signed evidence -> full regression ->
-update this report with VERIFIED observations.
+On receipt, the sequence resumes under the granted approval: provision the private `parallax-inference`
+service (idle-scaled, no public domain) + its volume + variables via MCP in `parallax-nonprod` -> verify
+Railway can pull Qwen2.5-0.5B-Instruct and serve genuine generations (this is where real inference stops
+being BLOCKED) -> wire `RANGER_RESEARCH_MODEL_URL` on the nonprod portal -> `GET /parallax/research/model/health`
+turns live -> build and test the full workspace UI -> run the benign control and adversarial trial
+against the genuine model -> validate signed evidence -> full regression -> update this report with
+VERIFIED real-inference observations.
