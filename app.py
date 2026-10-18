@@ -946,8 +946,25 @@ def create_app():
                     pv = scenarios.placement_vars(rr.board, seed, gp)
                     if pv:
                         tvars.update(pv)
-            broker.set_range_config(c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
-                                    user_key=key, template_vars=tvars)
+            # §B: push the approved, pinned config and REQUIRE it to be demonstrably applied before any
+            # deploy. Building on a rejected or unverified config could provision the previous/stale
+            # scenario instead of the approved, integrity-verified ScenarioBinding - a silent scenario
+            # mismatch. Only OP_CONFIRMED proceeds; a definitive rejection or an ambiguous apply fails
+            # closed (no range is built, so the reserved slot is released) with a retryable reason.
+            cfg_ok, cfg_detail, cfg_outcome = broker.set_range_config(
+                c, P.template_of(rr.board) or broker.GOAD_TEMPLATE,
+                user_key=key, template_vars=tvars)
+            if cfg_outcome != broker.OP_CONFIRMED:
+                rr.status = "failed"
+                if cfg_outcome == broker.OP_FAILED:
+                    rr.detail = ("pinned config rejected; refusing to deploy (would risk a scenario "
+                                 "mismatch with the approved binding): %s" % cfg_detail)[:200]
+                else:  # OP_UNKNOWN: ambiguous apply, config may or may not have landed
+                    rr.detail = ("pinned config apply unconfirmed; refusing to deploy on an unverified "
+                                 "config (fail-closed); retry to re-push the pinned contract: %s"
+                                 % cfg_detail)[:200]
+                db.session.flush()
+                return rr.status
             status, range_id, detail = broker.deploy_range(c, user_key=key)
             if range_id:
                 rr.ludus_range_id = range_id

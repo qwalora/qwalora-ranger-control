@@ -410,7 +410,7 @@ def test_interrupted_deploy_stays_counted_on_unknown(monkeypatch):
         c = _cand(db, "rs_depl", 5)
         # deploy accepted, but the status probe errors -> range_status returns 'unknown'
         monkeypatch.setattr(broker, "ensure_user", lambda *a, **k: ("U", "k", "ok"))
-        monkeypatch.setattr(broker, "set_range_config", lambda *a, **k: (True, "cfg"))
+        monkeypatch.setattr(broker, "set_range_config", lambda *a, **k: (True, "cfg", broker.OP_CONFIRMED))
         monkeypatch.setattr(broker, "deploy_range", lambda *a, **k: ("deploying", "RID", "accepted"))
         monkeypatch.setattr(broker, "wireguard_config", lambda *a, **k: "wg")
         monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("unknown", "probe error (transient)"))
@@ -423,3 +423,234 @@ def test_interrupted_deploy_stays_counted_on_unknown(monkeypatch):
         assert rr.status == "deploying", "an unknown deploy probe keeps the range reserved (counted)"
     finally:
         ctx.pop()
+
+
+# ============================================================ A: ambiguous Ludus command dispatch ===
+class _Cand:
+    ludus_user_id = "U"
+
+
+def _raiser(exc, counter=None):
+    def _fn(*a, **k):
+        if counter is not None:
+            counter["n"] += 1
+        raise exc
+    return _fn
+
+
+def test_power_on_ambiguous_dispatch_is_unknown_not_failed(monkeypatch):
+    """A: a timeout / transport / TLS error raised while SENDING power-on is AMBIGUOUS (the node may
+    have accepted it). It must be OP_UNKNOWN (hold + reconcile), never OP_FAILED, and the non-idempotent
+    command must NOT be resent (exactly one dispatch attempt)."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    for exc in (broker.LudusTimeout("timed out after 30s"),
+                broker.LudusUnavailable("transport error: connection reset", status=503),
+                broker.LudusProtocolError("TLS error talking to Ludus")):
+        n = {"n": 0}
+        monkeypatch.setattr(broker, "_req", _raiser(exc, n))
+        confirmed, detail, outcome = broker.power_on(_Cand())
+        assert confirmed is False and outcome == broker.OP_UNKNOWN, (
+            "ambiguous power-on dispatch must be UNKNOWN (held), got %r (%s)" % (outcome, exc))
+        assert n["n"] == 1, "a non-idempotent power-on must never be auto-resent on ambiguity"
+
+
+def test_power_on_definitive_rejection_is_failed(monkeypatch):
+    """A: an authoritative server-side rejection (401/403/404) means the command did NOT execute ->
+    OP_FAILED (the only case that may release the reservation)."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    for exc in (broker.LudusAuthError("forbidden", status=403),
+                broker.LudusNotFound("no such range", status=404)):
+        monkeypatch.setattr(broker, "_req", _raiser(exc))
+        confirmed, detail, outcome = broker.power_on(_Cand())
+        assert confirmed is False and outcome == broker.OP_FAILED, (
+            "a definitive rejection must be FAILED, got %r (%s)" % (outcome, exc))
+
+
+def test_power_off_ambiguous_dispatch_is_unknown_not_failed(monkeypatch):
+    """A: symmetric to power-on - an ambiguous power-off dispatch holds (UNKNOWN), never a false
+    failure, and is never auto-resent."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    n = {"n": 0}
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusTimeout("timed out"), n))
+    confirmed, detail, outcome = broker.power_off(_Cand())
+    assert confirmed is False and outcome == broker.OP_UNKNOWN
+    assert n["n"] == 1, "a non-idempotent power-off must never be auto-resent on ambiguity"
+    # definitive rejection still fails
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusAuthError("401", status=401)))
+    assert broker.power_off(_Cand())[2] == broker.OP_FAILED
+
+
+def test_deploy_dispatch_ambiguous_holds_deploying_not_failed(monkeypatch):
+    """A: a deploy POST that fails ambiguously (timeout/5xx after send) may have started a build. It is
+    reported 'deploying' with NO range id (hold + read-only reconcile), never 'failed', and is not
+    resent. A definitive rejection is 'failed'."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    n = {"n": 0}
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusUnavailable("5xx", status=502), n))
+    status, rid, detail = broker.deploy_range(_Cand())
+    assert status == "deploying" and rid is None, "ambiguous deploy must HOLD as deploying, not fail"
+    assert n["n"] == 1, "a non-idempotent deploy must never be auto-resent on ambiguity"
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusConflict("409", status=409)))
+    status2, _rid2, _d2 = broker.deploy_range(_Cand())
+    assert status2 == "failed", "a definitive rejection (409) is a deploy failure"
+
+
+def test_set_range_config_tri_state(monkeypatch):
+    """A/B: config apply distinguishes CONFIRMED / FAILED (definitive) / UNKNOWN (ambiguous)."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    monkeypatch.setattr(broker, "_req", lambda *a, **k: {})
+    assert broker.set_range_config(_Cand())[2] == broker.OP_CONFIRMED
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusTimeout("t")))
+    assert broker.set_range_config(_Cand())[2] == broker.OP_UNKNOWN
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusAuthError("401", status=401)))
+    assert broker.set_range_config(_Cand())[2] == broker.OP_FAILED
+
+
+def test_timeout_after_send_then_reconciles_running(monkeypatch):
+    """A (delayed completion / interrupted response): a power-on whose response was lost (timeout)
+    returns UNKNOWN; the operation actually landed, so a later READ-ONLY confirm_power sees every VM
+    running and resolves CONFIRMED - no resend needed, capacity held across the gap."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    # dispatch: the POST response is lost
+    monkeypatch.setattr(broker, "_req", _raiser(broker.LudusTimeout("response lost")))
+    assert broker.power_on(_Cand())[2] == broker.OP_UNKNOWN
+    # reconcile: the op had in fact been accepted; VMs are now confirmed running
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02", "poweredOn": True}]})
+    ok, outcome = broker.confirm_power(_Cand(), "running", expected_vms=["DC01", "SRV02"])
+    assert ok is True and outcome == broker.OP_CONFIRMED, "read-only reconcile resolves the real state"
+
+
+def test_resume_timeout_after_send_holds_then_reconciles(monkeypatch):
+    """A integration: a suspended range whose resume power-on times out stays 'resuming' (slot held,
+    power-on issued exactly once); a later read-only maintenance pass, once VMs are confirmed running,
+    resolves it to 'deployed' with NO second power-on."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_to", 5)
+        rr = _suspended_range(db, c)
+        posts = {"poweron": 0}
+        timed_out = {"v": True}
+
+        def _req(method, path, *a, **k):
+            if path == "/range/poweron":
+                posts["poweron"] += 1
+                if timed_out["v"]:
+                    raise broker.LudusTimeout("power-on response lost")
+                return {}
+            return {}
+        monkeypatch.setattr(broker, "_req", _req)
+        monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01", "SRV02"])
+        # VMs not yet observed running at resume time
+        monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+            "VMs": [{"name": "DC01", "powerState": "starting"}, {"name": "SRV02", "powerState": "starting"}]})
+        client = expiring_client(application, db)
+        r = client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
+        assert r.status_code == 200
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "resuming", "a timed-out resume dispatch holds the slot (resuming)"
+        assert posts["poweron"] == 1
+
+        # the power-on had in fact landed; VMs now confirmed running. A read-only reconcile resolves it.
+        monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+            "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02", "poweredOn": True}]})
+        admin = {"Authorization": "Bearer s6-rs-admin", "Accept": "application/json"}
+        client.post("/admin/reconcile", headers=admin)
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "deployed", "read-only reconcile resolves the held resume to deployed"
+        assert posts["poweron"] == 1, "the non-idempotent power-on must never be resent"
+    finally:
+        ctx.pop()
+
+
+# ============================================================ B: config must apply before deploy ====
+def _deploy_setup(monkeypatch, cfg_outcome):
+    """Wire a board-5 candidate for a /labs/start deploy with set_range_config returning the given
+    outcome, and a deploy_range SPY that records whether it was called."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    from models import RangeRequest
+    c = _cand(db, "cfg_%s" % cfg_outcome, 5)
+    rr = RangeRequest(candidate_id=c.id, board=5, host="primary", status="configured", template="goad")
+    db.session.add(rr); db.session.commit()
+    spy = {"deploy_calls": 0}
+    monkeypatch.setattr(broker, "ensure_user", lambda *a, **k: ("U", "k", "ok"))
+    monkeypatch.setattr(broker, "set_range_config",
+                        lambda *a, **k: (cfg_outcome == broker.OP_CONFIRMED, "cfg:%s" % cfg_outcome, cfg_outcome))
+
+    def _deploy(*a, **k):
+        spy["deploy_calls"] += 1
+        return ("deploying", "RID", "accepted")
+    monkeypatch.setattr(broker, "deploy_range", _deploy)
+    monkeypatch.setattr(broker, "wireguard_config", lambda *a, **k: "wg")
+    monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("deployed", "up"))
+    return appmod, application, db, ctx, c, rr, spy
+
+
+def test_deploy_refused_when_config_definitively_rejected(monkeypatch):
+    """B: a definitively rejected pinned config must STOP the deploy - deploy_range is never called and
+    the reserved slot is released (failed), so no range is built on a non-approved config."""
+    appmod, application, db, ctx, c, rr, spy = _deploy_setup(monkeypatch, broker.OP_FAILED)
+    try:
+        from models import RangeRequest
+        client = expiring_client(application, db)
+        client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
+        rr = RangeRequest.query.get(rr.id)
+        assert spy["deploy_calls"] == 0, "deploy must NOT run when the pinned config was rejected"
+        assert rr.status == "failed" and rr.status not in RangeRequest.OCCUPIES_SLOT
+        assert "config" in (rr.detail or "").lower() and "refusing to deploy" in (rr.detail or "")
+    finally:
+        ctx.pop()
+
+
+def test_deploy_refused_when_config_apply_ambiguous(monkeypatch):
+    """B: an ambiguous (unconfirmed) config apply must ALSO stop the deploy - building on a config we
+    cannot prove landed could provision a stale scenario. Fail closed; deploy_range never runs."""
+    appmod, application, db, ctx, c, rr, spy = _deploy_setup(monkeypatch, broker.OP_UNKNOWN)
+    try:
+        from models import RangeRequest
+        client = expiring_client(application, db)
+        client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
+        rr = RangeRequest.query.get(rr.id)
+        assert spy["deploy_calls"] == 0, "deploy must NOT run on an unconfirmed config"
+        assert rr.status == "failed"
+        assert "unconfirmed" in (rr.detail or "").lower() or "unverified" in (rr.detail or "").lower()
+    finally:
+        ctx.pop()
+
+
+def test_confirmed_config_allows_deploy(monkeypatch):
+    """B control: a demonstrably applied config DOES proceed to deploy (the gate is not over-broad)."""
+    appmod, application, db, ctx, c, rr, spy = _deploy_setup(monkeypatch, broker.OP_CONFIRMED)
+    try:
+        from models import RangeRequest
+        client = expiring_client(application, db)
+        client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
+        rr = RangeRequest.query.get(rr.id)
+        assert spy["deploy_calls"] == 1, "a confirmed config must proceed to exactly one deploy"
+        assert rr.status == "deployed"
+    finally:
+        ctx.pop()
+
+
+def test_stale_config_cannot_silently_provision_mismatched_scenario(monkeypatch):
+    """B (proof): if the approved pinned config does not demonstrably apply, the range is NEVER built.
+    deploy_range is never reached and no range id is assigned, so a stale/previous config can never
+    silently provision a scenario different from the approved ScenarioBinding."""
+    for outcome in (broker.OP_FAILED, broker.OP_UNKNOWN):
+        appmod, application, db, ctx, c, rr, spy = _deploy_setup(monkeypatch, outcome)
+        try:
+            from models import RangeRequest
+            client = expiring_client(application, db)
+            client.post("/labs/start", json={"handle": c.handle},
+                        headers={"X-Candidate-Token": c.token})
+            rr = RangeRequest.query.get(rr.id)
+            assert spy["deploy_calls"] == 0
+            assert rr.ludus_range_id is None, "no range may be built on an unverified config"
+            assert rr.status not in RangeRequest.OCCUPIES_SLOT
+        finally:
+            ctx.pop()

@@ -237,6 +237,44 @@ skip each). Per-file execution (`run_s6_acceptance.sh`) remains the CI strategy.
 Combined S6 regression runs deterministically forward and reversed (93 passed, 4 skipped - the four
 disposable-PG race tests).
 
+## 4e. Final offline closure (fifth review)
+
+1. **Ambiguous Ludus command dispatch is distinct from definitive failure (broker.py).** A new
+   `_is_ambiguous_dispatch(exc)` classifies an error raised while SENDING a non-idempotent command. A
+   timeout, a transport/5xx failure, or a TLS/protocol error is AMBIGUOUS (the node may have accepted
+   and be executing the command); an auth (401/403), not-found (404), conflict (409) or other explicit
+   4xx is a DEFINITIVE rejection. `power_on`/`power_off` now return `OP_UNKNOWN` (hold + read-only
+   reconcile) on ambiguity and `OP_FAILED` only on a definitive rejection; `deploy_range` returns
+   `deploying` (reservation held, no range id) on ambiguity and `failed` only on a definitive
+   rejection. No uncertain, non-idempotent command is ever auto-resent. Covered by
+   `test_power_on_ambiguous_dispatch_is_unknown_not_failed`,
+   `test_power_on_definitive_rejection_is_failed`,
+   `test_power_off_ambiguous_dispatch_is_unknown_not_failed`,
+   `test_deploy_dispatch_ambiguous_holds_deploying_not_failed`, `test_set_range_config_tri_state`,
+   `test_timeout_after_send_then_reconciles_running` (delayed completion) and
+   `test_resume_timeout_after_send_holds_then_reconciles` (interrupted response, power-on issued
+   exactly once, resolved read-only).
+
+2. **A deploy requires a demonstrably applied pinned config (app.py `_try_deploy`).**
+   `broker.set_range_config` now returns `(ok, detail, outcome)` with a tri-state outcome
+   (CONFIRMED / FAILED / UNKNOWN). `_try_deploy` refuses to call `deploy_range` unless the outcome is
+   CONFIRMED: a definitive rejection or an ambiguous apply fails closed (the reserved slot is released;
+   no range is built), so a stale or previous config can never silently provision a scenario different
+   from the approved, integrity-verified ScenarioBinding. Covered by
+   `test_deploy_refused_when_config_definitively_rejected`,
+   `test_deploy_refused_when_config_apply_ambiguous`, `test_confirmed_config_allows_deploy` (control),
+   and `test_stale_config_cannot_silently_provision_mismatched_scenario` (proof: no range id is
+   assigned and `deploy_range` is never reached on an unverified config).
+
+3. **Transactional PostgreSQL concurrency VERIFIED (category C closed for this review).** The four
+   `test_pg_race_*` tests (deploy/deploy, resume/resume, deploy/resume, deploy/reconcile) were executed
+   against a disposable, local PostgreSQL 16 cluster created only for the test run (trust auth,
+   127.0.0.1, never production), with `RANGER_PG_TEST_URL` + `RANGER_PG_TEST_DISPOSABLE=1` +
+   `RANGER_TEST_ALLOW_DB_MUTATION=1`. Result: 4 passed, 8/8 clean repeated runs, confirmed
+   `postgresql` dialect and a live `pg_advisory_xact_lock`. The persisted weighted capacity never
+   exceeds the budget and exactly one range holds the host in every race. Offline (no disposable PG),
+   these four still skip transparently and concurrency reverts to UNVERIFIED.
+
 ## 5. Restrictions (unchanged)
 
 The 95% bar and mandatory human report approval are unchanged. No PARALLAX. No production deployment,

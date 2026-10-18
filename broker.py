@@ -330,19 +330,29 @@ def set_range_config(candidate, template=GOAD_TEMPLATE, user_key=None, template_
 
     template_vars carries per-range variables for the template to consume at
     deploy time, e.g. the board-5 flags to plant (so each ranger's range holds
-    their own seed-bound flags). Returns (ok, detail)."""
+    their own seed-bound flags).
+
+    Returns (ok, detail, outcome). outcome is OP_CONFIRMED when the pinned config was demonstrably
+    accepted, OP_FAILED on a DEFINITIVE server-side rejection (the config did not apply), or OP_UNKNOWN
+    when the request's fate is AMBIGUOUS (timeout/transport error after send - the config may or may not
+    have landed). A deploy must never proceed on anything but OP_CONFIRMED (§B): building on an
+    unconfirmed config risks provisioning a stale scenario that does not match the approved binding."""
     nvars = len(template_vars or {})
     if not is_live():
         extra = f" with {nvars} template vars" if nvars else ""
-        return (True, f"mock: {template} config staged{extra}")
+        return (True, f"mock: {template} config staged{extra}", OP_CONFIRMED)
     try:
         payload = {"template": template, "userID": candidate.ludus_user_id}
         if template_vars:
             payload["templateVars"] = template_vars
         _req("POST", "/range/config", payload, key=user_key or _admin_key())
-        return (True, f"{template} config set" + (f" (+{nvars} vars)" if nvars else ""))
+        return (True, f"{template} config set" + (f" (+{nvars} vars)" if nvars else ""), OP_CONFIRMED)
     except LudusError as e:
-        return (False, f"config set error: {e}")
+        if _is_ambiguous_dispatch(e):
+            # The config POST may have landed; we cannot prove it. Do NOT deploy on top of an
+            # unverified config (fail-closed). Config is idempotent, so a later retry can re-push it.
+            return (False, f"config apply unconfirmed (ambiguous): {e}", OP_UNKNOWN)
+        return (False, f"config definitively rejected: {e}", OP_FAILED)
 
 
 def deploy_range(candidate, user_key=None):
@@ -351,7 +361,12 @@ def deploy_range(candidate, user_key=None):
     Returns (status, ludus_range_id, detail). status is one of
     deploying/deployed/failed. Not retried at the transport layer (a resend
     could kick a second build); the caller's reserve-before-launch guard and a
-    status poll provide idempotency."""
+    status poll provide idempotency.
+
+    §A: a deploy POST that fails AMBIGUOUSLY (timeout/transport/5xx after send) may already have
+    started a build on the host. It is therefore reported as 'deploying' (NOT 'failed'), with no range
+    id, so the caller HOLDS its reserved slot and a read-only status poll reconciles it - the
+    non-idempotent deploy is never auto-resent. Only a DEFINITIVE rejection is 'failed'."""
     if not is_live():
         return ("deploying", _mock_range_id(candidate),
                 "mock: deploy accepted; range would build on the Ludus host")
@@ -361,7 +376,10 @@ def deploy_range(candidate, user_key=None):
         rid = out.get("rangeID") or out.get("rangeId") or candidate.ludus_user_id
         return ("deploying", str(rid), "deploy accepted")
     except LudusError as e:
-        return ("failed", None, f"deploy error: {e}")
+        if _is_ambiguous_dispatch(e):
+            return ("deploying", None,
+                    f"deploy dispatch ambiguous ({e}); not resent, holding reservation for reconcile")
+        return ("failed", None, f"deploy definitively rejected: {e}")
 
 
 def range_status(candidate, user_key=None):
@@ -530,6 +548,33 @@ OP_FAILED = "failed"         # the request itself failed (definite)
 OP_UNKNOWN = "unknown"       # could not determine remote state (treat conservatively, retryable)
 
 _CONFIRM_POLLS = 3
+
+
+def _is_ambiguous_dispatch(exc):
+    """Classify an error raised WHILE SENDING a (non-idempotent) command.
+
+    True  -> AMBIGUOUS: the command's fate is unknown and the node may have accepted it and be
+             executing it. A timeout, a transport/5xx failure, or a TLS/protocol error can all strike
+             after the request bytes left, so the write may have landed. These must NOT be read as a
+             definitive rejection, and the non-idempotent command must NOT be auto-resent - the caller
+             holds its reservation and resolves the real state with a READ-ONLY reconcile.
+    False -> DEFINITIVE server-side rejection (the command did not execute): an auth error (401/403), a
+             not-found (404), a conflict (409), or any other explicit 4xx. Only here may the caller
+             treat the operation as failed.
+    """
+    if isinstance(exc, (LudusTimeout, LudusUnavailable, LudusProtocolError)):
+        return True
+    if isinstance(exc, (LudusAuthError, LudusNotFound, LudusConflict)):
+        return False
+    # A bare LudusError: a 5xx or an unknown/absent status is ambiguous transport; an explicit 4xx is a
+    # definitive rejection. Fail SAFE (ambiguous) when the status cannot be read.
+    status = getattr(exc, "status", None)
+    if status is None:
+        return True
+    try:
+        return int(status) >= 500
+    except (TypeError, ValueError):
+        return True
 
 
 def _confirm(fn, *, want, attempts=_CONFIRM_POLLS):
@@ -721,7 +766,12 @@ def power_off(candidate, user_key=None, *, confirm=True):
         _req("POST", "/range/poweroff", {"userID": candidate.ludus_user_id, "machines": "all"},
              key=user_key or _admin_key())
     except LudusError as e:
-        return (False, f"power-off request failed: {e}", OP_FAILED)
+        if _is_ambiguous_dispatch(e):
+            # §A: the power-off may have been accepted and be executing. Do NOT resend (non-idempotent)
+            # and do NOT call it a failure: hold and reconcile read-only.
+            return (False, f"power-off dispatch ambiguous ({e}); not resent, holding for reconcile",
+                    OP_UNKNOWN)
+        return (False, f"power-off definitively rejected: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-off accepted (VMs stopping; not yet confirmed)", OP_ACCEPTED)
     # Complete-inventory, async-safe confirmation (R4-2/R4-3): CONFIRMED only when every expected VM
@@ -747,7 +797,12 @@ def power_on(candidate, user_key=None, *, confirm=True):
         _req("POST", "/range/poweron", {"userID": candidate.ludus_user_id, "machines": "all"},
              key=user_key or _admin_key())
     except LudusError as e:
-        return (False, f"power-on request failed: {e}", OP_FAILED)
+        if _is_ambiguous_dispatch(e):
+            # §A: the power-on may have been accepted and be queued. Do NOT resend (non-idempotent) and
+            # do NOT call it a failure: hold the reservation and reconcile read-only.
+            return (False, f"power-on dispatch ambiguous ({e}); not resent, holding for reconcile",
+                    OP_UNKNOWN)
+        return (False, f"power-on definitively rejected: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-on accepted (VMs starting; not yet confirmed)", OP_ACCEPTED)
     # Complete-inventory, async-safe confirmation: CONFIRMED only when every expected VM is present and

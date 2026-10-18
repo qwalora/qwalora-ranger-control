@@ -63,7 +63,8 @@ def test_provisioner_hands_pinned_accounts_to_broker():
     captured = {}
     saved = broker.set_range_config
     broker.set_range_config = lambda c, template=None, user_key=None, template_vars=None: (
-        captured.update({"template": template, "vars": template_vars}) or (True, "mock captured"))
+        captured.update({"template": template, "vars": template_vars})
+        or (True, "mock captured", broker.OP_CONFIRMED))
     try:
         db.drop_all(); db.create_all()  # per-test schema reset: StaticPool shares one in-memory DB in a process
         if not Cohort.query.filter_by(name="2026-A").first():
