@@ -173,8 +173,8 @@ def run():
     d = ac.decide(bp, authorization={"candidate_id": 1, "pathway": "parallax"},
                   objective_results=[gate], rubric_scores={"reasoning": 90},
                   reviewer_decision={"decision": "pass", "reviewer_id": "r1"})
-    check("evidence->assessment integration: assessment MET, qualification inactive (gated)",
-          d["assessment_passed"] and not d["qualified"] and d["reason"] == "qualification_inactive")
+    check("evidence->assessment integration: assessment MET, assessment-only (never a qualification)",
+          d["assessment_passed"] and not d["qualified"] and d["reason"] == "assessment_met")
 
     # ---- PARALLAX inactive + STRATA unchanged --------------------------------------
     check("STRATA PASS_BAR unchanged (95.0)", program.PASS_BAR == 95.0)

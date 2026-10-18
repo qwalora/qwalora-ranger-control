@@ -89,20 +89,22 @@ class GenerationContract:
         return int(keyed_mac(b"parallax-seed\x1f" + self._mac_payload())[:16], 16)
 
 
-def bind(spec: AssessmentSpec, *, cohort: str, candidate_key: str, attempt: int = 1,
+def bind(spec: AssessmentSpec, blueprint, *, cohort: str, candidate_key: str, attempt: int = 1,
          approval=None, authorized_admins=None,
          pathway: str = pathways.PATHWAY_PARALLAX) -> GenerationContract:
-    """Mint a signed instance contract for a candidate's attempt at a GOVERNANCE-APPROVED PARALLAX spec.
+    """Mint a signed instance contract for a candidate's attempt at a GOVERNANCE-APPROVED PARALLAX
+    assessment.
 
     This is the only place an instance is minted. Approval is enforced through versioned governance,
-    not a hardcoded flag: `approval` must be a signed approval record for exactly this spec's content
-    hash, issued by one of the server-side `authorized_admins` (see `parallax.governance`). An
-    unapproved, drifted, or cross-pathway spec can never produce an instance."""
+    not a hardcoded flag: `approval` must be a signed approval record binding exactly this spec AND its
+    `blueprint` (the complete scoring specification), issued by one of the server-side
+    `authorized_admins` (see `parallax.governance`). An unapproved assessment, a drifted spec or
+    blueprint, or a cross-pathway spec can never produce an instance."""
     if pathways.normalize_pathway(pathway) != pathways.PATHWAY_PARALLAX:
         raise ContractError("PARALLAX bindings are parallax-only; refused pathway %r" % pathway)
     from . import governance
     try:
-        governance.verify_approval(approval, spec, authorized_admins=authorized_admins or ())
+        governance.verify_approval(approval, spec, blueprint, authorized_admins=authorized_admins or ())
     except governance.ApprovalError as e:
         raise ContractError("refusing to bind without valid governance approval: %s" % e)
     return GenerationContract(

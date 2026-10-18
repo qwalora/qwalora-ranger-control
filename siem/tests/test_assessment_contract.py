@@ -105,9 +105,9 @@ def run():
                            critical_findings=[{"id": "unremediated_authz_vuln", "present": True,
                                                "remediated": True}],
                            rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
-    check("remediation yields a MET assessment but NOT a final qualification (policy inactive)",
+    check("remediation yields a MET assessment but NOT a final qualification (assessment-only)",
           remediated["assessment_passed"] is True and remediated["qualified"] is False
-          and remediated["reason"] == "qualification_inactive")
+          and remediated["reason"] == "assessment_met")
 
     # ---- 1b. no combination bypasses the inactive PARALLAX qualification gate -------
     combos = [
@@ -127,7 +127,7 @@ def run():
     sig_met = ac.sign_decision(remediated, candidate_id=2, unit_ref="C1")
     check("no score/remediation/reviewer/signature bypasses the inactive PARALLAX gate",
           not bypass and ac.verify_decision(sig_met) and sig_met["record"]["qualified"] is False)
-    # the gate is the SOLE control: flipping the platform activation on would qualify
+    # a single assessment is ASSESSMENT-ONLY: the per-assessment activation flag has NO effect on it
     os.environ["RANGER_PARALLAX_QUALIFICATION_ACTIVE"] = "1"
     try:
         active = ac.decide(_parallax_bp(activated=True, threshold=1.0), authorization=AUTH_PARALLAX,
@@ -136,8 +136,9 @@ def run():
                            rubric_scores=strong_rubric, reviewer_decision=REV_PASS)
     finally:
         os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
-    check("platform activation is the sole control (on -> qualifies; default off -> not)",
-          active["qualified"] is True and active["reason"] == "qualified"
+    check("single assessment never becomes a qualification, flag on or off (assessment-only)",
+          active["qualified"] is False and active["assessment_passed"] is True
+          and active["reason"] == "assessment_met"
           and ac.decide(_parallax_bp(), authorization=AUTH_PARALLAX, objective_results=[gate_ok],
                         critical_findings=[{"id": "unremediated_authz_vuln", "present": True, "remediated": True}],
                         rubric_scores=strong_rubric, reviewer_decision=REV_PASS)["qualified"] is False)
@@ -300,9 +301,9 @@ def worked_example():
     check("worked example: unremediated critical authz vuln blocks qualification despite strong report",
           not d_unremediated["qualified"] and d_unremediated["reason"] == "CRITICAL_FAILURE_VETO")
     check("worked example: remediation yields a signed, verifiable ASSESSMENT result "
-          "but NOT a final qualification while PARALLAX policy is inactive",
+          "but NOT a final qualification (a single assessment is assessment-only)",
           d_fixed["assessment_passed"] and not d_fixed["qualified"]
-          and d_fixed["reason"] == "qualification_inactive" and ac.verify_decision(rec))
+          and d_fixed["reason"] == "assessment_met" and ac.verify_decision(rec))
 
 
 def test_assessment_contract():

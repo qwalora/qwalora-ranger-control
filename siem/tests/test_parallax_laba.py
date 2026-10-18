@@ -40,7 +40,8 @@ def _gates_off():
 
 
 def _approval():
-    return governance.approve_spec(BP.LABA_SPEC, approver_id="admin-1", authorized_admins=ADMINS)
+    return governance.approve_spec(BP.LABA_SPEC, BP.blueprint(), approver_id="admin-1",
+                                   authorized_admins=ADMINS)
 
 
 def _reviewer(cand, attempt=1, decision="pass", authorized=True, assigned=True):
@@ -155,6 +156,28 @@ def test_unapproved_or_drifted_spec_refused():
     with pytest.raises(Exception):
         A.bind_instance(cohort=COHORT, candidate_key="gh-x", approval={"record": {}, "signature": "x"},
                         authorized_admins=ADMINS)
+
+
+def test_material_scoring_change_invalidates_approval():
+    """Finding 5: the approval binds the complete scoring spec (spec + blueprint). A material change to
+    the blueprint (e.g. lowering the rubric threshold or dropping a critical failure) invalidates the
+    approval until it is reissued."""
+    approval = _approval()
+    governance.verify_approval(approval, BP.LABA_SPEC, BP.blueprint(), authorized_admins=ADMINS)  # ok
+    bp = BP.blueprint()
+    bp["decision_policy"]["rubric_threshold"] = 1.0           # material change
+    with pytest.raises(governance.ApprovalError):
+        governance.verify_approval(approval, BP.LABA_SPEC, bp, authorized_admins=ADMINS)
+    bp2 = BP.blueprint()
+    bp2["critical_failures"] = []                              # remove the critical-failure veto
+    with pytest.raises(governance.ApprovalError):
+        governance.verify_approval(approval, BP.LABA_SPEC, bp2, authorized_admins=ADMINS)
+
+
+def test_unauthorized_approver_refused():
+    with pytest.raises(governance.ApprovalError):
+        governance.approve_spec(BP.LABA_SPEC, BP.blueprint(), approver_id="not-an-admin",
+                                authorized_admins=ADMINS)
 
 
 def test_unauthorized_reviewer_refused():

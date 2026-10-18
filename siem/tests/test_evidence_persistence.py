@@ -289,9 +289,9 @@ def end_to_end_demo(store):
                   reviewer_decision={"decision": "pass", "reviewer_id": "r1"})
     print(f"  assessment={d['assessment_outcome']} qualified={d['qualified']} reason={d['reason']}")
     check("e2e: unscanned evidence is not yet usable; validated evidence drives a MET assessment "
-          "with PARALLAX qualification still inactive",
+          "that is assessment-only (never a final qualification)",
           not sat_before and d["assessment_passed"] and not d["qualified"]
-          and d["reason"] == "qualification_inactive" and rows == 1 and cust == 1)
+          and d["reason"] == "assessment_met" and rows == 1 and cust == 1)
     ctx.pop()
 
 

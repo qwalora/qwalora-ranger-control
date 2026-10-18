@@ -28,7 +28,8 @@ ADMINS = {"px-admin"}
 
 
 def _approval():
-    return governance.approve_spec(BP.PX1_SPEC, approver_id="px-admin", authorized_admins=ADMINS)
+    return governance.approve_spec(BP.PX1_SPEC, BP.blueprint(), approver_id="px-admin",
+                                   authorized_admins=ADMINS)
 
 
 def _reviewer(cand, attempt=1, decision="pass"):

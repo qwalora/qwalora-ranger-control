@@ -1,19 +1,19 @@
 """PARALLAX pathway-level qualification - separate from, and strictly above, single-assessment results.
 
-A single lab's assessment record (even a passing one) is NEVER a pathway qualification. Pathway
-qualification is a distinct decision that fails closed unless ALL hold:
+A single lab's assessment record (even a passing, signed one) is NEVER a pathway qualification. Pathway
+qualification fails closed unless ALL hold:
 
-  1. an APPROVED, versioned portfolio policy enumerates the required competencies;
-  2. every required competency has a verified, signed, PASSING assessment record bound to
-     (candidate, cohort, assessment, attempt);
-  3. every such record has an independent, verified AUTHORIZED-reviewer adjudication (pass);
-  4. the platform pathway-qualification activation is separately authorized
+  1. a SIGNED, authorized PORTFOLIO approval binds the exact required-competency inventory (finding 2);
+  2. for every required competency, a verified SIGNED assessment record whose OWN signed identity
+     (candidate, cohort, assessment_id, attempt, provenance) matches the slot - so a valid signature
+     transplanted from another candidate or another assessment is rejected (finding 3);
+  3. a verified, authorized, assigned reviewer adjudication bound to that same identity + provenance;
+  4. the separate platform pathway-qualification activation
      (`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`, OFF by default).
 
-No approved portfolio policy exists in Phase 1, and the activation flag is off, so pathway
-qualification is impossible by construction. This module assigns no board count, duration, or overall
-passing threshold - those are set only in an approved portfolio policy, which requires separate
-approval.
+No approved portfolio exists in Phase 1 and the activation flag is off, so pathway qualification is
+impossible by construction. This module declares no board count, duration, or overall threshold; those
+live only in an approved portfolio policy, which requires separate authorization.
 """
 from __future__ import annotations
 
@@ -21,65 +21,99 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+import pathways
 from siem import assessment_contract as ac
+from . import governance
 from .review import ReviewerDirectory, verify_adjudication
 
 
 def pathway_qualification_active() -> bool:
     """Platform gate for FINAL pathway qualification. OFF by default and distinct from the
-    per-assessment gate. A blueprint, score, reviewer, or single-assessment pass cannot turn it on."""
+    (now informational) per-assessment flag. A blueprint, score, reviewer, or single-assessment pass
+    cannot turn it on."""
     return str(os.environ.get("RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE", "")).strip().lower() \
         in ("1", "true", "yes")
 
 
 @dataclass(frozen=True)
 class PortfolioPolicy:
-    """An approved, versioned enumeration of the competencies a PARALLAX qualification requires.
-    `approved` is set only through separate governance; an unapproved policy qualifies no one."""
+    """A versioned enumeration of the competencies a PARALLAX qualification requires. Each entry binds
+    a competency to a specific assessment (`assessment_id` + `assessment_version`). There is NO
+    caller-controlled `approved` flag: authority comes only from a signed `governance.approve_portfolio`
+    record verified in `decide_pathway`."""
     version: str
-    required_competencies: List[str] = field(default_factory=list)
-    approved: bool = False
+    required: List[Dict[str, str]] = field(default_factory=list)  # [{competency, assessment_id, assessment_version}]
+
+    def competencies(self) -> List[str]:
+        return [r["competency"] for r in self.required]
+
+
+def _verified_assessment_identity(signed: Dict[str, Any], *, candidate_key: str, cohort: str,
+                                  assessment_id: str) -> Dict[str, Any]:
+    """Return the signed decision's own bound identity iff the record verifies, is a PARALLAX
+    assessment that passed, and its provenance binding matches the expected candidate/cohort/assessment.
+    Raises ValueError otherwise. This is the transplant guard: identity is read from INSIDE the signed
+    record, not from any caller-supplied sidecar."""
+    if not ac.verify_decision(signed):
+        raise ValueError("assessment decision signature/record invalid")
+    rec = signed.get("record") or {}
+    decision = rec.get("decision") or {}
+    if rec.get("pathway") != pathways.PATHWAY_PARALLAX:
+        raise ValueError("not a PARALLAX assessment record")
+    if not bool(decision.get("assessment_passed")):
+        raise ValueError("assessment not passed")
+    prov = decision.get("provenance") or {}
+    binding = prov.get("binding") or {}
+    if binding.get("candidate_key") != candidate_key or binding.get("cohort") != cohort:
+        raise ValueError("assessment record is bound to a different candidate/cohort (transplant)")
+    if binding.get("assessment_id") != assessment_id:
+        raise ValueError("assessment record is for a different assessment than this competency slot")
+    if not str(rec.get("unit_ref", "")).startswith(assessment_id + "@"):
+        raise ValueError("assessment record unit_ref does not match the required assessment")
+    if not prov.get("provenance_hash"):
+        raise ValueError("assessment record carries no provenance binding")
+    return {"binding": binding, "provenance_hash": prov["provenance_hash"]}
 
 
 def decide_pathway(*, candidate_key: str, cohort: str, portfolio: PortfolioPolicy,
+                   portfolio_approval: Dict[str, Any], authorized_admins,
                    competency_records: Dict[str, Dict[str, Any]],
                    directory: ReviewerDirectory) -> Dict[str, Any]:
-    """Decide pathway qualification. `competency_records` maps competency -> {assessment_record,
-    signed_decision, adjudication, binding}. Fails closed on any gap. Deterministic, no AI."""
+    """Decide pathway qualification. Fails closed on any gap. Deterministic, no AI.
+
+    `competency_records` maps competency -> {signed_decision, adjudication}. Identity is read from the
+    signed records themselves; a transplanted signature (valid but bound to another candidate/assessment)
+    is rejected because its internal binding will not match the slot."""
     breakdown: Dict[str, Any] = {}
-    if not portfolio.approved or not portfolio.required_competencies:
+
+    # (1) the portfolio itself must be independently approved (signed), binding the exact inventory
+    try:
+        governance.verify_portfolio_approval(portfolio_approval, portfolio,
+                                              authorized_admins=authorized_admins or ())
+    except governance.ApprovalError as e:
+        return {"qualified": False, "reason": "no_approved_portfolio_policy",
+                "detail": str(e), "breakdown": breakdown}
+    if not portfolio.required:
         return {"qualified": False, "reason": "no_approved_portfolio_policy", "breakdown": breakdown}
 
     all_ok = True
-    for comp in portfolio.required_competencies:
-        entry = (competency_records or {}).get(comp)
-        detail = {"present": bool(entry)}
+    for req in portfolio.required:
+        comp, assessment_id = req["competency"], req["assessment_id"]
+        entry = (competency_records or {}).get(comp) or {}
+        detail: Dict[str, Any] = {"present": bool(entry), "assessment_id": assessment_id}
         ok = False
-        if entry:
-            signed = entry.get("signed_decision") or {}
-            adjud = entry.get("adjudication")
-            binding = entry.get("binding") or {}
-            rec = signed.get("record") or {}
-            # (2) verified, signed, passing assessment record, bound to this candidate/cohort
-            assessment_ok = (ac.verify_decision(signed)
-                             and rec.get("pathway") == "parallax"
-                             and bool((rec.get("decision") or {}).get("assessment_passed"))
-                             and binding.get("candidate_key") == candidate_key
-                             and binding.get("cohort") == cohort)
-            # (3) independent, verified authorized-reviewer adjudication (pass)
-            review_ok = False
-            # the adjudication is bound to the pre-decision provenance hash (stable; no circular
-            # dependency on the final record hash), which the signed decision carries in provenance.
-            expected_adj_hash = ((rec.get("decision") or {}).get("provenance") or {}).get("provenance_hash")
-            if assessment_ok and adjud_is_dict(adjud):
-                try:
-                    vr = verify_adjudication(adjud, directory=directory, binding=binding,
-                                             assessment_record_hash=expected_adj_hash)
-                    review_ok = (vr.get("decision") == "pass")
-                except Exception:  # noqa: BLE001 - any verification failure is a hard fail
-                    review_ok = False
-            detail.update({"assessment_ok": assessment_ok, "review_ok": review_ok})
-            ok = bool(assessment_ok and review_ok)
+        try:
+            ident = _verified_assessment_identity(entry.get("signed_decision") or {},
+                                                  candidate_key=candidate_key, cohort=cohort,
+                                                  assessment_id=assessment_id)
+            # (3) the adjudication must be authorized/assigned AND bound to the SAME identity+provenance
+            vr = verify_adjudication(entry.get("adjudication") or {}, directory=directory,
+                                     binding=ident["binding"],
+                                     assessment_record_hash=ident["provenance_hash"])
+            ok = (vr.get("decision") == "pass")
+            detail.update({"assessment_ok": True, "review_ok": ok})
+        except Exception as e:  # noqa: BLE001 - any verification failure is a hard, closed fail
+            detail.update({"assessment_ok": False, "review_ok": False, "error": str(e)})
         breakdown[comp] = detail
         all_ok = all_ok and ok
 
@@ -88,13 +122,9 @@ def decide_pathway(*, candidate_key: str, cohort: str, portfolio: PortfolioPolic
     if not all_ok:
         reason = "required_competencies_incomplete"
     elif not platform_active:
-        reason = "pathway_qualification_inactive"   # all competencies met; final qualification withheld
+        reason = "pathway_qualification_inactive"
     else:
         reason = "qualified"
     return {"qualified": qualified, "assessment_complete": all_ok,
             "platform_pathway_qualification_active": platform_active,
             "reason": reason, "breakdown": breakdown}
-
-
-def adjud_is_dict(x) -> bool:
-    return isinstance(x, dict)

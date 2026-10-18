@@ -37,12 +37,12 @@ ASSESSMENT_CONTRACT_VERSION = 1
 
 
 def parallax_qualification_active() -> bool:
-    """Platform-level gate for FINAL PARALLAX qualification. OFF by default and separate
-    from any blueprint field: a blueprint author cannot turn it on, and no combination of
-    scores, remediation, reviewer approval, or signed evidence can bypass it. It flips on
-    only when the PARALLAX qualification policy is separately approved
-    (RANGER_PARALLAX_QUALIFICATION_ACTIVE). Until then PARALLAX produces a signed ASSESSMENT
-    RESULT but never a final qualification (qualified stays False)."""
+    """INFORMATIONAL platform flag surfaced to candidate/admin views (e.g. whether a PARALLAX
+    qualification programme is live). It is OFF by default and is NO LONGER consulted by `decide`:
+    a single-assessment PARALLAX decision is assessment-only and never returns qualified=True
+    regardless of this flag. FINAL pathway qualification is decided by
+    parallax.pathway_qualification.decide_pathway, which has its own separate activation
+    (RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE) and requires an approved portfolio."""
     return str(os.environ.get("RANGER_PARALLAX_QUALIFICATION_ACTIVE", "")).strip().lower() \
         in ("1", "true", "yes")
 
@@ -208,27 +208,23 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
         activated = bool(policy.get("activated"))
         threshold = policy.get("rubric_threshold")
         if not activated or threshold is None:
-            # blueprint policy itself not scored yet -> no assessment, no qualification
+            # blueprint policy itself not scored yet -> no assessment outcome
             return _fail(blueprint, pw, "POLICY_NOT_ACTIVATED",
                          [_err("POLICY_NOT_ACTIVATED",
                                "PARALLAX decision policy is not activated (needs separate approval)")],
                          breakdown)
         rubric_ok = (rubric_agg is not None) and (rubric_agg >= threshold)
-        # The ASSESSMENT may be met (criteria satisfied) and independently signed, but FINAL
-        # QUALIFICATION is gated by the separately-approved platform activation. No score,
-        # remediation, reviewer pass, or signature can bypass that gate.
         assessment_met = bool(all_required_passed and evidence_ok and reviewer_pass and rubric_ok)
-        platform_active = parallax_qualification_active()
-        qualified = bool(assessment_met and platform_active)
+        # A single PARALLAX assessment is ASSESSMENT-ONLY. It never, by itself, constitutes a pathway
+        # qualification - regardless of ANY activation flag. `qualified` is therefore always False on a
+        # single-assessment decision; final qualification is decided separately over an approved
+        # portfolio of all required competencies (parallax.pathway_qualification.decide_pathway). This
+        # removes the prior coupling to RANGER_PARALLAX_QUALIFICATION_ACTIVE at the assessment level, so
+        # no score, remediation, reviewer pass, signature, or flag can make a lab read as a final award.
+        qualified = False
         policy_detail.update({"rubric_threshold": threshold, "rubric_aggregate": rubric_agg,
-                              "blueprint_activated": activated,
-                              "platform_qualification_active": platform_active})
-        if not assessment_met:
-            reason = "portfolio_requirements_unmet"
-        elif not platform_active:
-            reason = "qualification_inactive"      # assessment met; final qualification withheld
-        else:
-            reason = "qualified"
+                              "blueprint_activated": activated, "assessment_only": True})
+        reason = "assessment_met" if assessment_met else "portfolio_requirements_unmet"
         return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown)
 
     return _fail(blueprint, pw, "BAD_POLICY", [_err("BAD_POLICY", f"unknown policy {ptype!r}")],

@@ -29,7 +29,8 @@ def main():
     print("=" * 78)
 
     # 1. governance: an authorized admin approves the versioned spec (no hardcoded approval)
-    approval = governance.approve_spec(BP.LABA_SPEC, approver_id="gov-admin", authorized_admins=ADMINS)
+    approval = governance.approve_spec(BP.LABA_SPEC, BP.blueprint(), approver_id="gov-admin",
+                                       authorized_admins=ADMINS)
     print("\n[1] Spec approved via governance: %s@%s (approver=gov-admin)"
           % (BP.LABA_SPEC.assessment_id, BP.LABA_SPEC.version))
 

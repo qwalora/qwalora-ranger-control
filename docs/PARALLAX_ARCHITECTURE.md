@@ -53,25 +53,35 @@ PARALLAX submission can never award STRATA credit and vice versa.
 Two distinct levels, deliberately separated:
 
 - **Assessment completion** — the outcome of one lab: a signed assessment record stating whether that
-  lab's objective checks passed, its critical-failure vetoes are clear, and its human review passed.
-  A single lab pass is an assessment result only. It never, on its own, constitutes PARALLAX
-  qualification, regardless of any flag.
+  lab's objective checks passed, its critical-failure vetoes are clear, and its human review passed. A
+  single-assessment decision is **assessment-only**: `assessment_contract.decide` returns
+  `qualified=False` for every PARALLAX assessment **regardless of any activation flag** (the prior
+  coupling to `RANGER_PARALLAX_QUALIFICATION_ACTIVE` at the assessment level is removed; that flag is
+  now only an informational surface flag). No score, remediation, reviewer pass, signature, or flag can
+  make a lab read as a final award.
 - **Pathway qualification** — a separate decision (`parallax.pathway_qualification.decide_pathway`)
-  that requires ALL of: an approved, versioned **portfolio policy** enumerating the required
-  competencies; a verified, signed, passing assessment record for every required competency, bound to
-  (candidate, cohort, assessment, attempt); an independent **authorized-reviewer adjudication** for
-  each; and a separately-authorized platform activation (`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`,
-  OFF). It fails closed on any missing piece. No approved portfolio exists yet, so pathway
-  qualification is currently impossible by construction.
+  that requires ALL of: a **signed, authorized portfolio approval** (`governance.approve_portfolio`)
+  binding the exact required-competency inventory — there is no caller-controlled `approved` boolean; a
+  verified, signed, passing assessment record for every required competency whose OWN signed identity
+  (candidate, cohort, assessment id, attempt, provenance) matches the slot, so a valid signature
+  transplanted from another candidate or assessment is rejected; an independent **authorized, assigned
+  reviewer adjudication** bound to that same identity and provenance for each; and a separately-
+  authorized platform activation (`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`, OFF). It fails closed
+  on any missing piece. No approved portfolio exists yet, so pathway qualification is currently
+  impossible by construction.
 
-Both the per-assessment platform gate (`RANGER_PARALLAX_QUALIFICATION_ACTIVE`) and the pathway gate
-(`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`) are OFF and are kept off in Phase 1.
+The pathway gate (`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`) is the only qualification activation,
+and it is OFF and kept off in Phase 1.
 
 ### Governance, reviewer authority, and binding
 
 - **Versioned approval governance** replaces any hardcoded `approved=True`. An assessment spec binds a
-  candidate instance only when an authorized admin has issued a signed approval record for that spec's
-  exact content hash (`parallax.governance`). An unapproved or drifted spec cannot produce an instance.
+  candidate instance only when an authorized admin has issued a signed approval record binding the
+  **complete consequential scoring specification** — the spec identity, metric and threshold, and the
+  full blueprint hash (rubric dimensions, critical-failure conditions, objective evaluator/checks,
+  decision policy, evidence requirements, environment version) (`parallax.governance`). Any material
+  change to the spec or blueprint moves the scoring-spec hash and invalidates the approval until it is
+  reissued. An unapproved or drifted assessment cannot produce an instance.
 - **Authenticated, assigned reviewer authority** (`parallax.review`): a reviewer adjudication is
   accepted only when the reviewer is an authorized reviewer AND was assigned to this
   (candidate, cohort, assessment, attempt), and the adjudication is a signed record bound to that

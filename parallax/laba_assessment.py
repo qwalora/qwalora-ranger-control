@@ -38,7 +38,7 @@ def bind_instance(*, cohort: str, candidate_key: str, attempt: int = 1,
                   approval: Dict[str, Any], authorized_admins):
     spec = BP.LABA_SPEC
     contract = contracts.resolve(spec, contracts.bind(
-        spec, cohort=cohort, candidate_key=candidate_key, attempt=attempt,
+        spec, BP.blueprint(), cohort=cohort, candidate_key=candidate_key, attempt=attempt,
         approval=approval, authorized_admins=authorized_admins))
     return spec, contract, generate(contract)
 
