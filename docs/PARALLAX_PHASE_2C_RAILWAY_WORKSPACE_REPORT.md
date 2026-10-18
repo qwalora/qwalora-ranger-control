@@ -101,6 +101,38 @@ is approximately **$30-50/month**; idle-scaling (if acceptable given cold-start 
 reduces it. This fits comfortably within the stated $300/month infrastructure budget and would be the
 only new recurring cost in this phase.
 
+## 3b. LIVE PROVISIONING AND REAL-INFERENCE VERIFICATION (VERIFIED, this session)
+
+Operator created `parallax-nonprod` (env id `a7126c4e-a022-4968-8686-a9ea9a3708d7`); verified empty and
+isolated (zero services/volumes/shared variables/staged changes) before any write.
+
+Provisioned in `parallax-nonprod` (and only there):
+- Service **`parallax-inference`**, id `9300c48d-55d1-49c5-951f-cb9c183c63d6`, source
+  `qwalora/qwalora-ranger-control`, branch `feature/parallax-p1-architecture-foundations`, root directory
+  `deploy/parallax-inference` (Dockerfile build), region us-west2, no public domain (private only).
+- Volume `parallax-inference-volume` id `e94b0f5c-fccd-416a-8353-66d822ad406b` at `/root/.ollama`
+  (defaulted to 50 GB - oversized for a ~0.4 GB model; flagged for shrink, see limitations).
+
+**Railway model download: VERIFIED possible.** Deploy `6bd44599` logs show Ollama pulling the model
+from its registry inside Railway: a 397 MB layer plus manifest, `POST /api/pull` -> 200 in 9.08s.
+
+**Genuine model identity: VERIFIED.** `ollama show` / llama.cpp loader report: name "Qwen2.5 0.5B
+Instruct", architecture `qwen2`, **494.03M parameters**, quantization **Q4_K_M** (373.71 MiB GGUF V3),
+context length 32768, License **Apache 2.0**, system prompt "You are Qwen, created by Alibaba Cloud".
+
+**Genuine generation: VERIFIED.** Deploy `1552228d` (commit `41289a5`) startup self-test ran one real
+generation via the `ollama` CLI: `POST /api/generate` -> 200 in 6.23s; llama runner cold-start 5.80s;
+the streamed output decoded to exactly **`PARALLAX-LIVE`**, the requested text. This is a liveness proof
+read from Railway logs (no public endpoint exposed), not a research finding.
+
+**Resource usage (observed, CPU):** model buffer 373.71 MiB + KV cache 48 MiB + compute buffer
+300.25 MiB ~= 0.72 GiB working set; a short generation ~6 s including a ~5.8 s runner cold start.
+
+**Updated cost (real data):** inference service ~1-1.5 GB RAM / 1 vCPU while active (idle-scaled to near
+zero when asleep) ~= $15-40/mo depending on usage; the 50 GB volume as provisioned ~= $12/mo (should be
+~3 GB ~= $0.75/mo once shrunk); dedicated PostgreSQL (not yet deployed) ~$5-10/mo. Combined well under
+the $300 budget.
+
 ## 4. Model acquisition and deployment verification (PREPARED / BLOCKED)
 
 Prepared, non-deployed artifacts under `deploy/parallax-inference/`: `Dockerfile` (Ollama base, private
