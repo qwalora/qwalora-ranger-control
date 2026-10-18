@@ -293,9 +293,17 @@ verified for these two configurations).
 
 ## 15. Git commit and push information
 
-_Filled at commit time:_ commit SHA, author `cloudcwfranck <yakengne@gmail.com>` (no attribution
-trailers), files changed, and the forward/reverse full-suite result lines with the PostgreSQL version
-used for the genuine-DB runs.
+- Branch: `feature/parallax-p1-architecture-foundations` (never `main`).
+- Phase 1C commit: `f53ef9c` — "feat(parallax): Phase 1C cryptographic lifecycle, migration safety,
+  audit + recovery validation", author `cloudcwfranck <yakengne@gmail.com>`, no attribution trailers.
+  17 files changed (+2134 / -37): `signing.py`, `models.py`, `parallax/{registry,auditlog,
+  assessment_store}.py` modified; `parallax/{keyadmin,evidence_migration,audit_integrity}.py`,
+  `migrate_unit_result_uniqueness.py`, six `siem/tests/test_parallax_*` suites, and this report added;
+  `siem/tests/test_f41_persistence_pg.py` test-hygiene fix.
+- Full-suite results: forward PG-off **342 passed / 37 skipped / 0 failed**; reverse PG-on
+  **363 passed / 16 skipped / 0 failed**; genuine-DB runs on PostgreSQL 16.15.
+- Pushed to `origin/feature/parallax-p1-architecture-foundations`. `main` unchanged at `431a183`
+  (local and remote). No merge, no deploy.
 
 ## 16. Engineering readiness determination
 
