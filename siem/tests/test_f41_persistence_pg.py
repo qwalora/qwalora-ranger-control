@@ -34,6 +34,20 @@ from siem import custody_integrity as ci          # noqa: E402
 ADMIN = {"role": "admin", "id": "admin-pg"}
 
 
+@pytest.fixture(autouse=True)
+def _restore_fixture_registry():
+    # These tests install a DB-backed trusted-fixture registry into the process-global
+    # evidence_validation._REGISTRY. Restore the prior (in-memory) registry afterwards so the
+    # DB-backed one - whose .register needs an app context + live engine - cannot leak into a later
+    # suite (e.g. the F4 tests) and raise "Working outside of application context". Test-isolation
+    # only; no production behavior changes.
+    saved = valn.fixture_registry()
+    try:
+        yield
+    finally:
+        valn.set_fixture_registry(saved)
+
+
 def _pg_or_skip():
     if not _pgtest.resolve_test_url():
         pytest.skip("RANGER_TEST_DATABASE_URL not set; F4.1 real-DB tests skipped (fail-closed)")

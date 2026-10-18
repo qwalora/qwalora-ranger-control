@@ -143,6 +143,18 @@ def ensure_schema(db):
             ("related", "VARCHAR(200)"),
             ("track", "VARCHAR(30)"),
         ],
+        "parallax_approvals": [
+            # Phase 1C: signing-key id recorded alongside the signature for precise verification
+            # after key rotation. Nullable; a NULL row is a legacy record verified under the
+            # trusted-key policy (signing.verify with kid=None).
+            ("signing_kid", "VARCHAR(80)"),
+        ],
+        "parallax_audit_events": [
+            ("signing_kid", "VARCHAR(80)"),
+        ],
+        "unit_results": [
+            ("signing_kid", "VARCHAR(80)"),
+        ],
     }
     insp = _inspect(db.engine)
     existing_tables = set(insp.get_table_names())
@@ -808,6 +820,7 @@ class UnitResult(db.Model):
     parent_record_hash = db.Column(db.String(64), nullable=True)  # for append-only adjudications
     kind = db.Column(db.String(30), nullable=False, default="qualification_decision")
     signature = db.Column(db.Text, nullable=True)               # Ed25519 over the record
+    signing_kid = db.Column(db.String(80), nullable=True)       # Phase 1C: key id of `signature`
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     KINDS = ("qualification_decision", "reviewer_adjudication")
@@ -843,6 +856,7 @@ class ParallaxApproval(db.Model):
     content_hash = db.Column(db.String(64), nullable=False, index=True)  # scoring_spec/portfolio hash
     approval_record = db.Column(db.Text, nullable=False)          # canonical signed {record} JSON
     signature = db.Column(db.Text, nullable=False)               # Ed25519 over the record
+    signing_kid = db.Column(db.String(80), nullable=True)        # Phase 1C: key id of `signature`
     approver_id = db.Column(db.String(120), nullable=False)      # authenticated authorized admin id
     status = db.Column(db.String(16), nullable=False, default="active", index=True)
     superseded_by = db.Column(db.String(64), nullable=True)       # content_hash of a newer approval
@@ -900,9 +914,37 @@ class ParallaxAuditEvent(db.Model):
     record_hash = db.Column(db.String(64), nullable=False)
     parent_hash = db.Column(db.String(64), nullable=True)
     signature = db.Column(db.Text, nullable=False)
+    signing_kid = db.Column(db.String(80), nullable=True)        # Phase 1C: key id of `signature`
     ts = db.Column(db.DateTime(timezone=True), default=_now)
 
     __table_args__ = (db.UniqueConstraint("stream", "seq", name="uq_parallax_audit_seq"),)
+
+
+class ParallaxAuditCheckpoint(db.Model):
+    """PARALLAX Phase 1C - a separately-protected anchor over the audit chain (mirrors
+    CustodyCheckpoint). An internally-valid hash chain cannot detect removal of its most recent events
+    (truncation): drop the last N rows and the surviving prefix still verifies. This checkpoint records,
+    out of band from the events, the chain head hash, head seq and event COUNT, each signed and chained
+    to the previous checkpoint (prev_checkpoint_hash) so checkpoints cannot be silently rolled back.
+    Comparing the live chain against the latest checkpoint detects truncation (fewer events than
+    anchored) and head rewrites (same count, different head).
+
+    Honest limitation: events and checkpoints are signed with the SAME server Ed25519 key, so a holder
+    of that key could forge both. It defends against DB-level truncation/tampering by anyone WITHOUT
+    the key, and against accidental loss, up to the last checkpoint. External anchoring (publishing the
+    checkpoint hash out of band) is a future, no-paid-infra extension."""
+    __tablename__ = "parallax_audit_checkpoints"
+    id = db.Column(db.Integer, primary_key=True)
+    stream = db.Column(db.String(40), nullable=False, default="parallax-governance", index=True)
+    event_count = db.Column(db.Integer, nullable=False)
+    head_hash = db.Column(db.String(64), nullable=True)           # NULL only for an empty chain
+    head_seq = db.Column(db.Integer, nullable=True)
+    prev_checkpoint_hash = db.Column(db.String(64), nullable=True)
+    checkpoint_hash = db.Column(db.String(64), nullable=False)
+    ts = db.Column(db.String(40), nullable=False)
+    signature = db.Column(db.Text, nullable=False)                # Ed25519 over the checkpoint record
+    signing_kid = db.Column(db.String(80), nullable=True)         # Phase 1C: key id of `signature`
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
 
 class EvidenceArtifact(db.Model):

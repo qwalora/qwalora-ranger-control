@@ -54,28 +54,36 @@ def append(db, *, action: str, actor_id: Optional[str], subject_kind: str, subje
                              subject_kind=subject_kind, subject_ref=subject_ref,
                              detail_json=signing.canonical(record).decode("utf-8"),
                              record_hash=record_hash, parent_hash=parent_hash,
-                             signature=signing.sign(record))
+                             signature=signing.sign(record), signing_kid=signing.active_kid())
     db.session.add(row)
     return row
 
 
 def verify_chain(db) -> bool:
-    """True if every audit event's signature is intact and the parent-hash chain is unbroken."""
+    """True if every audit event's signature is intact, the seq is gap-free and in order, and the
+    parent-hash chain is unbroken. Detects payload tampering, reordering, removed/duplicate middle
+    events, and broken predecessor references. It does NOT by itself detect truncation of the chain
+    TAIL - that requires the separately-anchored checkpoint in parallax.audit_integrity."""
     from models import ParallaxAuditEvent
     rows = (ParallaxAuditEvent.query.filter_by(stream=_STREAM)
             .order_by(ParallaxAuditEvent.seq.asc()).all())
     prev_hash = None
-    for r in rows:
+    for i, r in enumerate(rows):
         import json
         try:
             record = json.loads(r.detail_json)
         except Exception:  # noqa: BLE001
             return False
+        if record.get("seq") != i or r.seq != i:        # gap, duplicate, or reordered seq
+            return False
         if record.get("parent_hash") != prev_hash:
             return False
         if hashlib.sha256(signing.canonical(record)).hexdigest() != r.record_hash:
             return False
-        if not signing.verify(record, r.signature):
+        # Verify against the key this event names (Phase 1C). A NULL kid is a legacy event verified
+        # under the trusted-key policy; a stored kid is enforced exactly, so an altered kid, an
+        # unknown kid, or a revoked key fails closed.
+        if not signing.verify(record, r.signature, kid=r.signing_kid):
             return False
         prev_hash = r.record_hash
     return True

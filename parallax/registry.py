@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 import strata_catalog as _cat
 import githuboauth
+import signing
 from . import governance, auditlog
 
 
@@ -86,7 +87,8 @@ def store_spec_approval(db, spec, blueprint: Dict[str, Any], *, principal) -> Tu
         pathway="parallax", kind="scoring_spec", assessment_id=spec.assessment_id,
         assessment_version=spec.version, competency=spec.competency, content_hash=content_hash,
         approval_record=json.dumps(approval["record"], sort_keys=True, separators=(",", ":")),
-        signature=approval["signature"], approver_id=who, status="active")
+        signature=approval["signature"], signing_kid=signing.active_kid(), approver_id=who,
+        status="active")
     db.session.add(row)
     auditlog.append(db, action="approve_scoring_spec", actor_id=who, subject_kind="scoring_spec",
                     subject_ref=content_hash,
@@ -111,6 +113,12 @@ def active_spec_approval(db, spec, blueprint: Dict[str, Any]) -> Optional[Dict[s
     try:
         governance.verify_approval(approval, spec, blueprint, authorized_admins={row.approver_id})
     except governance.ApprovalError:
+        return None
+    # Phase 1C: enforce the key this row names. governance.verify_approval already rejects a signature
+    # that no trusted key validates (so a revoked key fails closed); this additionally rejects an
+    # altered/unknown stored kid. A NULL kid is a legacy row covered by the trusted-key policy above.
+    if row.signing_kid is not None and not signing.verify(
+            approval["record"], approval["signature"], kid=row.signing_kid):
         return None
     if row.approver_id not in authorized_admins(db):
         return None   # the approver's governing authorization has lapsed
@@ -152,7 +160,8 @@ def store_portfolio_approval(db, policy, *, principal) -> Tuple[Dict[str, Any], 
     row = ParallaxApproval(
         pathway="parallax", kind="portfolio", policy_version=policy.version, content_hash=content_hash,
         approval_record=json.dumps(approval["record"], sort_keys=True, separators=(",", ":")),
-        signature=approval["signature"], approver_id=who, status="active")
+        signature=approval["signature"], signing_kid=signing.active_kid(), approver_id=who,
+        status="active")
     db.session.add(row)
     auditlog.append(db, action="approve_portfolio", actor_id=who, subject_kind="portfolio",
                     subject_ref=content_hash, detail={"version": policy.version,
@@ -175,6 +184,9 @@ def active_portfolio_approval(db, policy) -> Optional[Dict[str, Any]]:
     try:
         governance.verify_portfolio_approval(approval, policy, authorized_admins={row.approver_id})
     except governance.ApprovalError:
+        return None
+    if row.signing_kid is not None and not signing.verify(
+            approval["record"], approval["signature"], kid=row.signing_kid):
         return None
     if row.approver_id not in authorized_admins(db):
         return None

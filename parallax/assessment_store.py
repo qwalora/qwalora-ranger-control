@@ -83,7 +83,8 @@ def record_assessment(db, envelope: Dict[str, Any], *, candidate_key: str) -> Di
             qualified=False, reason=(rec.get("reason") or "")[:60],
             decision_json=json.dumps(rec, sort_keys=True, separators=(",", ":")),
             record_hash=dec_hash, parent_record_hash=None, kind="qualification_decision",
-            signature=signed.get("signature"))
+            signature=signed.get("signature"),
+            signing_kid=signing.kid_for(rec, signed.get("signature")))
         db.session.add(dec_row)
         auditlog.append(db, action="record_assessment", actor_id=None, subject_kind="assessment",
                         subject_ref=dec_hash or "",
@@ -104,7 +105,8 @@ def record_assessment(db, envelope: Dict[str, Any], *, candidate_key: str) -> Di
                 qualified=False, reason=(adj_rec.get("decision") or "")[:60],
                 decision_json=json.dumps(adj_rec, sort_keys=True, separators=(",", ":")),
                 record_hash=adj_hash, parent_record_hash=prov_hash, kind="reviewer_adjudication",
-                signature=adjudication.get("signature"))
+                signature=adjudication.get("signature"),
+                signing_kid=signing.kid_for(adj_rec, adjudication.get("signature")))
             db.session.add(adj_row)
             auditlog.append(db, action="adjudicate", actor_id=adj_rec.get("reviewer_id"),
                             subject_kind="assessment", subject_ref=dec_hash or "",
