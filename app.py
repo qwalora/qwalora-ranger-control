@@ -550,6 +550,8 @@ def create_app():
     # not apply to them; they are exempt.
     _CSRF_EXEMPT = {"submit_report", "grade", "lab_start", "lab_status",
                     "grade_submit", "lab_dataset",
+                    # PARALLAX Lab A dev preview API (default-off flag; JSON API, not a cookie form)
+                    "parallax_laba_evaluate",
                     # The /soc gateway proxy: Dashboards XHRs carry their own osd-xsrf
                     # header (enforced at the gateway and upstream) and ride a
                     # SameSite=Lax session cookie, so the portal form-CSRF token (which
@@ -3655,6 +3657,17 @@ def create_app():
                                   {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
     except Exception as e:  # noqa: BLE001
         app.logger.warning("workbench not registered: %s", e)
+
+    # PARALLAX Lab A development preview (/parallax/laba/*). Behind the RANGER_PARALLAX_LABA flag
+    # (routes 404 when off) so production stays dark. Dev-only: serves the candidate-safe brief and a
+    # dry-run objective check; awards no credit, writes no qualification records, and performs no
+    # pathway qualification. Isolated from STRATA.
+    try:
+        import parallax_routes
+        parallax_routes.register(app, Candidate, db,
+                                 {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("parallax Lab A not registered: %s", e)
 
     return app
 

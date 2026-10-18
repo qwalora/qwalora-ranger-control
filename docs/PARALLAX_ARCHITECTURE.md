@@ -1,139 +1,134 @@
-# PARALLAX — AI Engineering Qualification (Phase 1 architecture foundations)
+# PARALLAX — AI Security, Adversarial Systems & Digital Trust (Phase 1 foundations)
 
-PARALLAX is Qwalora Ranger's rigorous, evidence-based AI-engineering qualification track. It shares
-the Ranger platform with STRATA (cybersecurity) but is architecturally distinct. This document is the
-Phase 1 foundation: the compatibility architecture, the competency framework, the qualification-system
-design, and the first vertical slice. It is design plus a working first slice, not a finished program.
-Board count, duration, and passing criteria are derived from the qualification design and remain
-subject to architectural review; they are not copied from STRATA.
+PARALLAX is Qwalora Ranger's advanced qualification pathway for **AI-security, adversarial-systems,
+and digital-trust engineering**. It shares the Ranger platform with STRATA (cybersecurity) but is
+architecturally distinct. PARALLAX is **not** a general machine-learning engineering qualification and
+**not** a curriculum in statistics or reproducible ML experimentation. It measures an engineer's
+ability to find, prove, and reason about security and trust failures in AI systems through bounded,
+executable investigations with server-protected grading truth and independently verifiable evidence.
 
-## What PARALLAX is (and is not)
+This document is the Phase 1 foundation and the mission of record. It is design plus one working,
+executable first assessment (Lab A). Board count, duration, overall passing threshold, and
+qualification authority are **not** assigned here and must not be set without separate approval.
 
-PARALLAX measures demonstrated AI-engineering competence through reproducible experiments, real
-technical deliverables, controlled evaluations, and independently verifiable evidence. It is not a
-prompt-engineering quiz, a chatbot tutorial, a generic ML course, an attendance certificate, a
-multiple-choice test, or a renamed clone of STRATA. A passing result must represent demonstrated
-engineering ability, never an attractive model output.
+## Mission and competency domains
+
+PARALLAX's established competency domains (these are domains, not necessarily boards):
+
+1. **Agent and tool authorization security** — a tool-using AI agent stays within its authorized tool
+   and resource scope; unauthorized or out-of-scope tool use and cross-tenant access are detected.
+2. **LLM and RAG trust boundaries, prompt injection, and data isolation** — untrusted retrieved or
+   user content cannot subvert authorization or exfiltrate tenant-isolated data.
+3. **AI red teaming and adversarial evaluation** — systematic adversarial probing and the honest
+   evaluation of model/system robustness and failure modes.
+4. **Model and AI supply-chain security** — integrity and provenance of models, weights, datasets, and
+   pipeline artifacts; detection of tampering and poisoning.
+5. **Synthetic media, multimodal fraud, and digital provenance** — detection and provenance
+   verification for manipulated or synthetic media.
+6. **AI incident response and forensic investigation** — investigating an AI-involved incident,
+   reconstructing what happened, and producing defensible, evidence-backed findings.
+
+For any domain to become a graded board, it must first define all ten of: (1) what the engineer must
+demonstrate; (2) authorized tools + execution environment; (3) prerequisites; (4) the task/investigation;
+(5) the artifact produced; (6) independent evaluation; (7) critical-failure conditions; (8) repeatability
+and integrity; (9) safely revealed feedback; (10) why it measures competence, not memorization.
 
 ## One platform, two tracks (compatibility architecture)
 
-Shared (reused, never forked): GitHub-OAuth identity and the candidate lifecycle; cohort governance;
-the versioned, approved spec + integrity-contract pattern (generation contract hash/MAC); objective
-grading with a pass bar and a mandatory human-review gate for narrative artifacts; the Ed25519 signing
-primitive for evidence and decisions; immutable qualification records; evidence preservation; and the
-test harness.
+Reused unchanged (pathway-neutral): `pathways` (PARALLAX identity); `siem.assessment_contract.decide`
+(the shared ten-concern decision engine, STRATA and PARALLAX policy branches); the `siem.evaluator`
+Evaluator / signed ObjectiveCheckResult / ProtectedTruthHandle / EvaluatorScope contract; top-level
+`signing` (Ed25519); `siem.schema.keyed_mac`; and the pathway-scoped, signed `models.UnitResult`
+record. STRATA grading is untouched: its objective bar stays `program.PASS_BAR = 95.0`.
 
-Isolated (must never cross): STRATA scenarios, seeds, and scoring truth vs PARALLAX datasets, holdouts,
-and grading truth; per-track assessment specs and bindings; and per-track credit. A hard invariant,
-enforced by code and tests: a PARALLAX submission can never produce STRATA credit and vice versa. The
-pathway is carried on the candidate/binding and checked at every award and every candidate-facing read.
+Kept STRATA-isolated (PARALLAX builds parallels, never extends): the six-board STRATA ladder
+(`program.py`), `siem/board_variants.py`, STRATA scenario generators/graders, Board 2 qualification.
 
-Boundary rule: reuse a STRATA primitive only where it is pathway-agnostic. Where a primitive encodes
-STRATA domain meaning (incident families, SIEM, GOAD ranges, Board 2 citation grading), PARALLAX gets
-its own module in a `parallax_*` namespace rather than overloading the STRATA one.
+Hard isolation invariant (enforced by `assessment_contract.decide` and by the pathway-qualification
+engine): a PARALLAX decision requires a PARALLAX-scoped authorization and a PARALLAX blueprint, so a
+PARALLAX submission can never award STRATA credit and vice versa.
 
-## Competency framework
+## Qualification boundary (assessment completion is NOT pathway qualification)
 
-Candidate competency domains (candidate list, not a final board list; each becomes a board only after
-architectural review):
+Two distinct levels, deliberately separated:
 
-1. Data engineering and dataset integrity (leakage, split hygiene, provenance).
-2. Reproducible computational experimentation (seeds, pinned environments, deterministic re-runs).
-3. ML implementation and evaluation (honest held-out metrics, baselines, uncertainty).
-4. Generalization, robustness, and failure analysis (distribution shift, ablations).
-5. Statistical reasoning and experimental design (power, confidence intervals, significance).
-6. Model security and misuse resistance (data poisoning, extraction, prompt/eval injection).
-7. Responsible and trustworthy AI engineering (bias measurement, documented limitations).
-8. Serving, observability, and operational reliability (latency, drift monitoring, rollback).
-9. AI systems integration and engineering trade-offs (cost/quality/latency decisions with evidence).
+- **Assessment completion** — the outcome of one lab: a signed assessment record stating whether that
+  lab's objective checks passed, its critical-failure vetoes are clear, and its human review passed.
+  A single lab pass is an assessment result only. It never, on its own, constitutes PARALLAX
+  qualification, regardless of any flag.
+- **Pathway qualification** — a separate decision (`parallax.pathway_qualification.decide_pathway`)
+  that requires ALL of: an approved, versioned **portfolio policy** enumerating the required
+  competencies; a verified, signed, passing assessment record for every required competency, bound to
+  (candidate, cohort, assessment, attempt); an independent **authorized-reviewer adjudication** for
+  each; and a separately-authorized platform activation (`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`,
+  OFF). It fails closed on any missing piece. No approved portfolio exists yet, so pathway
+  qualification is currently impossible by construction.
 
-Every assessment, before it becomes a board, must define all ten of: (1) what the engineer must
-demonstrate; (2) authorized tools + execution environment; (3) prerequisite knowledge; (4) the task or
-experiment; (5) the artifact produced; (6) how it is independently evaluated; (7) what constitutes a
-critical failure; (8) how repeatability and integrity are maintained; (9) what feedback is safely
-revealed; (10) why it measures competence, not memorization.
+Both the per-assessment platform gate (`RANGER_PARALLAX_QUALIFICATION_ACTIVE`) and the pathway gate
+(`RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`) are OFF and are kept off in Phase 1.
 
-## Qualification-system design (evidence-based)
+### Governance, reviewer authority, and binding
 
-- **Versioned, approved assessment specifications** — each spec has a semantic version and an approval
-  state; only approved specs may bind.
-- **Distinct scenario instances** — a per-candidate, per-attempt instance derived from a reproducible
-  seed and a generation contract (same integrity pattern STRATA pins with `gen_hash`/content-hash).
-- **Controlled data and model artifacts** — datasets and sealed holdouts are generated deterministically
-  from the contract; the holdout and its labels are never disclosed to the candidate.
-- **Objective grading** — the evaluator re-derives the instance from the contract independently and
-  scores against a sealed holdout with explicit metrics, uncertainty, a baseline, and a threshold.
-- **Independent verification** — grading is reproducible from the signed submission + the contract by a
-  third party, with no access to candidate-only state.
-- **Research/experimental logs** — the evaluator records inputs, metrics, and verdict rationale into an
-  immutable, signed record.
-- **Candidate-safe briefs** — the brief discloses the task, public schema, metric, and threshold, but
-  never the holdout, the planted-trap identity, or grading internals.
-- **Signed submissions and decisions** — both are Ed25519-signed (the platform's existing primitive).
-- **Human review where applicable** — narrative artifacts (for example a written failure analysis) pass
-  the platform's mandatory human-approval gate, exactly as STRATA report approval does.
-- **Anti-replay and non-transfer** — holdout labels are never released, so predictions cannot be
-  precomputed from them; per-candidate instances differ, so a solution tuned to one does not transfer.
-- **Attempt and cohort isolation** — instance = f(spec, pathway, cohort, candidate, attempt).
-- **Critical-failure veto** — a disqualifying engineering error (e.g. depending on leakage) vetoes a
-  pass regardless of headline metric.
-- **Immutable qualification records** — append-only, signed.
-- **Simulation vs experiment** — synthetic data is explicitly labeled as a fixture; the evaluation is a
-  genuine executed computation, never a hypothetical presented as external validation.
+- **Versioned approval governance** replaces any hardcoded `approved=True`. An assessment spec binds a
+  candidate instance only when an authorized admin has issued a signed approval record for that spec's
+  exact content hash (`parallax.governance`). An unapproved or drifted spec cannot produce an instance.
+- **Authenticated, assigned reviewer authority** (`parallax.review`): a reviewer adjudication is
+  accepted only when the reviewer is an authorized reviewer AND was assigned to this
+  (candidate, cohort, assessment, attempt), and the adjudication is a signed record bound to that
+  identity and to the assessment record's hash. A mere non-empty reviewer id is rejected. Reviewer
+  decisions and rubric scores are never accepted from the candidate-accessible boundary.
+- **Cryptographic + logical binding**: the signed final assessment record binds the submission content
+  hash, the evidence/citation references, the evaluator's signed result, the verified reviewer
+  adjudication, the spec/blueprint hash, the instance-contract MAC, and the
+  candidate/cohort/assessment/attempt identity. Tampering with any part invalidates the record.
 
-Leakage/contamination controls: the holdout is sealed; the candidate never sees holdout labels;
-evaluation runs server-side; the grader detects and penalizes dependence on a planted leak via a
-controlled ablation; per-candidate instances prevent candidate-to-candidate transfer.
+## PX-1 (leakage-safe model evaluation): experimental component only
 
-## Proposed assessment progression (indicative, pending review)
+PX-1 remains in the tree as a **clearly-labeled, reusable experimental assessment component** for
+data-integrity / leakage reasoning. It is **not** a mandatory PARALLAX qualification, **not** the first
+PARALLAX assessment, and does **not** drive the approved progression. The previously-proposed general-ML
+"P2" progression is **cancelled**. PX-1 is retained only because its leakage-ablation evaluation pattern
+is a useful, well-tested building block that an AI-security lab may reuse.
 
-P1 Data integrity and leakage-safe evaluation (first slice, implemented) → P2 reproducible experiment
-with uncertainty → P3 robustness/failure analysis under shift → P4 model security (poisoning/extraction)
-→ P5 responsible-AI measurement → capstone: an integrated systems build with an operational-reliability
-and trade-off defense. Count and gating are indicative only.
+## Lab A — Agent & Tool Authorization Security (the actual first assessment)
 
-## First vertical slice — PX-1: Leakage-Safe Model Evaluation
+Competency 1 (agent/tool authorization security) with material overlap into competency 2 (RAG trust
+boundaries / data isolation). Implemented in this phase as a working vertical slice.
 
-**Competency:** data integrity + honest generalization. **Environment:** offline Python, numpy +
-scikit-learn only; no network, no GPU, no paid APIs. **Prerequisite:** supervised learning basics,
-train/validation/test hygiene, data leakage.
+**Environment (bounded, offline, deterministic).** An enterprise simulator with: an AI agent serving
+multiple tenants; a fixed tool catalog (read/search/share/export/delete/escalate class tools); an
+authorization policy (per-principal, per-tenant tool and resource scope); tenant-scoped documents; a
+realistic sequence of observable agent events (tool calls with principal, tenant, resource, and an
+OBSERVED outcome); approved/benign operations that must keep working; and adversarial events driven by
+untrusted retrieved content (RAG) carrying injected instructions that attempt cross-tenant access,
+out-of-scope tools, or privilege escalation. No live model, no network, no GPU, no external inference,
+no execution of candidate-supplied code.
 
-**Task.** The candidate is bound to a per-candidate instance: a deterministically generated tabular
-binary-classification dataset with (a) a disclosed training split, (b) a disclosed public validation
-split, (c) a sealed holdout the candidate never sees, and (d) exactly one planted "leakage" feature that
-is highly predictive on train/validation but is a target leak that will not generalize. The candidate
-submits a declarative solution: the feature set to use (by name), a model configuration drawn from a
-pinned allowed family, and a short written leakage analysis. No arbitrary candidate code is executed;
-the grader fits the pinned model family with the candidate's declared features and hyperparameters.
+**Task.** The candidate investigates the observable event log and the authorization policy and submits
+**evidence-backed findings**: for each event they flag, a classification (actual unauthorized access /
+blocked attempt / legitimate) with a cited event id as evidence, plus a short written root-cause /
+policy-gap analysis. The grading truth (the true per-event classification and the injected-instruction
+provenance) is sealed server-side and never shown to the candidate.
 
-**Artifact.** A signed submission `{feature_set, model_config, leakage_analysis}`.
+**Objective evaluation (deterministic, replay-based).** The evaluator independently replays the policy
+over the sealed event log to recompute truth, then scores the candidate's findings: it distinguishes
+actual unauthorized access (a breach that occurred), successfully blocked attempts, unsupported claims
+(a flagged event with no valid supporting citation), and legitimate activity. Precision and recall over
+breaches are both scored, so flagging everything as a breach fails (false positives on benign ops tank
+precision; "deny everything" cannot pass). Critical-failure vetoes: missing an actual cross-tenant
+breach that occurred, or asserting a breach with no valid evidence citation. The narrative analysis is
+human-reviewed. Per-candidate instances differ (principals, tenants, which events are breaches vs
+blocked), so solutions do not transfer. Simulated incidents are always labeled as simulated; they are
+never presented as externally observed.
 
-**Independent evaluation (objective, deterministic).** The evaluator re-derives the dataset from the
-contract, fits the pinned model on the training split using the candidate's declared features, and
-scores on the sealed holdout (accuracy + AUC with bootstrap confidence intervals), against a baseline
-and a pass threshold. It then runs a leakage ablation: if the declared feature set contains the planted
-leak, or if the solution's holdout performance collapses to baseline when the leak column is permuted
-(i.e. the solution depended on the leak), a **critical-failure veto** is applied. A pass requires
-holdout metric at or above threshold AND no leakage veto AND the written analysis approved by a human
-reviewer.
+## What Phase 1 delivers (this branch)
 
-**Why it measures competence, not memorization.** The candidate must identify and exclude the leak,
-choose features and a configuration that generalize to unseen data, and explain the leak. Per-candidate
-instances and a sealed holdout defeat memorization and transfer; the ablation defeats "accidentally
-high" leak-driven scores.
+Governance (`governance`), reviewer authority (`review`), pathway-qualification separation
+(`pathway_qualification`); the Lab A simulator (`laba_sim`), the implemented `agent_authorization`
+evaluator (`laba_evaluator`), the Lab A spec/blueprint (`laba_blueprint`), the candidate-safe brief
+(`laba_brief`), and the end-to-end orchestration (`laba_assessment`); an optional workbench route behind
+a default-off flag; and tests (positive, negative, tampering, authorization, cross-candidate,
+cross-tenant, replay, concurrency, STRATA regression). PX-1 is retained as an experimental component.
 
-## Phase 1 implementation scope (this branch)
-
-A. **Pathway integration** — register a PARALLAX pathway alongside STRATA without touching STRATA state.
-B. **Qualification contracts** — `parallax_assessment.py`: versioned spec, generation contract with an
-   integrity hash, and per-candidate instance binding (reusing the STRATA contract-integrity pattern).
-C. **Candidate-safe experience** — a brief builder that exposes only safe metadata.
-D. **Evaluator architecture** — `parallax_eval.py`: deterministic dataset regeneration, objective
-   scoring, leakage ablation, critical-failure veto, and a signed result.
-E. **First vertical slice** — PX-1 end to end: spec → instance → submission → offline evaluation →
-   signed decision.
-F. **Tests** — positive (leakage-safe pass), negative (leakage veto; below-threshold fail), isolation
-   (no cross-track credit; per-candidate instances differ), and regression (STRATA baseline unaffected).
-
-Phase 1 does not enable public candidate enrollment or real qualification awards. No paid services, GPUs,
-cloud resources, or third-party model APIs are used or provisioned.
+Phase 1 enables no public enrollment and no real awards. No board count, duration, overall threshold,
+or qualification authority is declared. No paid services, GPUs, or external model APIs are used.

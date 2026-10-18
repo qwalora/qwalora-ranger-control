@@ -122,20 +122,22 @@ candidate access, Ludus/GOAD infrastructure, new cohort enrollment, live OpenSea
 test-only grade authorization, production schema migrations, or any experimental PARALLAX service.
 All existing fail-closed defaults are preserved.
 
-## Deployment-safety finding (why the merge is HELD)
+## Deployment-safety finding and the production-deploy hold (current state)
 
 The Railway `portal` service (project `qwalora-ranger`, environment `production`, domain
-`portal.qwalora.com`) is connected to this repository and **auto-deploys branch `main`** (every
-recorded deployment: `reason: deploy`, `branch: main`). On boot the app runs `db.create_all()` +
-`ensure_schema()` against the production PostgreSQL. `main` is **unprotected** (no required checks or
-reviews). Therefore a merge into `main` would immediately and silently trigger a production deploy and
-schema-init.
+`portal.qwalora.com`) is connected to this repository and auto-deploys branch `main` (every recorded
+deployment: `reason: deploy`, `branch: main`), and on boot runs `db.create_all()` + `ensure_schema()`
+against the production PostgreSQL. `main` is unprotected (no required checks or reviews). A merge into
+`main` would therefore trigger a production deploy and schema-init unless auto-deploy is held first.
 
-Per the engineering directive, the merge is held before this trigger. Required safeguard (needs
-separate explicit authorization — not performed here): pause/disable the `portal` service's
-auto-deploy-on-`main` (or gate it behind a manual/approved deploy) in Railway, confirm it, then merge
-during a controlled window and verify no unintended production change occurred. No production
-integration was disabled, modified, or disconnected by this work.
+Current state (the merge has been performed; the hold remains in place): before merging, the `portal`
+service's auto-deploy-on-`main` was neutralized by setting its build **watch paths** to a sentinel path
+no commit touches (`/.railway-autodeploy-hold/**`), a config write that did not restart the service or
+alter the production database. The consolidated baseline was then merged to `main`, and it was verified
+that no `portal` deployment was created (the service stayed on its prior deployment, commit `7b441e7`).
+The hold remains in force and production stays on the prior code. No production integration was
+disconnected. To perform a controlled release later (separate explicit authorization required): clear
+the `portal` watch paths and use Railway "Deploy Latest Commit"; nothing deploys until then.
 
 ## Candidate pilot requirements
 

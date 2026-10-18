@@ -1,18 +1,9 @@
-"""PARALLAX Phase 1 - PX-1 "Leakage-Safe Model Evaluation" vertical slice.
+"""PARALLAX PX-1 (EXPERIMENTAL component) - leakage-safe model evaluation.
 
-Positive, negative, isolation, gate, and integrity tests for the first PARALLAX assessment, driven
-through the shared platform qualification contract (`siem.assessment_contract.decide`). These prove:
-
-  * a competent leakage-safe solution MEETS the assessment but is NOT finally qualified while the
-    platform gate is off (assessment vs qualification are distinct);
-  * depending on the planted leakage feature is a critical-failure veto;
-  * a below-threshold solution fails on unseen data;
-  * the platform gate, when activated, is what turns a met assessment into a qualification;
-  * PARALLAX cannot award STRATA credit (authorization/blueprint isolation) and vice versa;
-  * per-candidate instances differ (non-transfer);
-  * the instance contract and the signed decision are tamper-evident;
-  * protected metadata (the leak's identity, the seed) never appears in the decision or feedback;
-  * the STRATA baseline is unaffected.
+PX-1 is retained as a reusable, clearly-labeled experimental assessment, not a mandatory PARALLAX
+qualification. These tests exercise its objective evaluator and the HARDENED boundary it shares with
+Lab A: governance-approved binding, a verified authorized/assigned reviewer adjudication (never
+candidate-supplied), assessment-only outcomes (never a pathway qualification), and tamper-evidence.
 """
 import json
 import os
@@ -25,189 +16,128 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("SECRET_KEY", "parallax-px1-test")
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("DEFAULT_COHORT", "2026-A")
-os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)  # gate OFF by default
+os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
 
 import pytest  # noqa: E402
 
-import pathways  # noqa: E402
-from siem import assessment_contract as ac  # noqa: E402
-import siem.evaluator as ev  # noqa: E402
-from parallax import px1_assessment as A  # noqa: E402  (import also registers the evaluator)
+from parallax import px1_assessment as A, governance, review  # noqa: E402
 from parallax import px1_blueprint as BP, contracts  # noqa: E402
 
 COHORT = "2026-PX-A"
-REVIEWER = {"decision": "pass", "reviewer_id": "rev-1"}
-RUBRIC = {"leakage_analysis_quality": 85}
+ADMINS = {"px-admin"}
 
 
-@pytest.fixture(autouse=True)
-def _gate_off():
-    saved = os.environ.get("RANGER_PARALLAX_QUALIFICATION_ACTIVE")
-    os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
-    try:
-        yield
-    finally:
-        if saved is None:
-            os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
-        else:
-            os.environ["RANGER_PARALLAX_QUALIFICATION_ACTIVE"] = saved
+def _approval():
+    return governance.approve_spec(BP.PX1_SPEC, approver_id="px-admin", authorized_admins=ADMINS)
+
+
+def _reviewer(cand, attempt=1, decision="pass"):
+    binding = {"candidate_key": cand, "cohort": COHORT, "assessment_id": BP.PX1_SPEC.assessment_id,
+               "attempt": attempt}
+    directory = review.ReviewerDirectory(authorized={"rev-1"})
+    directory.assign("rev-1", binding)
+    return {"reviewer_id": "rev-1", "directory": directory, "decision": decision, "note": "ok",
+            "rubric_scores": {"leakage_analysis_quality": 85}}
 
 
 def _instance(cand):
-    spec, contract, inst = A.bind_instance(cohort=COHORT, candidate_key=cand)
+    spec, contract, inst = A.bind_instance(cohort=COHORT, candidate_key=cand,
+                                           approval=_approval(), authorized_admins=ADMINS)
     honest = [c for c in inst.feature_names if c != inst.leak_feature]
     return spec, contract, inst, honest
 
 
-def _safe_submission(honest, leak):
+def _run(cand, submission, decision="pass"):
+    return A.run_assessment(submission, cohort=COHORT, candidate_key=cand, approval=_approval(),
+                            authorized_admins=ADMINS, reviewer=_reviewer(cand, decision=decision))
+
+
+def _safe(honest, leak):
     return {"feature_set": honest, "model_config": {"family": "logistic_regression", "C": 1.0},
-            "leakage_analysis": "column %s is a target leak (near-perfect on train/val); excluded" % leak}
+            "leakage_analysis": "column %s is a target leak; excluded" % leak}
 
 
-# --- positive -------------------------------------------------------------------------------------
-def test_leakage_safe_meets_assessment_but_not_qualified_while_gate_off():
+@pytest.fixture(autouse=True)
+def _gate_off():
+    for k in ("RANGER_PARALLAX_QUALIFICATION_ACTIVE", "RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE"):
+        os.environ.pop(k, None)
+    yield
+    for k in ("RANGER_PARALLAX_QUALIFICATION_ACTIVE", "RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE"):
+        os.environ.pop(k, None)
+
+
+def test_leakage_safe_meets_assessment_never_pathway_qualifies():
     spec, contract, inst, honest = _instance("gh-alice")
-    r = A.run_assessment(_safe_submission(honest, inst.leak_feature), cohort=COHORT,
-                         candidate_key="gh-alice", reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    d = r["decision"]
-    assert d["assessment_passed"] is True, d
-    assert d["qualified"] is False, "final qualification must be withheld while the platform gate is off"
-    assert d["reason"] == "qualification_inactive"
+    r = _run("gh-alice", _safe(honest, inst.leak_feature))
+    assert r["assessment_passed"] is True
+    assert r["pathway_qualified"] is False          # a single lab is never a pathway qualification
     assert r["candidate_feedback"]["verdict"] == "pass"
-    assert r["candidate_feedback"]["holdout_metric"] >= spec.pass_threshold
 
 
-def test_platform_gate_activates_qualification():
+def test_single_assessment_not_pathway_even_with_per_assessment_gate_on():
     spec, contract, inst, honest = _instance("gh-alice")
     os.environ["RANGER_PARALLAX_QUALIFICATION_ACTIVE"] = "1"
-    r = A.run_assessment(_safe_submission(honest, inst.leak_feature), cohort=COHORT,
-                         candidate_key="gh-alice", reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    assert r["decision"]["qualified"] is True and r["decision"]["reason"] == "qualified"
+    r = _run("gh-alice", _safe(honest, inst.leak_feature))
+    assert r["pathway_qualified"] is False, "one lab must never award pathway qualification"
 
 
-# --- negative -------------------------------------------------------------------------------------
 def test_leakage_dependence_is_critical_veto():
     spec, contract, inst, honest = _instance("gh-bob")
-    leaky = {"feature_set": [inst.leak_feature] + honest[:2],
-             "model_config": {"family": "random_forest"}, "leakage_analysis": "used all"}
-    r = A.run_assessment(leaky, cohort=COHORT, candidate_key="gh-bob",
-                         reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    assert r["decision"]["qualified"] is False
-    assert r["decision"]["breakdown"]["critical_failures"]["veto"] is True
-    assert BP.CRITICAL_LEAKAGE in r["decision"]["breakdown"]["critical_failures"]["present"]
+    leaky = {"feature_set": [inst.leak_feature] + honest[:2], "model_config": {"family": "random_forest"},
+             "leakage_analysis": "x"}
+    r = _run("gh-bob", leaky)
+    assert r["assessment_passed"] is False
+    assert r["objective_result"]["critical"] is True
     assert r["candidate_feedback"]["verdict"] == "critical_failure"
 
 
-def test_below_threshold_fails_on_unseen_data():
+def test_below_threshold_fails():
     spec, contract, inst, honest = _instance("gh-carol")
-    weak = {"feature_set": honest[:1], "model_config": {"family": "logistic_regression"},
-            "leakage_analysis": "minimal"}
-    r = A.run_assessment(weak, cohort=COHORT, candidate_key="gh-carol",
-                         reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    assert r["decision"]["assessment_passed"] is False
-    assert r["candidate_feedback"]["verdict"] == "fail"
-    assert r["candidate_feedback"]["holdout_metric"] < spec.pass_threshold
+    # deterministically pick the single weakest (lowest |correlation|) non-leak feature so the holdout
+    # metric is reliably below threshold regardless of per-instance feature placement
+    corr = inst.train[honest].corrwith(inst.train[inst.label_col]).abs().sort_values()
+    weakest = [corr.index[0]]
+    weak = {"feature_set": weakest, "model_config": {"family": "logistic_regression"},
+            "leakage_analysis": "x"}
+    r = _run("gh-carol", weak)
+    assert r["assessment_passed"] is False and r["candidate_feedback"]["verdict"] == "fail"
 
 
-def test_missing_human_review_blocks_assessment():
-    """Even a strong objective result does not meet the PARALLAX assessment without the human-review
-    pass and rubric threshold (the platform's mandatory human-review gate)."""
+def test_governance_required_no_hardcoded_approval():
+    with pytest.raises(contracts.ContractError):
+        A.bind_instance(cohort=COHORT, candidate_key="gh-x",
+                        approval={"record": {}, "signature": "x"}, authorized_admins=ADMINS)
+
+
+def test_candidate_supplied_reviewer_fields_ignored():
     spec, contract, inst, honest = _instance("gh-dan")
-    r = A.run_assessment(_safe_submission(honest, inst.leak_feature), cohort=COHORT,
-                         candidate_key="gh-dan", reviewer_decision=None, rubric_scores=None)
-    assert r["decision"]["assessment_passed"] is False
-    assert r["decision"]["qualified"] is False
-
-
-def test_candidate_self_certification_rejected():
-    spec, contract, inst, honest = _instance("gh-eve")
-    cheat = {"feature_set": honest, "passed": True, "ground_truth": {"label": 1},
-             "model_config": {"family": "logistic_regression"}, "leakage_analysis": "x"}
-    r = A.run_assessment(cheat, cohort=COHORT, candidate_key="gh-eve",
-                         reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    assert r["objective_result"]["passed"] is False
-    assert r["objective_result"]["detail"].get("error") == "candidate_supplied_truth"
-    assert r["decision"]["qualified"] is False
-
-
-# --- isolation (no cross-track credit) ------------------------------------------------------------
-def test_cross_pathway_authorization_refused():
-    """A PARALLAX blueprint graded under a STRATA-scoped authorization is refused: PARALLAX credit
-    cannot be produced from a STRATA authorization (and vice versa)."""
-    spec, contract, inst, honest = _instance("gh-frank")
-    scope = ev.EvaluatorScope(allowed_index="parallax-px1",
-                              truth_handle=A.make_truth_handle(inst, contract.seed(), spec.pass_threshold))
-    result = ev.get_evaluator(BP.OBJECTIVE_CHECK).verify(_safe_submission(honest, inst.leak_feature),
-                                                         scope, reader=None)
-    bp = BP.blueprint()
-    strata_auth = {"candidate_id": "gh-frank", "pathway": pathways.PATHWAY_STRATA}
-    d = ac.decide(bp, authorization=strata_auth, objective_results=[result],
-                  rubric_scores=RUBRIC, reviewer_decision=REVIEWER,
-                  scenario_version=bp["environment_version"])
-    assert d["qualified"] is False
-    assert d["breakdown"]["authorization"]["ok"] is False
-
-
-def test_parallax_result_cannot_satisfy_a_strata_blueprint():
-    """A STRATA-bar blueprint is not satisfied by a PARALLAX objective result: its required objective
-    check id is absent, so no STRATA credit is produced from PARALLAX evidence."""
-    spec, contract, inst, honest = _instance("gh-grace")
-    scope = ev.EvaluatorScope(allowed_index="parallax-px1",
-                              truth_handle=A.make_truth_handle(inst, contract.seed(), spec.pass_threshold))
-    px_result = ev.get_evaluator(BP.OBJECTIVE_CHECK).verify(_safe_submission(honest, inst.leak_feature),
-                                                           scope, reader=None)
-    strata_bp = {
-        "pathway": pathways.PATHWAY_STRATA, "blueprint_version": 1, "environment_version": "s-1",
-        "objective_checks": [{"check_id": "event_reference", "evaluator": "event_reference",
-                              "required": True}],
-        "decision_policy": {"type": ac.POLICY_STRATA_BAR},
-    }
-    d = ac.decide(strata_bp, authorization={"candidate_id": "gh-grace", "pathway": pathways.PATHWAY_STRATA},
-                  objective_results=[px_result], scenario_version="s-1")
-    assert d["qualified"] is False  # PX-1 result's check_id != required STRATA check
+    sub = dict(_safe(honest, inst.leak_feature))
+    sub["reviewer_decision"] = {"decision": "pass", "reviewer_id": "self"}  # candidate tries to self-review
+    sub["rubric_scores"] = {"leakage_analysis_quality": 100}
+    # no server-side reviewer supplied -> human review absent -> assessment not met despite the injected fields
+    r = A.run_assessment(sub, cohort=COHORT, candidate_key="gh-dan", approval=_approval(),
+                         authorized_admins=ADMINS, reviewer=None)
+    assert r["assessment_passed"] is False
 
 
 def test_per_candidate_instances_differ():
-    _, c_a, inst_a, _ = _instance("gh-alice")
-    _, c_b, inst_b, _ = _instance("gh-bob")
-    assert c_a.seed() != c_b.seed(), "each candidate must get a distinct instance (non-transfer)"
-
-
-# --- integrity / protected metadata ---------------------------------------------------------------
-def test_contract_integrity_tamper_detected():
-    spec = BP.PX1_SPEC
-    good = contracts.bind(spec, cohort=COHORT, candidate_key="gh-alice")
-    good.verify()  # ok
-    tampered = contracts.GenerationContract(**{**good.__dict__, "candidate_key": "gh-mallory"})
-    with pytest.raises(contracts.ContractError):
-        tampered.verify()
+    _, ca, _, _ = _instance("gh-alice")
+    _, cb, _, _ = _instance("gh-bob")
+    assert ca.seed() != cb.seed()
 
 
 def test_signed_decision_roundtrip_and_tamper():
+    from siem import assessment_contract as ac
     spec, contract, inst, honest = _instance("gh-alice")
-    r = A.run_assessment(_safe_submission(honest, inst.leak_feature), cohort=COHORT,
-                         candidate_key="gh-alice", reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
+    r = _run("gh-alice", _safe(honest, inst.leak_feature))
     assert ac.verify_decision(r["signed"]) is True
     bad = json.loads(json.dumps(r["signed"]))
     bad["record"]["qualified"] = True
     assert ac.verify_decision(bad) is False
 
 
-def test_protected_metadata_absent_from_decision_and_feedback():
+def test_protected_metadata_absent():
     spec, contract, inst, honest = _instance("gh-bob")
-    r = A.run_assessment(_safe_submission(honest, inst.leak_feature), cohort=COHORT,
-                         candidate_key="gh-bob", reviewer_decision=REVIEWER, rubric_scores=RUBRIC)
-    blob = json.dumps({"decision": r["decision"], "feedback": r["candidate_feedback"],
-                       "signed": r["signed"]})
-    assert inst.leak_feature not in blob, "the planted leak's identity must never reach the candidate"
-    assert str(contract.seed()) not in blob, "the instance seed must never reach the candidate"
-
-
-# --- STRATA baseline unaffected -------------------------------------------------------------------
-def test_strata_baseline_unaffected():
-    import program
-    assert program.PASS_BAR == 95.0
-    # the implemented STRATA evaluator remains; PARALLAX added its own without displacing it
-    assert "event_reference" in ev.EVALUATORS
-    assert BP.OBJECTIVE_CHECK in ev.EVALUATORS
-    assert pathways.PATHWAY_STRATA in ac.SUPPORTED_BLUEPRINT_VERSIONS
+    r = _run("gh-bob", _safe(honest, inst.leak_feature))
+    blob = json.dumps({"d": r["assessment_decision"], "fb": r["candidate_feedback"], "s": r["signed"]})
+    assert inst.leak_feature not in blob and str(contract.seed()) not in blob

@@ -30,7 +30,7 @@ PX1_SPEC = AssessmentSpec(
     metric="roc_auc",
     pass_threshold=0.70,            # minimum holdout ROC-AUC for the objective check to pass
     params={"splits": ["train", "validation"], "sealed": ["holdout"]},
-    approved=True,
+    approved=False,   # informational only; authority is a signed governance approval (parallax.governance)
 )
 
 

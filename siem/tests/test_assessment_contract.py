@@ -216,11 +216,13 @@ def run():
     check("rejection discloses no foreign existence (salted fingerprints, not index values)",
           "ranger-OTHER-b2" not in signing.canonical(r_oos).decode()
           and len(r_oos["detail"]["rejected_fingerprints"]) >= 1)
+    # agent_authorization is now IMPLEMENTED by PARALLAX Lab A; the still-unbuilt PARALLAX evaluators
+    # (e.g. model_artifact_integrity) remain declared-but-gated and must still raise.
     try:
-        ev.get_evaluator("agent_authorization").verify({}, scope, reader); gated = False
+        ev.get_evaluator("model_artifact_integrity").verify({}, scope, reader); gated = False
     except NotImplementedError:
         gated = True
-    check("future PARALLAX evaluators are declared but gated (raise)", gated)
+    check("unbuilt PARALLAX evaluators are declared but gated (raise)", gated)
 
     # ---- 10. deterministic, no-AI ---------------------------------------------------
     d_a = ac.decide(_strata_bp(), authorization=AUTH_STRATA, objective_results=[obj_pass],
