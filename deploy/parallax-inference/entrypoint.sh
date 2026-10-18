@@ -27,6 +27,20 @@ if ! ollama list | grep -q "$MODEL"; then
 fi
 
 # record the resolved model digest for provenance (operators capture this in the run manifest)
-ollama show "$MODEL" --modelfile 2>/dev/null | head -5 || true
+echo "=== PARALLAX MODEL PROVENANCE ==="
+ollama show "$MODEL" 2>/dev/null | head -20 || true
+
+# GENUINE-INFERENCE SELF-TEST: run one benign generation through the local API and log the actual
+# response + timing. This is read from Railway deploy logs to VERIFY real inference without exposing
+# any public endpoint. It is a liveness proof, never a research finding.
+echo "=== PARALLAX INFERENCE SELF-TEST ==="
+T0=$(date +%s.%N)
+RESP=$(curl -sS --max-time 120 http://127.0.0.1:11434/api/generate \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"Reply with exactly: PARALLAX-LIVE\",\"stream\":false,\"options\":{\"temperature\":0,\"num_predict\":16}}" 2>&1 || echo '{"error":"selftest_failed"}')
+T1=$(date +%s.%N)
+echo "SELFTEST_MODEL=$MODEL"
+echo "SELFTEST_RESPONSE=$RESP"
+echo "SELFTEST_DURATION_S=$(echo "$T1 - $T0" | bc 2>/dev/null || echo '?')"
+echo "=== END SELF-TEST ==="
 
 wait "$OLLAMA_PID"
