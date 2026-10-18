@@ -1,0 +1,30 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "_comment": "PREPARED service spec for the PARALLAX private inference service. Reference only - this does not create or deploy anything. Provision only after explicit cost + isolation approval, in a NONPRODUCTION environment, never in production.",
+  "service": {
+    "name": "parallax-inference",
+    "intendedEnvironment": "parallax-nonprod (to be created; see report Phase A)",
+    "region": "us-west2",
+    "source": { "type": "dockerfile", "path": "deploy/parallax-inference/Dockerfile" },
+    "networking": {
+      "private": true,
+      "privateHostname": "parallax-inference.railway.internal",
+      "publicDomain": "NONE - no public domain; not reachable from the internet",
+      "port": 11434
+    },
+    "volume": { "name": "parallax-model-data", "mountPath": "/root/.ollama", "sizeMB": 3000 },
+    "resources": { "estimatedMemoryMB": 2048, "estimatedVCPU": 1, "replicas": 1 },
+    "healthcheck": { "path": "/api/tags", "timeoutSeconds": 120 },
+    "restartPolicy": { "type": "ON_FAILURE", "maxRetries": 3 },
+    "variables": {
+      "PARALLAX_MODEL_TAG": "qwen2.5:0.5b-instruct",
+      "OLLAMA_HOST": "[::]:11434"
+    }
+  },
+  "portal_wiring": {
+    "_comment": "Set ONLY on the PARALLAX nonproduction portal/service, never on the production portal.",
+    "RANGER_RESEARCH_MODEL_URL": "http://parallax-inference.railway.internal:11434",
+    "RANGER_RESEARCH_MODEL_ID": "qwen2.5:0.5b-instruct",
+    "RANGER_RESEARCH_MODEL_RUNTIME": "ollama"
+  }
+}
