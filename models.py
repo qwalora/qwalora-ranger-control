@@ -811,6 +811,98 @@ class UnitResult(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     KINDS = ("qualification_decision", "reviewer_adjudication")
+    # Idempotency for retried consequential writes: a given signed record (by its hash) is stored at
+    # most once per (candidate, unit, kind). Append-only adjudications differ by record_hash, so they
+    # still get their own rows. Added in PARALLAX Phase 1B.
+    # MIGRATION LIMITATION: create_all applies this to fresh databases; the additive ensure_schema
+    # migration adds columns, not constraints, so a pre-existing unit_results table needs a manual
+    # ALTER TABLE ... ADD CONSTRAINT uq_unit_result_record UNIQUE(...) to gain the DB-level guarantee.
+    # Application-level idempotency does not depend solely on this constraint (assessment_store takes a
+    # per-subject advisory lock + get-or-create + commit-time recovery).
+    __table_args__ = (db.UniqueConstraint("candidate_id", "unit_ref", "kind", "record_hash",
+                                          name="uq_unit_result_record"),)
+
+
+class ParallaxApproval(db.Model):
+    """PARALLAX Phase 1B - a durable, signed governance approval (scoring-spec or portfolio).
+
+    The persistent authority for PARALLAX governance: it replaces the prior in-process approval dicts.
+    The approval's signed record (canonical JSON that was Ed25519-signed) and its content fingerprint
+    are stored immutably; lifecycle is expressed only through `status`/`revoked_*`/`superseded_by`
+    (content columns are never rewritten). An approval authorizes ONLY the exact content it fingerprints
+    and ONLY while active. `approver_id` is an authenticated authorized administrator's id, never a
+    caller-supplied string."""
+    __tablename__ = "parallax_approvals"
+    id = db.Column(db.Integer, primary_key=True)
+    pathway = db.Column(db.String(20), nullable=False, default="parallax", index=True)
+    kind = db.Column(db.String(24), nullable=False, index=True)   # scoring_spec | portfolio
+    assessment_id = db.Column(db.String(40), nullable=True, index=True)
+    assessment_version = db.Column(db.String(20), nullable=True)
+    competency = db.Column(db.String(80), nullable=True)
+    policy_version = db.Column(db.String(40), nullable=True)       # portfolio approvals
+    content_hash = db.Column(db.String(64), nullable=False, index=True)  # scoring_spec/portfolio hash
+    approval_record = db.Column(db.Text, nullable=False)          # canonical signed {record} JSON
+    signature = db.Column(db.Text, nullable=False)               # Ed25519 over the record
+    approver_id = db.Column(db.String(120), nullable=False)      # authenticated authorized admin id
+    status = db.Column(db.String(16), nullable=False, default="active", index=True)
+    superseded_by = db.Column(db.String(64), nullable=True)       # content_hash of a newer approval
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    revoked_by = db.Column(db.String(120), nullable=True)
+    revoke_reason = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    STATUSES = ("active", "revoked", "superseded")
+    KINDS = ("scoring_spec", "portfolio")
+    __table_args__ = (db.UniqueConstraint("kind", "content_hash", name="uq_parallax_approval_content"),)
+
+
+class ParallaxReviewerAssignment(db.Model):
+    """PARALLAX Phase 1B - a durable reviewer-to-assessment assignment.
+
+    Authoritative, server-side form of the prior in-memory reviewer directory. A reviewer may adjudicate
+    an assessment attempt only via an ACTIVE, unexpired assignment bound to exactly
+    (candidate, cohort, assessment, attempt). Being an administrator does not imply an assignment;
+    assignments are explicit and created only by an authorized admin."""
+    __tablename__ = "parallax_reviewer_assignments"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_key = db.Column(db.String(120), nullable=False, index=True)
+    cohort = db.Column(db.String(120), nullable=True)
+    assessment_id = db.Column(db.String(40), nullable=False, index=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    reviewer_id = db.Column(db.String(120), nullable=False, index=True)
+    assigned_by = db.Column(db.String(120), nullable=False)      # authorizing admin id
+    status = db.Column(db.String(16), nullable=False, default="active", index=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    assigned_at = db.Column(db.DateTime(timezone=True), default=_now)
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    revoked_by = db.Column(db.String(120), nullable=True)
+
+    STATUSES = ("active", "revoked", "expired")
+    __table_args__ = (db.UniqueConstraint("candidate_key", "cohort", "assessment_id", "attempt",
+                                          "reviewer_id", name="uq_parallax_reviewer_assignment"),)
+
+
+class ParallaxAuditEvent(db.Model):
+    """PARALLAX Phase 1B - an append-only, signed, hash-chained audit event for governance and reviewer
+    lifecycle actions (approve/revoke/supersede, assign/revoke-assignment, record/adjudicate). Modeled
+    on the custody-chain shape: each event carries its own record_hash, links to the prior event's hash
+    (parent_hash), and is Ed25519-signed. Rows are never updated or deleted. Details are redacted (no
+    secrets, tokens, evidence payloads, or unnecessary PII)."""
+    __tablename__ = "parallax_audit_events"
+    id = db.Column(db.Integer, primary_key=True)
+    stream = db.Column(db.String(40), nullable=False, default="parallax-governance", index=True)
+    seq = db.Column(db.Integer, nullable=False)
+    action = db.Column(db.String(40), nullable=False, index=True)
+    actor_id = db.Column(db.String(120), nullable=True)
+    subject_kind = db.Column(db.String(40), nullable=True)
+    subject_ref = db.Column(db.String(120), nullable=True, index=True)
+    detail_json = db.Column(db.Text, nullable=True)              # redacted
+    record_hash = db.Column(db.String(64), nullable=False)
+    parent_hash = db.Column(db.String(64), nullable=True)
+    signature = db.Column(db.Text, nullable=False)
+    ts = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("stream", "seq", name="uq_parallax_audit_seq"),)
 
 
 class EvidenceArtifact(db.Model):

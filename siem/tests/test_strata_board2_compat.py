@@ -25,9 +25,41 @@ os.environ.pop("RANGER_PARALLAX_QUALIFICATION_ACTIVE", None)
 
 import json as _json  # noqa: E402
 import workbench_core as wc  # noqa: E402
+import pytest  # noqa: E402
 import case_routes  # noqa: E402
 from siem import case_contract as cc  # noqa: E402
 from siem import assessment_contract as ac  # noqa: E402
+
+# This module sets its workbench/case flags once at import, but sibling test modules mutate the same
+# process os.environ at RUN time (e.g. toggling RANGER_WORKBENCH_ASSESSMENT_VISIBILITY to exercise the
+# hidden state) and do not always restore it. Re-apply this module's required environment before every
+# test and restore the prior values afterwards, so these tests are order-independent and do not leak.
+_REQUIRED_ENV = {
+    "RANGER_CASE_UI": "1",
+    "RANGER_WORKBENCH": "1",
+    "RANGER_WORKBENCH_CASE_ACCESS": "1",
+    "RANGER_WORKBENCH_EVIDENCE_SUBMIT": "1",
+    "RANGER_WORKBENCH_ASSESSMENT_VISIBILITY": "1",
+    "RANGER_PARALLAX_QUALIFICATION_ACTIVE": None,  # must be OFF for this module
+}
+
+
+@pytest.fixture(autouse=True)
+def _module_env():
+    saved = {k: os.environ.get(k) for k in _REQUIRED_ENV}
+    for k, v in _REQUIRED_ENV.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 IDX = "b2-idx-strata"
 EVENTS = [{"_id": "evt-1", "_source": {"@timestamp": "2026-03-01T00:00:00.000Z",

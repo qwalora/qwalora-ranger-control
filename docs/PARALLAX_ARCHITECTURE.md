@@ -142,3 +142,79 @@ cross-tenant, replay, concurrency, STRATA regression). PX-1 is retained as an ex
 
 Phase 1 enables no public enrollment and no real awards. No board count, duration, overall threshold,
 or qualification authority is declared. No paid services, GPUs, or external model APIs are used.
+
+## Phase 1B — persistent governance, reviewer authority, and evidence integrity
+
+Phase 1B makes the Phase-1 governance, reviewer-authority, and assessment-evidence layers **durable,
+independently verifiable, securely stored, and enforceable across application restarts and concurrent
+operations**. It is infrastructure; it does **not** activate qualification, mint a portfolio approval,
+or issue any award.
+
+**Persistence model (all server-side, in the single `models.py`).**
+
+- `ParallaxApproval` (`parallax_approvals`) — signed, versioned scoring-spec and portfolio approvals.
+  Content columns (`content_hash`, `approval_record`, `signature`, `approver_id`) are immutable;
+  lifecycle is expressed only through `status` (`active`/`revoked`/`superseded`) and the
+  `revoked_*`/`superseded_by` columns. `UNIQUE(kind, content_hash)` makes an approval idempotent on its
+  exact content. Managed by `registry`.
+- `ParallaxReviewerAssignment` (`parallax_reviewer_assignments`) — authoritative reviewer→attempt
+  bindings. `UNIQUE(candidate_key, cohort, assessment_id, attempt, reviewer_id)`. Managed by
+  `reviewer_store`.
+- `ParallaxAuditEvent` (`parallax_audit_events`) — append-only, Ed25519-signed, hash-chained audit
+  trail; `UNIQUE(stream, seq)`. Managed by `auditlog`.
+- `UnitResult` — the durable signed assessment records (`kind` = `qualification_decision` |
+  `reviewer_adjudication`), `UNIQUE(candidate_id, unit_ref, kind, record_hash)`. Managed by
+  `assessment_store`.
+
+**Guarantees and how they are enforced.**
+
+- **Authority is server-side.** Every governance/reviewer mutation calls
+  `registry._authorize` → `strata_catalog._is_authorized_admin`; in an HTTP request only the session
+  identity is trusted, never a caller-supplied principal. The eligible set is the reviewer allowlist
+  (`REVIEWER_GITHUB_IDS`) ∪ `AdminUser` rows with an approver role. Being an administrator does not by
+  itself make one an assigned reviewer.
+- **Restart survival.** The exact canonical signed record is stored and re-verified on read
+  (`assessment_contract.verify_decision`, `governance.verify_*`), so a process restart changes nothing
+  about verifiability. An approval is additionally honored only while its approver's governing
+  authorization is still effective.
+- **Idempotency + concurrency.** Each mutation takes a per-subject PostgreSQL advisory lock
+  (`pg_advisory_xact_lock`, a no-op on SQLite) **before** its get-or-create/conflict read, so a
+  concurrent writer blocks and then observes the committed row — rather than racing to a duplicate
+  INSERT. This is backed by the UNIQUE constraints and a commit-time recovery path. The
+  "one active reviewer per attempt" rule has no unique-constraint backstop (two different reviewers are
+  two distinct rows), so the advisory lock on the attempt key is load-bearing and is validated under
+  genuine concurrent PostgreSQL threads.
+- **Substitution-proof writes.** An assessment record is persisted under a candidate only if the
+  record's **own** signed binding names that candidate; cross-candidate/assessment/cohort/attempt
+  substitution is rejected on write. Adjudications are append-only rows linked to the decision's
+  provenance hash, never mutations.
+- **Portfolio decision integrity (fail closed).** `pathway_persistent.decide_pathway_persistent` feeds
+  `pathway_qualification.decide_pathway` entirely from persisted, verified records. `active_portfolio`
+  returns a policy only when exactly one active, signature-valid portfolio approval exists; zero (the
+  Phase-1B reality) or ambiguous fails closed. **No approved PARALLAX portfolio exists, so a final
+  pathway qualification is impossible by construction, regardless of how a candidate performed in any
+  single assessment and regardless of either activation flag.**
+
+**Known limitations (documented, not resolved in 1B).**
+
+1. **Signing-key rotation.** `signing` uses a single Ed25519 key derived from `RANGER_SIGNING_KEY`
+   (else `SECRET_KEY`), cached at import, with no key id (`kid`) and no rotation. Every persisted
+   signature therefore verifies only while that key is unchanged; rotating or losing the signing key
+   invalidates verification of all previously persisted approvals, assessment records, and audit
+   events. A production rotation strategy (keyed `kid`, multi-key verification window, re-signing or
+   re-anchoring of historical records) is required before any real award and is out of scope for 1B.
+2. **UnitResult unique-constraint retrofit.** `UNIQUE(candidate_id, unit_ref, kind, record_hash)` is
+   created for fresh databases via `create_all`. The additive `ensure_schema` migration adds columns
+   but not constraints, so an **existing** production `unit_results` table needs a manual
+   `ALTER TABLE … ADD CONSTRAINT` to gain the DB-level guarantee. Application-level idempotency does
+   not depend solely on the constraint — the per-subject advisory lock plus get-or-create plus
+   commit-time recovery enforce single-record semantics even without it — but the DB constraint should
+   be added as a migration step on pre-existing databases for defense in depth.
+
+**Validation.** Workstream F runs adversarial/regression tests over both activation flags
+(`RANGER_PARALLAX_QUALIFICATION_ACTIVE`, `RANGER_PARALLAX_PATHWAY_QUALIFICATION_ACTIVE`) independently
+and together, including restart, revocation, authority-lapse, audit-tamper, substitution, and
+flag-matrix cases. Genuine database transaction and concurrency behavior is validated against a local,
+disposable PostgreSQL instance through the positively-authorized `_pgtest` boundary (opt-in, dedicated
+test URL, loopback/allow-listed host, sentinel database, throwaway per-test database); when that
+authorized instance is absent the PostgreSQL tests fail closed (skip) and never touch a real database.
