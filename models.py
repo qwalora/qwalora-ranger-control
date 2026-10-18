@@ -947,6 +947,28 @@ class ParallaxAuditCheckpoint(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
 
+class ParallaxResearchRun(db.Model):
+    """PARALLAX Phase 2A - a durable, signed record of one AI-security research campaign (LLM/RAG
+    prompt-injection). Stores the campaign MANIFEST and derived metrics (not raw PII); the signature
+    covers the signed record. `backend_provenance` is 'infrastructure_backed' (a real model executed)
+    or 'simulated' (the deterministic stub exercised only the harness plumbing - NEVER an empirical
+    finding). Research runs are NOT assessments and confer no qualification."""
+    __tablename__ = "parallax_research_runs"
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.String(40), nullable=False, index=True)
+    researcher_id = db.Column(db.String(120), nullable=False, index=True)
+    backend_provenance = db.Column(db.String(30), nullable=False)   # infrastructure_backed | simulated
+    model_id = db.Column(db.String(120), nullable=True)
+    record_count = db.Column(db.Integer, nullable=False, default=0)
+    run_record = db.Column(db.Text, nullable=False)                 # canonical signed {manifest, metrics}
+    record_hash = db.Column(db.String(64), nullable=False)
+    signature = db.Column(db.Text, nullable=False)                  # Ed25519 over the run record
+    signing_kid = db.Column(db.String(80), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("run_id", name="uq_parallax_research_run"),)
+
+
 class EvidenceArtifact(db.Model):
     """F2 - a typed evidence artifact's signed metadata envelope (siem/evidence_types.py).
     Large/binary payloads are NOT stored here: `blob_*` hold a content-addressed BlobRef into

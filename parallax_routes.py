@@ -267,3 +267,65 @@ def register(app, candidate_model=None, db=None, helpers=None):
             return jsonify(error="not authorized: %s" % e), 403
         return jsonify(ok=True, assigned=reviewer_id, candidate_key=ckey, assessment_id="LAB-A",
                        attempt=attempt), 201
+
+    # ---- Phase 2A: AI-security research harness integration (nonprod + flag gated) ---------------
+    # Authorized researcher (authenticated candidate session) initiates a BOUNDED prompt-injection
+    # campaign against the configured model backend. With no authorized real model configured the
+    # backend is the deterministic STUB and the run is persisted with backend_provenance="simulated"
+    # (explicitly NOT an empirical finding). Research runs are assessment/qualification-neutral.
+    def parallax_research_run():
+        if not _nonprod():
+            return ("not found", 404)
+        rid = _resolve_candidate_key()
+        if not rid:
+            return jsonify(error="active authenticated researcher session required"), 401
+        from parallax.research import harness as _h, corpus as _corpus, model_backend as _mb
+        from parallax.research import store as _rstore
+        body = request.get_json(silent=True) or {}
+        try:
+            reps = max(1, min(int(body.get("repetitions") or 1), 3))   # bounded
+        except (TypeError, ValueError):
+            reps = 1
+        backend = _mb.from_config()     # real endpoint if configured, else deterministic stub
+        camp = _h.run_campaign(backend, _corpus.default_corpus(), repetitions=reps)
+        camp["metrics"] = _h.compute_metrics(camp["records"])
+        try:
+            row = _rstore.persist_run(db, researcher_id=rid, campaign=camp)
+        except _rstore.ResearchStoreError as e:
+            return jsonify(error="could not persist research run: %s" % e), 409
+        prov = row.backend_provenance
+        return jsonify(
+            ok=True, run_id=row.run_id, backend_provenance=prov,
+            is_empirical_finding=(prov == "infrastructure_backed"),
+            findings_available=camp["metrics"]["findings_available"],
+            model=camp["manifest"]["backend"], n_records=row.record_count,
+            metrics_summary={"real_backend_n": camp["metrics"]["real_backend"]["n"],
+                             "simulated_backend_n": camp["metrics"]["simulated_backend"]["n"]},
+            note=("SIMULATED harness plumbing run - NOT an empirical AI-security finding; no real model "
+                  "is configured in this environment" if prov == "simulated"
+                  else "infrastructure-backed research run"),
+            assessment_only=True, pathway_qualified=False), 201
+    app.add_url_rule("/parallax/research/run", "parallax_research_run", parallax_research_run,
+                     methods=["POST"])
+
+    def parallax_research_get(run_id):
+        if not _nonprod():
+            return ("not found", 404)
+        rid = _resolve_candidate_key()
+        if not rid:
+            return jsonify(error="active authenticated researcher session required"), 401
+        from parallax.research import store as _rstore
+        try:
+            run = _rstore.get_run(db, run_id=run_id, authenticated_researcher_id=rid)
+        except _rstore.ResearchStoreError:
+            return jsonify(error="not found"), 404     # never reveal another researcher's run exists
+        if run is None:
+            return jsonify(error="not found"), 404
+        return jsonify(ok=True, run_id=run["run_id"], backend_provenance=run["backend_provenance"],
+                       signature_verifies=run["signature_verifies"],
+                       is_empirical_finding=run["is_empirical_finding"],
+                       record_count=run["record_count"], model_id=run["model_id"],
+                       metrics=run["record"].get("metrics"), assessment_only=True,
+                       pathway_qualified=False), 200
+    app.add_url_rule("/parallax/research/run/<run_id>", "parallax_research_get", parallax_research_get,
+                     methods=["GET"])
