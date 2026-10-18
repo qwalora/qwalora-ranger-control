@@ -176,8 +176,13 @@ and deliberately — define/approve a PARALLAX portfolio and authorize activatio
 
 ## 18. Git commit, branch, and push verification
 
-_Filled at commit time:_ commit SHA(s), author `cloudcwfranck <yakengne@gmail.com>` (no trailers), files
-changed, push target, `main` unchanged at `431a183`.
+- Branch: `feature/parallax-p1-architecture-foundations` (never `main`).
+- Phase 1E commit: `38fddff` — author `cloudcwfranck <yakengne@gmail.com>`, no attribution trailers.
+  8 files changed (+1269): `parallax_routes.py` modified; `parallax/traceability.py`,
+  `siem/tests/test_parallax_lifecycle_e2e.py`, `test_parallax_traceability.py`,
+  `test_parallax_lifecycle_pg.py`, and three docs added.
+- Pushed to `origin/feature/parallax-p1-architecture-foundations`. `main` unchanged at `431a183`
+  (local and remote). No merge, no deploy.
 
 ## 19. Railway production-hold and qualification-flag verification
 
