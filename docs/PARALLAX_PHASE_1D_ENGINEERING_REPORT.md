@@ -244,8 +244,18 @@ No test run authorizes an assessment or portfolio for actual qualification. Both
 
 ## 15. Git commit and push evidence
 
-_Filled at commit time:_ commit SHA(s), author `cloudcwfranck <yakengne@gmail.com>` (no attribution
-trailers), files changed, push target, and `main` unchanged at `431a183`.
+- Branch: `feature/parallax-p1-architecture-foundations` (never `main`).
+- Phase 1D commit: `f060d08` — "feat(parallax): Phase 1D deterministic validation, STRATA isolation,
+  security assurance", author `cloudcwfranck <yakengne@gmail.com>`, no attribution trailers. 11 files
+  changed (+1005 / -2): `signing.py`, `parallax/audit_integrity.py`, `siem/tests/conftest.py`,
+  `siem/tests/test_forensic_f4.py`, `siem/tests/test_f4_review_boundaries.py` modified;
+  `siem/tests/test_f4_registry_isolation.py`, `test_parallax_audit_trust_model.py`,
+  `test_parallax_domain_separation.py`, `test_parallax_persistence_review_pg.py`, and two docs added.
+  (The `test_f41_persistence_pg.py` source-side fixture was committed in Phase 1C, `f53ef9c`.)
+- Matrix evidence: 4 configurations + 3 randomized seeds, all PASS, 0 failed (§5–6), on PostgreSQL
+  16.15.
+- Pushed to `origin/feature/parallax-p1-architecture-foundations`. `main` unchanged at `431a183`
+  (local and remote). No merge, no deploy.
 
 ## 16. Readiness recommendation
 
