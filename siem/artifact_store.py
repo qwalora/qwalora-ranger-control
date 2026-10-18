@@ -35,13 +35,51 @@ class StorageError(Exception):
 
 
 class PutResult:
-    def __init__(self, key, sha256, size, media_type, scan_state="unscanned"):
+    def __init__(self, key, sha256, size, media_type, scan_state="unscanned", created=True):
         self.key = key; self.sha256 = sha256; self.size = size
         self.media_type = media_type; self.scan_state = scan_state
+        # created=True iff this call actually wrote NEW bytes; False means the object already
+        # existed (content-addressed dedup hit). Callers must never physically delete a dedup hit
+        # on rollback - those bytes may belong to another artifact/tenant.
+        self.created = created
 
     def as_dict(self):
         return {"key": self.key, "sha256": self.sha256, "size": self.size,
-                "media_type": self.media_type, "scan_state": self.scan_state}
+                "media_type": self.media_type, "scan_state": self.scan_state,
+                "created": self.created}
+
+
+class StagedObject:
+    """A computed-but-unpublished object. Its content hash (and therefore its final content-addressed
+    key) is known, but the bytes are NOT yet visible in the store. Publication is deferred to
+    `commit()` so a caller can take the per-object lock BEFORE the bytes become visible, closing the
+    race where an object is published to the store before its durable reference is registered (a
+    concurrent sweep could otherwise delete freshly-published, not-yet-referenced bytes).
+
+    Exactly one of commit()/discard() may be called; both are idempotent against a second call."""
+
+    def __init__(self, store, key, sha256, size, media_type):
+        self.store = store
+        self.key = key
+        self.sha256 = sha256
+        self.size = size
+        self.media_type = media_type
+        self._done = False
+
+    def commit(self) -> "PutResult":
+        """Publish the staged bytes (atomic; a content-addressed dedup hit publishes nothing and
+        reports created=False). Returns a PutResult identical to put_stream's."""
+        if self._done:
+            raise StorageError("ALREADY_FINALIZED", "staged object already finalized")
+        self._done = True
+        return self.store._publish_staged(self)
+
+    def discard(self):
+        """Drop the staged (unpublished) bytes without publishing. Safe no-op if already finalized."""
+        if self._done:
+            return
+        self._done = True
+        self.store._discard_staged(self)
 
 
 # --- server-side file-signature sniffing (magic bytes, never the declared type) ---
@@ -107,6 +145,23 @@ class ArtifactStore:
 
     def put_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None,
                    chunk=65536) -> PutResult:
+        """One-shot: stage the stream and publish it immediately. Equivalent to
+        stage_stream(...).commit(); kept as the simple path for callers that do not need to take a
+        per-object lock between hashing and publication."""
+        return self.stage_stream(fileobj, max_bytes=max_bytes,
+                                 allowed_media_types=allowed_media_types, chunk=chunk).commit()
+
+    def stage_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None,
+                     chunk=65536) -> "StagedObject":
+        """Stream + hash + sniff + validate the bytes WITHOUT publishing them, returning a
+        StagedObject whose final key is known. The caller publishes with .commit() (ideally under a
+        per-object lock) or drops with .discard()."""
+        raise NotImplementedError
+
+    def _publish_staged(self, staged) -> "PutResult":
+        raise NotImplementedError
+
+    def _discard_staged(self, staged):
         raise NotImplementedError
 
     def open_stream(self, key):
@@ -168,7 +223,7 @@ class FilesystemArtifactStore(ArtifactStore):
             raise StorageError("PATH_ESCAPE", "resolved object path escapes the store root")
         return p
 
-    def put_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None, chunk=65536):
+    def stage_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None, chunk=65536):
         tmp = os.path.join(self._tmp, uuid.uuid4().hex)
         f = open(tmp, "wb")
         try:
@@ -176,19 +231,6 @@ class FilesystemArtifactStore(ArtifactStore):
             f.flush(); os.fsync(f.fileno()); f.close()
             media = sniff_media_type(head)
             _finalize_media(media, allowed_media_types)
-            key = f"blob/{sha}"
-            final = self._path(key)
-            if os.path.exists(final):
-                os.remove(tmp)                       # dedup: identical content already stored
-            else:
-                os.chmod(tmp, 0o600)
-                os.replace(tmp, final)               # atomic publish; no partial object ever visible
-                dfd = os.open(self._blob, os.O_RDONLY)
-                try:
-                    os.fsync(dfd)
-                finally:
-                    os.close(dfd)
-            return PutResult(key, sha, size, media, scan_state="unscanned")
         except BaseException:
             try:
                 if not f.closed:
@@ -197,6 +239,38 @@ class FilesystemArtifactStore(ArtifactStore):
                 if os.path.exists(tmp):
                     os.remove(tmp)                   # interrupted/oversized -> nothing left behind
             raise
+        staged = StagedObject(self, f"blob/{sha}", sha, size, media)
+        staged._tmp = tmp                            # the hashed bytes, held unpublished under <root>/tmp
+        return staged
+
+    def _publish_staged(self, staged):
+        tmp = getattr(staged, "_tmp", None)
+        try:
+            final = self._path(staged.key)
+            if os.path.exists(final):
+                if tmp and os.path.exists(tmp):
+                    os.remove(tmp)                   # dedup: identical content already stored
+                created = False
+            else:
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, final)               # atomic publish; no partial object ever visible
+                dfd = os.open(self._blob, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+                created = True
+            return PutResult(staged.key, staged.sha256, staged.size, staged.media_type,
+                             scan_state="unscanned", created=created)
+        except BaseException:
+            if tmp and os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+
+    def _discard_staged(self, staged):
+        tmp = getattr(staged, "_tmp", None)
+        if tmp and os.path.exists(tmp):
+            os.remove(tmp)
 
     def open_stream(self, key):
         p = self._path(key)
@@ -241,14 +315,19 @@ class S3ArtifactStore(ArtifactStore):
         self._validate_key(key)
         return f"{self.prefix}{key}" if self.prefix else key
 
-    def put_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None, chunk=65536):
-        client = self._require_client()
+    def stage_stream(self, fileobj, *, max_bytes=_DEFAULT_MAX, allowed_media_types=None, chunk=65536):
+        self._require_client()
         buf = io.BytesIO()
         sha, size, head = _read_hash_size(fileobj, max_bytes, chunk, buf.write)
         media = sniff_media_type(head)
         _finalize_media(media, allowed_media_types)
-        key = f"blob/{sha}"
-        okey = self._okey(key)
+        staged = StagedObject(self, f"blob/{sha}", sha, size, media)
+        staged._buf = buf                            # hashed bytes buffered, not yet put to the bucket
+        return staged
+
+    def _publish_staged(self, staged):
+        client = self._require_client()
+        okey = self._okey(staged.key)
         # content-addressed + immutable: skip if the object already exists (dedup)
         exists = True
         try:
@@ -256,9 +335,14 @@ class S3ArtifactStore(ArtifactStore):
         except Exception:
             exists = False
         if not exists:
-            buf.seek(0)
-            client.put_object(Bucket=self.bucket, Key=okey, Body=buf.getvalue())
-        return PutResult(key, sha, size, media, scan_state="unscanned")
+            staged._buf.seek(0)
+            client.put_object(Bucket=self.bucket, Key=okey, Body=staged._buf.getvalue())
+        staged._buf = None
+        return PutResult(staged.key, staged.sha256, staged.size, staged.media_type,
+                         scan_state="unscanned", created=not exists)
+
+    def _discard_staged(self, staged):
+        staged._buf = None
 
     def open_stream(self, key):
         client = self._require_client()

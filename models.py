@@ -67,6 +67,46 @@ def ensure_schema(db):
             ("tool_version", "VARCHAR(60)"),
             ("retention_class", "VARCHAR(30) DEFAULT 'default'"),
         ],
+        "custody_events": [
+            # F4 correction (C): persist the exact record + timestamp + per-evidence sequence so
+            # the chain re-verifies from the DB and truncation is detectable against a checkpoint.
+            ("ts", "VARCHAR(40)"),
+            ("seq", "INTEGER"),
+            ("record_json", "TEXT"),
+        ],
+        "case_submissions": [
+            # F5.1: workbench receipt kept distinct from STRATA's evidence_record/evidence_sig.
+            ("wb_receipt", "TEXT"),
+            ("wb_receipt_sig", "TEXT"),
+            ("wb_receipt_version", "INTEGER"),
+        ],
+        "cases": [
+            ("scenario_ref", "VARCHAR(60)"),   # F5.1: approved candidate-safe scenario metadata ref
+            # S5: definitive binding association (additive; release-gated migration in docs/).
+            ("binding_id", "INTEGER"),
+            ("content_hash", "VARCHAR(64)"),
+            ("variant_id", "VARCHAR(60)"),
+            # S5 cross-module fix: opaque, keyed case-correlation reference kept DISTINCT from the
+            # F5 scenario_ref. S5 cohort cases carry this (not an F5 scenario-metadata identifier).
+            ("case_ref", "VARCHAR(80)"),
+        ],
+        "board_results": [
+            # S6: signed real-vs-mock range attestation for isolated boards (additive ALTER).
+            ("range_attestation", "TEXT"),
+        ],
+        "cohort_scenario_plans": [
+            # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
+            # clobbers the admin `notes`. Added after the table shipped; a deployed DB needs this
+            # ALTER (applied idempotently here; it is also part of the release-gated migration).
+            ("portfolio_json", "TEXT"),
+        ],
+        "scenario_bindings": [
+            # S3/S4 real version pinning: immutable generation-contract snapshot + integrity hash.
+            # scenario_bindings is itself an additive table (create_all makes it with these columns);
+            # these entries keep ensure_schema correct if the table predates the pinning fields.
+            ("gen_contract", "TEXT"),
+            ("gen_hash", "VARCHAR(64)"),
+        ],
         "range_requests": [
             ("template", "VARCHAR(60)"),
             ("wireguard_config", "TEXT"),
@@ -75,6 +115,7 @@ def ensure_schema(db):
             ("last_active_at", "TIMESTAMP"),
             ("board", "INTEGER"),
             ("host", "VARCHAR(60) DEFAULT 'primary'"),
+            ("evidence_hold_until", "TIMESTAMP"),
         ],
         "badges": [
             # Human-typeable public lookup key, minted on the certified badge.
@@ -324,11 +365,18 @@ class RangeRequest(db.Model):
     last_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)  # last status poll
     deployed_at = db.Column(db.DateTime(timezone=True), nullable=True)      # when it went deployed (TTL base)
     last_active_at = db.Column(db.DateTime(timezone=True), nullable=True)   # last candidate touch (idle base)
+    # S6 §16: while set and in the future, an assessment/evidence window is OPEN for this range;
+    # reclamation must preserve the disks (suspend, never destroy) so candidate evidence survives.
+    evidence_hold_until = db.Column(db.DateTime(timezone=True), nullable=True)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
-    ACTIVE = ("configured", "queued_slot", "deploying", "deployed")
+    # "suspended" (S6 §16) is powered-off: still an active, resumable lifecycle but frees the slot.
+    # "resuming" (S6 R3-2) is an issued-but-unconfirmed power-on: it still OCCUPIES a slot (the VMs may
+    # already be running) until the transition resolves, so capacity is never undercounted.
+    ACTIVE = ("configured", "queued_slot", "deploying", "deployed", "suspended", "resuming")
     # States that consume a host RAM slot (count against the concurrency cap).
-    OCCUPIES_SLOT = ("deploying", "deployed")
+    # A suspended range is powered off, so it does NOT occupy a slot; a resuming one does.
+    OCCUPIES_SLOT = ("deploying", "deployed", "resuming")
 
     @property
     def is_deployed(self):
@@ -346,6 +394,10 @@ class BoardResult(db.Model):
     objective_score = db.Column(db.Float, nullable=True)        # 0..100
     objective_passed = db.Column(db.Boolean, nullable=False, default=False)
     objective_sig = db.Column(db.Text, nullable=True)           # signed CI attestation
+    # S6: signed range attestation for ISOLATED boards (5/6). Records whether the objective was
+    # earned against a REAL validated Ludus range or a mock/simulated posture, so a simulated range
+    # can never yield an isolated-board objective award (fail-closed). NULL for non-isolated boards.
+    range_attestation = db.Column(db.Text, nullable=True)
     # Subjective channel (human report review).
     report_id = db.Column(db.Integer, db.ForeignKey("reports.id"), nullable=True)
     report_status = db.Column(db.String(20), nullable=True)
@@ -417,6 +469,85 @@ class AdminUser(db.Model):
     role = db.Column(db.String(20), nullable=False, default="reviewer")  # reviewer | sponsor
     org = db.Column(db.String(120), nullable=True)     # sponsors: the org they can see
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
+class ScenarioBinding(db.Model):
+    """S3/S4 - the durable, version-pinned binding of a candidate's qualification attempt to a
+    specific APPROVED scenario catalog entry and variant. This is the reproducibility + no-repeat
+    anchor for the cohort-aware portfolio system: it records the selected spec_id, spec_version,
+    immutable content_hash, structural variant, incident family (for reuse cooldown) and seed. The
+    hidden truth is NEVER stored here; it is recomputed from (variant, seed) server-side at grade
+    time. One binding per (candidate, board, attempt) makes assignment idempotent; the (github_id,
+    board, variant_id) history enforces no-repeat for a returning candidate.
+
+    Additive table: created by create_all offline. A production deployment needs a one-off migration
+    to add it; this is reported as a release gate and is not applied here."""
+    __tablename__ = "scenario_bindings"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    github_id = db.Column(db.String(64), nullable=False, index=True)   # person key (no-repeat)
+    board = db.Column(db.Integer, nullable=False, index=True)
+    cohort = db.Column(db.String(40), nullable=False, index=True)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    spec_id = db.Column(db.String(80), nullable=False)
+    spec_version = db.Column(db.Integer, nullable=False, default=1)
+    content_hash = db.Column(db.String(64), nullable=False)
+    variant_id = db.Column(db.String(60), nullable=False)
+    family = db.Column(db.String(60), nullable=True)      # for scenario-family reuse cooldown
+    seed = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="bound")   # bound | completed
+    # S3/S4 real version pinning: an immutable snapshot of the generation contract (board, variant,
+    # spec_version and the exact gen_params) captured at bind time, plus an integrity hash over it.
+    # Replay uses THIS, not whatever the live variant code currently returns, so an existing
+    # assignment reproduces its original world even after a variant is edited or superseded. A
+    # tampered contract fails the gen_hash check; a missing one (legacy binding) falls back to live
+    # params only when the live spec still hashes to the pinned content_hash, else fails closed.
+    gen_contract = db.Column(db.Text, nullable=True)
+    gen_hash = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    __table_args__ = (db.UniqueConstraint("candidate_id", "board", "attempt",
+                                          name="uq_binding_per_attempt"),)
+
+
+class QualificationDecision(db.Model):
+    """S5 - a governed, signed Board 2 qualification decision. SEPARATE from the shadow score
+    (CaseSubmission.shadow_*): a shadow score is advisory and never awards credit, whereas a
+    QualificationDecision in mode 'authorized' is the ONLY record that may drive Board 2 objective
+    credit, and only when the activation gate is open. It pins the exact scenario identity it was
+    computed against and carries an Ed25519 signature over its own content, so the award is auditable
+    and idempotent.
+
+    Additive table: created by create_all offline; a production deployment needs the one-off
+    migration in docs/ (release gate), not applied here."""
+    __tablename__ = "qualification_decisions"
+    id = db.Column(db.Integer, primary_key=True)
+    case_id = db.Column(db.Integer, db.ForeignKey("cases.id"), nullable=False, index=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    submission_id = db.Column(db.Integer, nullable=False)
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    board = db.Column(db.Integer, nullable=False, default=2)
+    rubric_version = db.Column(db.Integer, nullable=False)
+    mode = db.Column(db.String(20), nullable=False)          # proposed | authorized
+    score = db.Column(db.Float, nullable=False)
+    normalized = db.Column(db.Float, nullable=True)
+    passed = db.Column(db.Boolean, nullable=False, default=False)
+    critical_failures = db.Column(db.Text, nullable=True)    # JSON list
+    scenario_fingerprint = db.Column(db.String(64), nullable=False)
+    spec_id = db.Column(db.String(80), nullable=True)
+    spec_version = db.Column(db.Integer, nullable=True)
+    content_hash = db.Column(db.String(64), nullable=True)
+    variant_id = db.Column(db.String(60), nullable=True)
+    principal = db.Column(db.String(120), nullable=True)
+    decision_record = db.Column(db.Text, nullable=False)     # canonical JSON that was signed
+    decision_sig = db.Column(db.Text, nullable=False)        # Ed25519 signature over the record
+    awarded_objective = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    # One decision per (case, attempt, submission, rubric, mode) makes the award idempotent.
+    __table_args__ = (db.UniqueConstraint("case_id", "attempt", "submission_id",
+                                          "rubric_version", "mode",
+                                          name="uq_qual_decision"),)
 
 
 class Notification(db.Model):
@@ -581,7 +712,11 @@ class CohortScenarioPlan(db.Model):
     coverage = db.Column(db.String(400), nullable=True)   # what this board covers
     difficulty = db.Column(db.String(20), nullable=True)  # intro | standard | advanced
     variant = db.Column(db.String(40), nullable=True)     # scenario family/variant tag (future)
-    notes = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)             # admin-maintained free text (never clobbered)
+    # S3/S4 cohort portfolio: the admin-approved set of variant ids a cohort draws from, stored in a
+    # DEDICATED column so saving a portfolio never overwrites the admin `notes` or other operator
+    # metadata. JSON: {"portfolio": [...], "set_by": <approver>, "set_at": <iso>}.
+    portfolio_json = db.Column(db.Text, nullable=True)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
     __table_args__ = (db.UniqueConstraint("cohort", "board", name="uq_plan_per_cohort_board"),)
@@ -741,9 +876,122 @@ class CustodyEvent(db.Model):
     record_hash = db.Column(db.String(64), nullable=False)
     parent_hash = db.Column(db.String(64), nullable=True)
     signature = db.Column(db.Text, nullable=False)         # Ed25519 over the event record
+    # F4 correction (C): persist the exact signed record + its timestamp + per-evidence sequence
+    # so the chain can be re-verified from the DB (not only from an in-memory list) and so a
+    # separately-protected checkpoint can detect truncation of the latest events.
+    ts = db.Column(db.String(40), nullable=True)           # the record's own ISO timestamp
+    seq = db.Column(db.Integer, nullable=True)             # 0-based position in this evidence's chain
+    record_json = db.Column(db.Text, nullable=True)        # canonical signed record for exact re-verify
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    # F4.1: a per-evidence sequence position is unique, so two concurrent jobs appending to the same
+    # source chain can never both claim the same seq (the loser's INSERT is rejected). NULL seq
+    # (legacy rows) is exempt, as PostgreSQL treats NULLs as distinct.
+    __table_args__ = (db.UniqueConstraint("evidence_id", "seq", name="uq_custody_evidence_seq"),)
 
     KINDS = ("acquire", "verify", "derive", "access", "revoke", "retain", "quarantine")
+
+
+class CustodyCheckpoint(db.Model):
+    """F4 correction (C) - a separately-protected anchor over an evidence artifact's custody chain.
+
+    An internally-valid hash chain cannot by itself detect removal of its most recent events
+    (truncation): drop the last N rows and the remaining chain still verifies. This checkpoint
+    records, out of band from the events themselves, the chain head hash, the event COUNT, and the
+    head sequence, each signed, and itself chained (prev_checkpoint_hash) so checkpoints cannot be
+    silently rolled back either. Comparing the live chain against the latest checkpoint detects
+    truncation (fewer events than anchored) and head rewrites (same count, different head).
+
+    Honest limitation: checkpoints are signed with the same server Ed25519 key as the events, so an
+    attacker who holds that key could forge both. This protects against DB-level tampering/truncation
+    by anyone WITHOUT the signing key, and against accidental loss, between checkpoints. External
+    anchoring (e.g. a transparency log) is a future extension and needs no paid infra to add later."""
+    __tablename__ = "custody_checkpoints"
+    id = db.Column(db.Integer, primary_key=True)
+    evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    event_count = db.Column(db.Integer, nullable=False)       # number of events anchored
+    head_hash = db.Column(db.String(64), nullable=False)      # record_hash of the latest event
+    head_seq = db.Column(db.Integer, nullable=False)          # seq of the latest event
+    prev_checkpoint_hash = db.Column(db.String(64), nullable=True)  # chains checkpoints together
+    checkpoint_hash = db.Column(db.String(64), nullable=False)
+    ts = db.Column(db.String(40), nullable=False)
+    signature = db.Column(db.Text, nullable=False)            # Ed25519 over the checkpoint record
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
+class BlobReference(db.Model):
+    """F4 correction (B) - a reference from one evidence artifact to one content-addressed object.
+
+    Storage is content-addressed with de-duplication, so several artifacts (possibly across
+    candidates/cohorts) may point at the SAME blob/<sha256> object. Physical deletion must therefore
+    be reference-counted: revoking, quarantining or deleting one artifact releases only ITS reference,
+    and the underlying bytes are removed only when no active reference and no retention hold remains.
+    Each reference is scoped to its own candidate/cohort so logical revocation can be scoped without
+    touching another tenant's reference, and de-duplication never discloses that another tenant holds
+    the same bytes (authorization is always per-artifact; the dedup is invisible to callers)."""
+    __tablename__ = "blob_references"
+    id = db.Column(db.Integer, primary_key=True)
+    object_key = db.Column(db.String(128), nullable=False, index=True)   # blob/<sha256>
+    evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    candidate_id = db.Column(db.Integer, nullable=True, index=True)
+    cohort = db.Column(db.String(40), nullable=True, index=True)
+    pathway = db.Column(db.String(20), nullable=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    hold = db.Column(db.Boolean, nullable=False, default=False)   # legal/retention hold: blocks delete
+    released_at = db.Column(db.String(40), nullable=True)
+    release_reason = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    __table_args__ = (db.UniqueConstraint("object_key", "evidence_id", name="uq_blobref_obj_ev"),)
+
+
+class TrustedFixture(db.Model):
+    """F4.1 - an authenticated, administrator-approved synthetic-fixture registry.
+
+    The ONLY thing that may let media bypass the scan gate for development demonstrations is a
+    content hash registered here by an explicit administrative action. Trust is derived server-side
+    from this table keyed by the server-computed sha256; it is never taken from a job parameter,
+    submitted metadata, or any caller-controlled flag. Real candidate uploads are never registered."""
+    __tablename__ = "trusted_fixtures"
+    id = db.Column(db.Integer, primary_key=True)
+    sha256 = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note = db.Column(db.String(300), nullable=True)
+    approved_by = db.Column(db.String(120), nullable=False)   # admin principal that approved it
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+
+class ForensicJob(db.Model):
+    """F4 - a persistent, auditable bounded-forensic-processing job.
+
+    Admin-controlled only (no general candidate execution, no always-on workers). One job runs one
+    authorized operation over one source EvidenceArtifact inside the OS-enforced sandbox and persists
+    its derived evidence + signed custody. The lifecycle is explicit and restart-recoverable: a crash
+    while `running` is reclaimed by the next admin-triggered sweep, not by an unrestricted daemon."""
+    __tablename__ = "forensic_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    operation = db.Column(db.String(40), nullable=False)
+    source_evidence_id = db.Column(db.String(64), nullable=False, index=True)
+    case_id = db.Column(db.Integer, nullable=True, index=True)
+    candidate_id = db.Column(db.Integer, nullable=True, index=True)
+    cohort = db.Column(db.String(40), nullable=True, index=True)
+    pathway = db.Column(db.String(20), nullable=True)
+    params = db.Column(db.Text, nullable=True)                # JSON validated params
+    idempotency_key = db.Column(db.String(80), nullable=True, unique=True, index=True)
+    state = db.Column(db.String(20), nullable=False, default="queued", index=True)
+    requested_by = db.Column(db.String(120), nullable=True)   # admin principal
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=1)
+    claimed_at = db.Column(db.String(40), nullable=True)
+    started_at = db.Column(db.String(40), nullable=True)
+    finished_at = db.Column(db.String(40), nullable=True)
+    worker_token = db.Column(db.String(64), nullable=True)    # atomic-claim guard
+    wall_ms = db.Column(db.Integer, nullable=True)
+    error_code = db.Column(db.String(60), nullable=True)
+    error_detail = db.Column(db.Text, nullable=True)
+    result_manifest = db.Column(db.Text, nullable=True)       # JSON reproducible manifest
+    derived_evidence_ids = db.Column(db.Text, nullable=True)  # JSON list
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+
+    STATES = ("queued", "running", "succeeded", "failed", "canceled", "quarantined")
 
 
 class Case(db.Model):
@@ -768,6 +1016,23 @@ class Case(db.Model):
     index_name = db.Column(db.String(200), nullable=False)   # the candidate's authorized index
     seed = db.Column(db.String(64), nullable=False)          # reproducibility key (truth recomputed from this)
     scenario_version = db.Column(db.Integer, nullable=False, default=1)
+    # F5.1: reference to APPROVED, candidate-safe scenario metadata (scope/objectives/requirements).
+    # Resolves, with scenario_version, to a versioned entry in workbench_scenarios; NEVER holds truth.
+    # When unset/unknown, the candidate sees an accurate "instructions not available" state. S5 cohort
+    # Board 2 cases leave this None: their instructions come from the approved mission brief, not the
+    # F5 workbench catalog, so there is no F5 scenario-metadata entry to point at.
+    scenario_ref = db.Column(db.String(60), nullable=True)
+    # S5 cross-module fix: an OPAQUE, keyed, non-invertible case-correlation reference, kept strictly
+    # distinct from scenario_ref. It correlates a case/record without being an F5 scenario-metadata
+    # identifier and without revealing the seed or hidden truth. It is NOT a workbench_scenarios key,
+    # so it is never resolved as scenario metadata. The signed-evidence record computes the same
+    # opaque value independently from (slug, board, seed); this column is the persisted correlation.
+    case_ref = db.Column(db.String(80), nullable=True)
+    # S5: definitive association to the S3/S4 authoritative ScenarioBinding, so /soc, /case and
+    # grading all share one pinned scenario identity. Nullable for legacy/non-cohort cases.
+    binding_id = db.Column(db.Integer, nullable=True, index=True)
+    content_hash = db.Column(db.String(64), nullable=True)   # pinned spec content hash
+    variant_id = db.Column(db.String(60), nullable=True)     # pinned approved variant
     rubric_version = db.Column(db.Integer, nullable=False, default=2)
     attempt = db.Column(db.Integer, nullable=False, default=1)
     # Lifecycle state (see case_contract.CASE_STATES / CASE_TRANSITIONS).
@@ -806,8 +1071,14 @@ class CaseSubmission(db.Model):
     payload = db.Column(db.Text, nullable=True)            # JSON: candidate-authored submission
     validation = db.Column(db.Text, nullable=True)         # JSON: {errors, warnings}
     verification = db.Column(db.Text, nullable=True)       # JSON: per-citation verdicts (server-side)
-    evidence_record = db.Column(db.Text, nullable=True)    # JSON: preserved, hashed cited events
-    evidence_sig = db.Column(db.Text, nullable=True)       # Ed25519 over the evidence record (integrity/origin, NOT correctness)
+    evidence_record = db.Column(db.Text, nullable=True)    # JSON: preserved, hashed cited events (STRATA preserved-citation; siem/case_contract.py)
+    evidence_sig = db.Column(db.Text, nullable=True)       # Ed25519 over the evidence record (STRATA; integrity/origin, NOT correctness)
+    # F5.1: the WORKBENCH submission receipt is a DISTINCT, versioned contract kept in its OWN
+    # additive columns so it never collides with or overwrites STRATA's preserved-citation
+    # evidence_record/evidence_sig. STRATA verification is unchanged.
+    wb_receipt = db.Column(db.Text, nullable=True)         # JSON: workbench_submission_receipt record
+    wb_receipt_sig = db.Column(db.Text, nullable=True)     # Ed25519 over the workbench receipt
+    wb_receipt_version = db.Column(db.Integer, nullable=True)  # workbench receipt contract version
     # SHADOW enterprise grade: recorded for comparison only; never used for clearance.
     shadow_score = db.Column(db.Float, nullable=True)
     shadow_breakdown = db.Column(db.Text, nullable=True)   # JSON: per-component scores

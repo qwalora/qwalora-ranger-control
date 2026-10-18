@@ -54,20 +54,29 @@ def _mkuser(login, host):
     return host.split(".")[0] + "\\" + login.split(".")[0]
 
 
-def generate_board1(seed):
-    r = _random.Random("board1:" + str(seed))
+def generate_board1(seed, variant=None):
+    """Seed-deterministic SOC triage alert portfolio. When `variant` (an approved structural
+    variant from siem/board_variants) is supplied, the technique pool, benign look-alike pool and
+    true-positive density come from the variant, so two cohorts on different variants face materially
+    different triage challenges (different attack behaviors, FP patterns and technique distributions),
+    not renamed hosts. variant=None preserves the original behavior exactly."""
+    v = variant or {}
+    tp_pool = v.get("tp_techniques") or _TP_TECHNIQUES
+    benign_pool = v.get("benign") or _BENIGN
+    lo, hi = v.get("tp_count", (4, 7))
+    r = _random.Random("board1:%s:%s" % (v.get("id", ""), seed))
     n = r.randint(12, 16)
     attacker_user = r.choice(_USERS)
     attacker_src = r.choice(_HOSTS)
     base = _dt.datetime(2026, 3, r.randint(1, 20), r.randint(0, 5), r.randint(0, 59))
-    tp_count = r.randint(4, 7)
+    tp_count = r.randint(lo, hi)
 
     alerts = []
     for i in range(n):
         aid = "ALRT-%04d" % (1000 + i)
         ts = (base + _dt.timedelta(minutes=r.randint(0, 600))).isoformat()
         if i < tp_count:
-            tid, tname, tmpl = r.choice(_TP_TECHNIQUES)
+            tid, tname, tmpl = r.choice(tp_pool)
             dst = r.choice([h for h in _HOSTS if h != attacker_src])
             raw = tmpl.format(n=r.randint(18, 45), m=r.randint(6, 20), src=attacker_src,
                               dst=dst, user=attacker_user, d=r.randint(0, 9))
@@ -79,7 +88,7 @@ def generate_board1(seed):
         else:
             victim = r.choice(_USERS)
             dst = r.choice(_HOSTS)
-            raw = r.choice(_BENIGN).format(user=victim, dst=dst, d=r.randint(0, 9))
+            raw = r.choice(benign_pool).format(user=victim, dst=dst, d=r.randint(0, 9))
             key = {"verdict": "false_positive", "severity": "low",
                    "technique": None, "iocs": []}
             signal = "Routine activity"
@@ -87,7 +96,7 @@ def generate_board1(seed):
         alerts.append({"id": aid, "timestamp": ts, "host": host,
                        "signal": signal, "raw": raw, "_key": key})
     r.shuffle(alerts)
-    return {"board": 1, "cohort_theme": "sevenkingdoms.local",
+    return {"board": 1, "cohort_theme": "sevenkingdoms.local", "variant": v.get("id"),
             "attacker": {"src": attacker_src, "user": attacker_user},  # for the key only
             "alerts": alerts}
 
@@ -350,6 +359,13 @@ _B3_TNAME = {
     "T1053.005": "Scheduled-task persistence",
     "T1071.001": "Web C2 beaconing",
     "T1048.003": "Exfiltration over DNS",
+    # expanded catalog (S4) - enables detection-engineering variants with different technique sets
+    "T1003.002": "SAM hive dump via reg save",
+    "T1136.001": "Local account creation",
+    "T1562.001": "Disable security tooling",
+    "T1490": "Inhibit system recovery (shadow delete)",
+    "T1552.001": "Credential search in files",
+    "T1569.002": "Service execution (sc create)",
 }
 
 
@@ -391,6 +407,25 @@ def _b3_mal(r, tech):
     elif tech == "T1048.003":
         e.update(event_type="dns", domain=dom,
                  command="240 TXT queries to %s, high-entropy labels, ~3MB over 20m" % dom)
+    elif tech == "T1003.002":
+        e.update(image="reg.exe", parent="cmd.exe",
+                 command="reg.exe save HKLM\\SAM C:\\ProgramData\\%s.sav" % _b3_tok(r, 5))
+    elif tech == "T1136.001":
+        e.update(image="net.exe", parent="cmd.exe",
+                 command="net.exe user svc_%s P@ss%s /add" % (_b3_tok(r, 4), _b3_tok(r, 4)))
+    elif tech == "T1562.001":
+        e.update(image="powershell.exe", parent=r.choice(["cmd.exe", "explorer.exe"]),
+                 command="powershell.exe Set-MpPreference -DisableRealtimeMonitoring $true")
+    elif tech == "T1490":
+        e.update(image="vssadmin.exe", parent="cmd.exe",
+                 command="vssadmin.exe delete shadows /all /quiet")
+    elif tech == "T1552.001":
+        e.update(image="findstr.exe", parent="cmd.exe",
+                 command="findstr.exe /si password C:\\Users\\%s\\*.config" % _b3_tok(r, 4))
+    elif tech == "T1569.002":
+        e.update(image="sc.exe", parent="cmd.exe", dest=dst,
+                 command="sc.exe \\\\%s create %s binPath= c:\\%s.exe start= auto"
+                         % (dst, _b3_tok(r, 5), _b3_tok(r, 5)))
     return e
 
 
@@ -398,7 +433,7 @@ def _b3_mal(r, tech):
 # technique: they share the image but not the malicious command tokens, so an
 # image-only rule false-positives here and loses precision.
 def _b3_benign(r):
-    H, U, dst = r.choice(_B3_HOSTS), r.choice(_B3_USERS), r.choice(_B3_HOSTS)
+    H, U = r.choice(_B3_HOSTS), r.choice(_B3_USERS)
     choices = [
         {"event_type": "process", "image": "certutil.exe", "parent": "cmd.exe",
          "command": "certutil.exe -hashfile C:\\Users\\%s\\Downloads\\setup.exe SHA256" % U.split(".")[-1]},
@@ -422,6 +457,19 @@ def _b3_benign(r):
          "domain": "outlook.office365.com", "command": "HTTPS to outlook.office365.com"},
         {"event_type": "dns", "domain": "teams.microsoft.com", "command": "A query teams.microsoft.com"},
         {"event_type": "dns", "domain": "aka.ms", "command": "A query aka.ms"},
+        # near-misses for the expanded catalog: same image, legitimate command (no malicious tokens)
+        {"event_type": "process", "image": "reg.exe", "parent": "cmd.exe",
+         "command": "reg.exe query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion /v ProgramFilesDir"},
+        {"event_type": "process", "image": "net.exe", "parent": "cmd.exe",
+         "command": "net.exe user %USERNAME%"},
+        {"event_type": "process", "image": "powershell.exe", "parent": "explorer.exe",
+         "command": "powershell.exe Get-MpComputerStatus | Select RealTimeProtectionEnabled"},
+        {"event_type": "process", "image": "vssadmin.exe", "parent": "cmd.exe",
+         "command": "vssadmin.exe list shadows"},
+        {"event_type": "process", "image": "findstr.exe", "parent": "cmd.exe",
+         "command": "findstr.exe /i error C:\\Logs\\app.log"},
+        {"event_type": "process", "image": "sc.exe", "parent": "cmd.exe",
+         "command": "sc.exe query spooler"},
     ]
     e = {"event_type": "process", "host": H, "user": U, "image": "", "parent": "",
          "command": "", "dest": "", "domain": ""}
@@ -445,12 +493,17 @@ def _b3_corpus(r, techniques, k_per_tech, benign_count):
     return corpus
 
 
-def generate_board3(seed):
+def generate_board3(seed, variant=None):
     """The SHOWN requirements: one labeled sample per technique plus a benign
     baseline (with near-miss decoys). Grading uses a hidden holdout derived from
-    the same seed, so nothing secret lives in what the ranger receives."""
-    r = _random.Random("board3:shown:" + str(seed))
-    techniques = list(_B3_TECHNIQUES)
+    the same seed, so nothing secret lives in what the ranger receives.
+
+    When `variant` is supplied, the technique set to detect comes from the variant, so two cohorts
+    face different detection-engineering problems: a ruleset built for one cohort's techniques does
+    not automatically cover another's. variant=None preserves the original eight-technique set."""
+    v = variant or {}
+    r = _random.Random("board3:shown:%s:%s" % (v.get("id", ""), seed))
+    techniques = list(v.get("techniques") or _B3_TECHNIQUES)
     threats = []
     for tech in techniques:
         e = _b3_mal(r, tech)
@@ -463,7 +516,7 @@ def generate_board3(seed):
         e = _b3_benign(r)
         baseline.append({k: e[k] for k in ("event_type", "host", "user", "image",
                                            "parent", "command", "dest", "domain")})
-    return {"board": 3, "_seed": str(seed), "_techniques": techniques,
+    return {"board": 3, "_seed": str(seed), "_variant": v.get("id"), "_techniques": techniques,
             "cohort_theme": "corp.local", "threats": threats, "baseline": baseline}
 
 
@@ -482,8 +535,8 @@ def score_board3(scenario, submission):
     validation metrics and per-rule firing counts, never the holdout contents."""
     seed = scenario.get("_seed", "")
     techniques = scenario.get("_techniques", list(_B3_TECHNIQUES))
-    holdout = _b3_corpus(_random.Random("board3:holdout:" + seed), techniques,
-                         k_per_tech=4, benign_count=60)
+    holdout = _b3_corpus(_random.Random("board3:holdout:%s:%s" % (scenario.get("_variant", ""), seed)),
+                         techniques, k_per_tech=4, benign_count=60)
 
     rules = submission.get("rules") if isinstance(submission, dict) else None
     matchers, errors = _detect.compile_ruleset(rules or [])
@@ -560,38 +613,63 @@ def _b4_acct(u):
     return "corp\\" + u
 
 
-def generate_board4(seed):
-    r = _random.Random("board4:" + str(seed))
+# Default IR kill chain (legacy behavior) as a declarative template consumed by generate_board4.
+# Each step: (technique, event_type, host_role, acct_role, detail_template, is_persistence).
+# host_role in {pz,dst,third}; acct_role in {u1,u2}; the detail template may reference
+# {pz} {dst} {third} {u1} {u2} {u1acct} {u2acct} {c2} {tok}. A step whose host_role is `third` is
+# included only when the incident uses a third host.
+_B4_DEFAULT_CHAIN = [
+    ("T1059.001", "process", "pz", "u1",
+     "powershell.exe -nop -w hidden -enc JAB{tok}== on {pz}", False),
+    ("T1087.002", "process", "pz", "u1", 'net.exe group "Domain Admins" /domain on {pz}', False),
+    ("T1003.001", "process", "pz", "u1",
+     "rundll32.exe comsvcs.dll MiniDump lsass -> {tok}.dmp on {pz}", False),
+    ("T1021.002", "auth", "dst", "u2",
+     "ADMIN$ logon to {dst} as {u2acct} from {pz}, then service create", False),
+    ("T1053.005", "process", "dst", "u2",
+     "schtasks /create /ru SYSTEM /tn 'EdgeUpdateX' /tr powershell on {dst}", True),
+    ("T1021.002", "auth", "third", "u2", "ADMIN$ logon to {third} as {u2acct} from {dst}", False),
+    ("T1071.001", "network", "dst", "u2", "{dst} -> {c2}:443 HTTPS beacon every 60s, 8h", False),
+    ("T1048.003", "dns", "dst", "u2", "{dst} -> {c2} 200+ TXT lookups, ~2MB exfil", False),
+]
+
+
+def generate_board4(seed, variant=None):
+    """Seed-deterministic IR / forensics incident. When `variant` is supplied the initial-access
+    vector pool, the ordered kill chain (techniques, order, lateral pattern), the persistence
+    mechanism and whether a third host is involved all come from the variant, so two cohorts
+    investigate materially different incidents, not the same chain with renamed users. variant=None
+    reproduces the original incident shape. The ground-truth grading contract (patient zero, initial
+    access, scope, timeline, persistence) is unchanged."""
+    v = variant or {}
+    vectors = v.get("vectors") or _B4_VECTORS
+    chain = v.get("chain") or _B4_DEFAULT_CHAIN
+    r = _random.Random("board4:%s:%s" % (v.get("id", ""), seed))
     pz = r.choice(_B4_HOSTS)                                   # patient zero
     dst = r.choice([h for h in _B4_HOSTS if h != pz])         # lateral target
-    third = r.choice([h for h in _B4_HOSTS if h not in (pz, dst)]) if r.random() < 0.5 else None
+    use_third = v.get("use_third") if "use_third" in v else (r.random() < 0.5)
+    third = r.choice([h for h in _B4_HOSTS if h not in (pz, dst)]) if use_third else None
     u1 = r.choice(_B4_USERS)                                   # initial account
     u2 = r.choice(_B4_PRIV)                                    # escalated account
-    c2 = r.choice(_B4_C2)
-    vtid, vtname, vet, vtmpl = r.choice(_B4_VECTORS)
+    c2 = r.choice(v.get("c2_pool") or _B4_C2)
+    vtid, vtname, vet, vtmpl = r.choice(vectors)
     base = _dt.datetime(2026, 5, r.randint(1, 20), r.randint(1, 6), r.randint(0, 59))
 
-    # Ordered kill chain: (technique, event_type, host, account, detail, persistence?)
-    steps = [
-        (vtid, vet, pz, u1, vtmpl.format(tok=_b3_tok(r, 5), H=pz, U=u1, d=r.randint(2, 250)), False),
-        ("T1059.001", "process", pz, u1,
-         "powershell.exe -nop -w hidden -enc JAB%s== on %s" % (_b3_tok(r, 12), pz), False),
-        ("T1087.002", "process", pz, u1,
-         'net.exe group "Domain Admins" /domain on %s' % pz, False),
-        ("T1003.001", "process", pz, u1,
-         "rundll32.exe comsvcs.dll MiniDump lsass -> %s.dmp on %s" % (_b3_tok(r, 4), pz), False),
-        ("T1021.002", "auth", dst, u2,
-         "ADMIN$ logon to %s as %s from %s, then service create" % (dst, _b4_acct(u2), pz), False),
-        ("T1053.005", "process", dst, u2,
-         "schtasks /create /ru SYSTEM /tn 'EdgeUpdateX' /tr powershell on %s" % dst, True),
-        ("T1071.001", "network", dst, u2,
-         "%s -> %s:443 HTTPS beacon every 60s, 8h" % (dst, c2), False),
-        ("T1048.003", "dns", dst, u2,
-         "%s -> %s 200+ TXT lookups, ~2MB exfil" % (dst, c2), False),
-    ]
-    if third:
-        steps.insert(7, ("T1021.002", "auth", third, u2,
-                         "ADMIN$ logon to %s as %s from %s" % (third, _b4_acct(u2), dst), False))
+    _hosts = {"pz": pz, "dst": dst, "third": third}
+    _accts = {"u1": u1, "u2": u2}
+    fmt = {"pz": pz, "dst": dst, "third": third, "u1": u1, "u2": u2,
+           "u1acct": _b4_acct(u1), "u2acct": _b4_acct(u2), "c2": c2, "m": r.randint(6, 30)}
+
+    # Ordered kill chain: initial access from the vector pool, then the variant's chain.
+    steps = [(vtid, vet, pz, _b4_acct(u1),
+              vtmpl.format(tok=_b3_tok(r, 5), H=pz, U=u1, d=r.randint(2, 250)), False)]
+    for (tid, et, host_role, acct_role, tmpl, is_persist) in chain:
+        host = _hosts.get(host_role)
+        if host is None:               # a `third`-host step with no third host in this incident
+            continue
+        acct = _b4_acct(_accts.get(acct_role, u1))
+        detail = tmpl.format(tok=_b3_tok(r, 5), **fmt)
+        steps.append((tid, et, host, acct, detail, is_persist))
 
     affected_hosts = sorted({pz, dst} | ({third} if third else set()))
     affected_accounts = sorted({_b4_acct(u1), _b4_acct(u2)})
@@ -767,6 +845,29 @@ def _flags_for(board, seed):
     return out
 
 
+def placement_vars(n, seed, gp=None):
+    """STRATA S6 (section 17): the PINNED range-placement config the qwalora_flags Ansible role must
+    use for this seed, so a flag's ACL lock references the SAME account the approved scenario names -
+    never the role's fixed defaults. The brief randomizes the kerberoast service account and the
+    AS-REP user per seed; if the role kept its fixed defaults it would lock a flag to a non-existent
+    account and silently cost the ranger a point. It also pins the board number so a board-6 range
+    gets the board-6 placement map (the role defaults to board 5). Keys match the role's var names
+    (passed through broker templateVars). Returns None for non-flag boards."""
+    if n == 5:
+        t = generate_board5(seed, gp)["targets"]
+        return {"qwalora_flags_board": 5,
+                "qwalora_svc_account": t["kerberoast_account"],
+                "qwalora_asrep_account": t["asrep_user"],
+                "qwalora_dc_hostnames": list(_B5_DCS),
+                "qwalora_domain": _B5_DOMAIN}
+    if n == 6:
+        generate_board6(seed, gp)  # deterministic; validates the seed resolves
+        return {"qwalora_flags_board": 6,
+                "qwalora_dc_hostnames": list(_B6_DCS),
+                "qwalora_domain": _B6_PARENT}
+    return None
+
+
 def flags_for_board(n, seed):
     """The per-seed flag for each objective of a flag-capture board. Used by both
     the grader and the range provisioner (which plants these at deploy time), so
@@ -814,19 +915,32 @@ def _score_flags(scenario, submission):
 _FLAG_OBJECTIVES[5] = _B5_OBJECTIVES
 
 
-def generate_board5(seed):
+def generate_board5(seed, gp=None):
+    """Board 5 (Raider) world. S6 section 14: when a family's gen_params is supplied the world varies
+    MATERIALLY (which identities are roastable, which dangerous ACL edge is the escalation, which host
+    is the pivot), not just which names a seed happens to pick. gp=None keeps the legacy single-world
+    behaviour byte-for-byte (full account pools, generic edge) so the seed-only path is unchanged."""
     r = _random.Random("board5:" + str(seed))
-    svc = r.choice(_B5_SVC_ACCTS)
-    asrep_user = r.choice(_B5_ASREP_USERS)
-    lateral_host = r.choice(_B5_SERVERS)
+    gp = gp or {}
+    svc_pool = list(gp.get("svc_pool") or _B5_SVC_ACCTS)
+    asrep_pool = list(gp.get("asrep_pool") or _B5_ASREP_USERS)
+    lateral_pool = list(gp.get("lateral_pool") or _B5_SERVERS)
+    edge = gp.get("escalation_edge")   # e.g. GenericAll | WriteDACL | ForceChangePassword
+    svc = r.choice(svc_pool)
+    asrep_user = r.choice(asrep_pool)
+    lateral_host = r.choice(lateral_pool)
     fill = {"domain": _B5_DOMAIN, "svc": svc, "asrep_user": asrep_user, "lateral_host": lateral_host}
-    objectives = [{"id": oid, "name": name, "technique": tech,
-                   "hint": hint.format(**fill), "points": pts}
-                  for (oid, name, tech, hint, pts) in _B5_OBJECTIVES]
+    objectives = []
+    for (oid, name, tech, hint, pts) in _B5_OBJECTIVES:
+        h = hint.format(**fill)
+        if oid == "aclabuse" and edge:
+            h = ("Find and abuse a %s edge to escalate privileges. The flag is the proof of the "
+                 "takeover." % edge)
+        objectives.append({"id": oid, "name": name, "technique": tech, "hint": h, "points": pts})
     return {"board": 5, "cohort_theme": _B5_DOMAIN,
             "targets": {"domain": _B5_DOMAIN, "dcs": _B5_DCS, "servers": _B5_SERVERS,
                         "kerberoast_account": svc, "asrep_user": asrep_user,
-                        "lateral_host": lateral_host},
+                        "lateral_host": lateral_host, "escalation_edge": edge},
             "objectives": objectives,
             "_flags": _flags_for(5, seed)}
 
@@ -850,13 +964,16 @@ _B6_CHILD = "north.sevenkingdoms.local"
 _B6_FOREST2 = "essos.local"
 _B6_DCS = ["kingslanding", "winterfell", "braavos"]
 _B6_SERVERS = ["castelblack", "meereen"]
+# Point weights interplay with the capstone rubric (§18): the final crown-jewel exfil is deliberately
+# low-point but MANDATORY, so a candidate can accumulate >=95 points on the rest of the chain and still
+# critically fail by never capturing the crown - the mandatory gate does real, independent work.
 _B6_OBJECTIVES = [
     ("recon_forest", "Map the forest and its trusts", "T1482 / T1087",
-     "Enumerate {parent}, {child}, and the trust to {forest2}. The flag is on a world-readable share.", 5),
+     "Enumerate {parent}, {child}, and the trust to {forest2}. The flag is on a world-readable share.", 8),
     ("foothold", "Establish a foothold", "T1110 / T1078",
-     "Land a session in {child}. The flag is in the user's profile.", 8),
+     "Land a session in {child}. The flag is in the user's profile.", 10),
     ("roast_forest", "Harvest service and AS-REP tickets", "T1558.003 / T1558.004",
-     "Kerberoast and AS-REP roast across the forest, crack offline. The flag unlocks with a cracked account.", 10),
+     "Kerberoast and AS-REP roast across the forest, crack offline. The flag unlocks with a cracked account.", 12),
     ("child_da", "Become Domain Admin of the child", "T1078.002",
      "Reach Domain Admin on {child}. The flag is on the Administrator desktop of {child_dc}.", 12),
     ("trust_abuse", "Abuse the child to parent trust", "T1134.005 / T1484.002",
@@ -864,42 +981,125 @@ _B6_OBJECTIVES = [
     ("parent_ea", "Seize Enterprise Admin", "T1078.002",
      "Take Enterprise Admin on {parent}. The flag is on {parent_dc}.", 12),
     ("forest_persist", "Establish forest persistence", "T1558.001 / T1003.006",
-     "DCSync krbtgt and mint forest persistence (golden ticket). The flag derives from the krbtgt material.", 10),
+     "DCSync krbtgt and mint forest persistence (golden ticket). The flag derives from the krbtgt material.", 12),
     ("cross_forest", "Pivot across the forest trust", "T1482 / T1550",
-     "Abuse the trust to {forest2} and land there. The flag is on a {forest2} host.", 12),
+     "Abuse the trust to {forest2} and land there. The flag is on a {forest2} host.", 10),
     ("forest2_da", "Compromise the second forest", "T1078.002",
-     "Reach Domain Admin on {forest2}. The flag is on {forest2_dc}.", 10),
+     "Reach Domain Admin on {forest2}. The flag is on {forest2_dc}.", 8),
     ("crown", "Capture the crown jewels", "T1005 / T1020",
-     "Exfiltrate the designated crown-jewel secret from the root DC. The flag is that secret.", 9),
+     "Exfiltrate the designated crown-jewel secret from the root DC. The flag is that secret.", 4),
 ]
 _FLAG_OBJECTIVES[6] = _B6_OBJECTIVES
 
+# --- Board 6 capstone rubric (S6 §18) ---------------------------------------
+# Board 6 is the Vanguard CAPSTONE: an end-to-end, full-forest compromise. It is graded by a
+# rubric DISTINCT from board 5 (which is a flat points-weighted sum). The capstone's defining
+# achievement is demonstrating the whole kill chain, so a set of objectives is MANDATORY: these are
+# the milestones that prove the candidate actually owned the estate end to end (becoming child DA,
+# abusing the trust across domains, seizing the parent forest, establishing forest persistence,
+# pivoting across the forest trust, and capturing the crown jewels). Missing ANY mandatory milestone
+# is a CRITICAL FAILURE: the attempt cannot pass regardless of how many points of easier objectives
+# were captured, so its score is capped below the 95 bar (OSCP-style must-complete gating). The
+# rubric is VERSIONED so the exact rubric that graded an attempt is recorded and bindable.
+CAPSTONE_RUBRIC_VERSION = "b6-capstone-v1"
+_B6_MANDATORY = ("child_da", "trust_abuse", "parent_ea", "forest_persist", "cross_forest", "crown")
+_CAPSTONE_FAIL_CEILING = 94.9  # strictly below PASS_BAR (95.0)
 
-def generate_board6(seed):
+
+BOARD5_RUBRIC_VERSION = "b5-flat-v1"   # board 5 (Raider): flat points-weighted sum at the 95 bar
+
+
+def rubric_version(board):
+    """The versioned grading rubric id for a flag-capture board, bound into the attestation (§5).
+    Board 6 uses the capstone rubric; board 5 uses the flat points-weighted sum."""
+    return CAPSTONE_RUBRIC_VERSION if int(board) == 6 else BOARD5_RUBRIC_VERSION
+
+
+def capstone_rubric():
+    """The versioned Board 6 capstone rubric, candidate-safe (no flags). Describes the mandatory
+    end-to-end milestones and the critical-failure rule, so it can be shown in the mission brief and
+    bound into the assessment record."""
+    return {
+        "version": CAPSTONE_RUBRIC_VERSION,
+        "board": 6,
+        "kind": "capstone",
+        "pass_bar": 95.0,
+        "mandatory_objectives": list(_B6_MANDATORY),
+        "rule": ("This is a capstone: every mandatory milestone must be demonstrated end to end. "
+                 "Missing any mandatory objective is a critical failure and caps the score below the "
+                 "pass bar, regardless of points earned on other objectives."),
+    }
+
+
+def score_capstone(scenario, submission):
+    """Board 6 capstone scorer (§18). Starts from the points-weighted capture score, then applies the
+    mandatory-milestone critical-failure gate: if any mandatory objective is uncaptured, the effective
+    score is capped below the bar and the feedback names the missing milestones. Distinct from board 5
+    and versioned."""
+    score, feedback = _score_flags(scenario, submission)
+    fb = feedback[0]
+    captured_ids = {p["id"] for p in fb["objectives"] if p["captured"]}
+    missing = [oid for oid in _B6_MANDATORY if oid not in captured_ids]
+    fb["rubric_version"] = CAPSTONE_RUBRIC_VERSION
+    fb["mandatory_objectives"] = list(_B6_MANDATORY)
+    fb["mandatory_missing"] = missing
+    fb["capstone_complete"] = not missing
+    effective = score
+    if missing:
+        effective = min(score, _CAPSTONE_FAIL_CEILING)
+        fb["critical_failure"] = ("capstone incomplete: mandatory end-to-end milestones not "
+                                  "demonstrated (%s); score capped below the bar" % ", ".join(missing))
+    return effective, feedback
+
+
+def generate_board6(seed, gp=None):
+    """Board 6 (Vanguard) multi-forest capstone. S6 section 14: a family's gen_params varies the
+    MATERIAL structure (trust topology to cross, which DC holds the crown jewels, the escalation
+    technique across the trust), so two families are genuinely different investigations rather than a
+    reskin. gp=None keeps the legacy single-world behaviour unchanged."""
     r = _random.Random("board6:" + str(seed))
+    gp = gp or {}
     child_dc = "winterfell"
     parent_dc = "kingslanding"
     forest2_dc = "braavos"
-    forest2_host = r.choice(_B6_SERVERS)
+    forest2_pool = list(gp.get("forest2_host_pool") or _B6_SERVERS)
+    forest2_host = r.choice(forest2_pool)
+    trust_topology = gp.get("trust_topology")   # child-to-parent | cross-forest | bidirectional
+    crown_location = gp.get("crown_location")    # parent-dc | forest2-dc | root-dc
+    escalation = gp.get("escalation")            # SID-history | trust-key | golden-ticket
     fill = {"parent": _B6_PARENT, "child": _B6_CHILD, "forest2": _B6_FOREST2,
             "child_dc": child_dc, "parent_dc": parent_dc, "forest2_dc": forest2_dc}
-    objectives = [{"id": oid, "name": name, "technique": tech,
-                   "hint": hint.format(**fill), "points": pts}
-                  for (oid, name, tech, hint, pts) in _B6_OBJECTIVES]
+    objectives = []
+    for (oid, name, tech, hint, pts) in _B6_OBJECTIVES:
+        h = hint.format(**fill)
+        if oid == "trust_abuse" and escalation:
+            h = ("Cross the %s trust using %s. The flag proves the crossing."
+                 % (trust_topology or "domain", escalation))
+        elif oid == "crown" and crown_location:
+            h = ("Exfiltrate the designated crown-jewel secret from the %s. The flag is that secret."
+                 % crown_location)
+        objectives.append({"id": oid, "name": name, "technique": tech, "hint": h, "points": pts})
     return {"board": 6, "cohort_theme": _B6_PARENT,
             "targets": {"domain": _B6_PARENT, "parent": _B6_PARENT, "child": _B6_CHILD,
                         "forest2": _B6_FOREST2, "dcs": _B6_DCS, "servers": _B6_SERVERS,
-                        "forest2_host": forest2_host},
+                        "forest2_host": forest2_host, "trust_topology": trust_topology,
+                        "crown_location": crown_location, "escalation": escalation},
             "objectives": objectives,
+            "rubric": capstone_rubric(),
             "_flags": _flags_for(6, seed)}
 
 
 def public_board6(scenario):
-    return _public_flags(scenario)
+    pub = _public_flags(scenario)
+    # The capstone rule (mandatory milestones + critical-failure gate) is part of the brief, not a
+    # secret: surface the versioned rubric so the candidate knows the capstone must be completed
+    # end to end. Still flag-free.
+    pub["rubric"] = scenario.get("rubric") or capstone_rubric()
+    return pub
 
 
 def score_board6(scenario, submission):
-    return _score_flags(scenario, submission)
+    return score_capstone(scenario, submission)
 
 
 # --- dispatch ---------------------------------------------------------------

@@ -1,0 +1,46 @@
+# STRATA S5.1 - DISPOSABLE local OpenSearch 2.17.1 for real-node validation ONLY.
+#
+# This is NOT the production/Railway node (that is the Dockerfile + opensearch.yml + Ranger-issued
+# CA in this directory). This file stands up a throwaway single-node cluster on LOOPBACK ONLY so the
+# real-OpenSearch validation suite (siem/tests/test_strata_s5_real_opensearch.py) can run against a
+# real Security plugin, REST API, mappings, roles and DLS.
+#
+# Precise, intentional differences from the PRODUCTION security configuration (opensearch.yml),
+# per spec S5.1 section 4 ("document the precise difference"):
+#   * TLS: the stock image's DEMO self-signed certificates are used, not Ranger-issued CA/node/admin
+#     certs written from runtime secrets. The test client therefore does not verify the chain unless
+#     RANGER_TEST_OS_CA is set. Production verifies against the Ranger CA (opensearch.yml lines 8-18).
+#   * Admin identity: a local throwaway admin password (OPENSEARCH_INITIAL_ADMIN_PASSWORD), not a
+#     rotated runtime secret and cert-DN admin (admin_dn CN=admin.ranger.internal).
+#   * Security config: the image's demo internalusers/roles bootstrap, not the managed securityconfig.
+#   * Exposure: bound to 127.0.0.1 only; no public endpoint, no Railway, no shared instance.
+#   * .ranger-qualmeta is protected the SAME way as production: by NOT being inside any candidate
+#     role's index pattern (its dotted name never matches ranger-<cohort>-<slug>-b*), NOT by the
+#     Security plugin system-index list. The suite's section 6 validates exactly that boundary.
+#
+# The Security plugin stays ENABLED (DISABLE_SECURITY_PLUGIN is never set). Do not disable it to make
+# a test pass. Tear down with `docker compose -f docker-compose.test.yml down -v` to destroy all data.
+services:
+  opensearch-test:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: ranger-ostest-2171
+    environment:
+      - discovery.type=single-node
+      - cluster.name=ranger-ostest
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      # OpenSearch 2.12+ requires an explicit strong initial admin password.
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD:?set a strong test admin password}"
+      # Avoid the host vm.max_map_count>=262144 bootstrap requirement on machines that cannot raise it.
+      - node.store.allow_mmap=false
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports:
+      # LOOPBACK ONLY. Never 0.0.0.0. No public endpoint.
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk -u admin:$$OPENSEARCH_INITIAL_ADMIN_PASSWORD https://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30

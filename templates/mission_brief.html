@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Mission brief · Board {{ vm.board }} · Qwalora Ranger{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='mission.css') }}?v={{ asset_ver }}">{% endblock %}
+{% block body %}
+<div class="page">
+  <div class="mw">
+    <a class="mw-back" href="/me">{{ ic('arrow','ic ic-sm') }} Back to your dashboard</a>
+
+    <div class="mw-shell">
+
+      {# ---- always-visible mission overview ---- #}
+      <div class="mw-head">
+        <div class="mw-eyebrow">Board {{ vm.board }} · {{ vm.pkg.badge or vm.role_title }} · mission brief</div>
+        <h1 class="mw-title">{{ vm.pkg.title }}</h1>
+        <div class="mw-org">{{ vm.pkg.org }}</div>
+        {% if vm.summary %}<p class="mw-summary">{{ vm.summary }}</p>{% endif %}
+        <div class="mw-meta">
+          <div class="m"><div class="mk">Professional role</div><div class="mv">{{ vm.role_title }}</div></div>
+          <div class="m {% if vm.avail.available %}mw-env-ok{% else %}mw-env-pending{% endif %}">
+            <div class="mk">Environment</div>
+            <div class="mv">{% if vm.avail.available %}<span class="pill pill-ok"><span class="dot"></span>Ready</span>{% else %}<span class="pill pill-amber"><span class="dot"></span>{{ ic('lock','ic ic-sm') }} Unavailable</span>{% endif %}</div>
+          </div>
+          <div class="m"><div class="mk">Mission version</div><div class="mv">v{{ vm.pkg.version }} · approved</div></div>
+          <div class="m"><div class="mk">Objective standard</div><div class="mv">{{ vm.pkg.pass_bar }}%</div></div>
+        </div>
+      </div>
+
+      {# ---- four accessible tabs (no-JS, radio-driven; native arrow-key navigation) ---- #}
+      <input class="mw-radio" type="radio" name="mwtab" id="mwt-mission" checked aria-label="Mission tab">
+      <input class="mw-radio" type="radio" name="mwtab" id="mwt-env" aria-label="Environment tab">
+      <input class="mw-radio" type="radio" name="mwtab" id="mwt-sub" aria-label="Submission tab">
+      <input class="mw-radio" type="radio" name="mwtab" id="mwt-ref" aria-label="References tab">
+
+      <div class="mw-tablist" aria-label="Mission sections">
+        <label class="mw-tab" for="mwt-mission">{{ ic('flag','ic ic-sm') }}<span class="tlab">Mission</span></label>
+        <label class="mw-tab" for="mwt-env">{{ ic('server','ic ic-sm') }}<span class="tlab">Environment</span></label>
+        <label class="mw-tab" for="mwt-sub">{{ ic('inbox','ic ic-sm') }}<span class="tlab">Submission</span></label>
+        <label class="mw-tab" for="mwt-ref">{{ ic('link','ic ic-sm') }}<span class="tlab">References</span></label>
+      </div>
+
+      <div class="mw-panels">
+
+        {# ===== Mission: business context, assigned role, objectives ===== #}
+        <section class="mw-panel" id="mwp-mission">
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('grid','ic ic-sm') }} Business context</div>
+            <p>{{ vm.pkg.business_context }}</p>
+          </div>
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('user','ic ic-sm') }} Your assigned role</div>
+            <p>{{ vm.pkg.assigned_role }}</p>
+          </div>
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('flag','ic ic-sm') }} Technical mission objectives</div>
+            <ul>{% for o in vm.pkg.objectives %}<li>{{ o }}</li>{% endfor %}</ul>
+          </div>
+          <p class="mw-disc">{{ vm.pkg.org_disclaimer }}</p>
+        </section>
+
+        {# ===== Environment: authorized scope, systems/access, troubleshooting ===== #}
+        <section class="mw-panel" id="mwp-env">
+          {% if vm.avail.available %}
+          <div class="mw-envbox ok">
+            <div class="t"><span class="pill pill-ok"><span class="dot"></span>Environment ready</span></div>
+            <p>{{ vm.avail.message }}</p>
+          </div>
+          {% else %}
+          <div class="mw-envbox pending">
+            <div class="t"><span class="pill pill-amber"><span class="dot"></span>{{ ic('lock','ic ic-sm') }} Environment not yet available</span></div>
+            <p>{{ vm.avail.message }}</p>
+          </div>
+          {% endif %}
+          <div class="mw-grid2">
+            <div class="mw-sec">
+              <div class="lbl">{{ ic('shield','ic ic-sm') }} Authorized systems and scope</div>
+              <p>{{ vm.pkg.authorized_scope }}</p>
+            </div>
+            <div class="mw-sec">
+              <div class="lbl">{{ ic('server','ic ic-sm') }} Environment and access</div>
+              <p>{{ vm.pkg.environment }}</p>
+            </div>
+          </div>
+          <div class="mw-sec" style="margin-top:22px">
+            <div class="lbl">{{ ic('help','ic ic-sm') }} Troubleshooting, recovery and support</div>
+            <p>{{ vm.pkg.support }}</p>
+          </div>
+        </section>
+
+        {# ===== Submission: deliverables, evidence integrity, submission, evaluation ===== #}
+        <section class="mw-panel" id="mwp-sub">
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('inbox','ic ic-sm') }} Expected deliverables</div>
+            <ul>{% for d in vm.pkg.deliverables %}<li>{{ d }}</li>{% endfor %}</ul>
+          </div>
+          <div class="mw-grid2">
+            <div class="mw-sec">
+              <div class="lbl">{{ ic('hash','ic ic-sm') }} Evidence and integrity</div>
+              <p>{{ vm.pkg.evidence }}</p>
+            </div>
+            <div class="mw-sec">
+              <div class="lbl">{{ ic('edit','ic ic-sm') }} Submission and acceptance</div>
+              <p>{{ vm.pkg.submission }}</p>
+            </div>
+          </div>
+          <div class="mw-sec" style="margin-top:22px">
+            <div class="lbl">{{ ic('medal','ic ic-sm') }} Evaluation expectations</div>
+            <p>{{ vm.pkg.evaluation }}</p>
+          </div>
+        </section>
+
+        {# ===== References ===== #}
+        <section class="mw-panel" id="mwp-ref">
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('link','ic ic-sm') }} Professional references and standards</div>
+            <div class="mw-refs">
+              {% for r in vm.pkg.references %}
+              <div class="mw-ref">
+                <b>{{ r.title }}</b>
+                <span class="pub">{{ r.publisher }}</span>
+                <div class="nt">{{ r.note }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            <p class="mw-disc">Reference and background material, not an official solution to this assessment.</p>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <p class="mw-foot">Mission instructions are candidate-safe: they describe the mission, not how to solve it. The STRATA objective standard is {{ vm.pkg.pass_bar }} percent. Protected answer keys and evaluator configuration remain server-side.</p>
+
+  </div>
+</div>
+{% endblock %}
