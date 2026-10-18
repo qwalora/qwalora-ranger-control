@@ -34,13 +34,14 @@ ollama show "$MODEL" 2>/dev/null | head -20 || true
 # response + timing. This is read from Railway deploy logs to VERIFY real inference without exposing
 # any public endpoint. It is a liveness proof, never a research finding.
 echo "=== PARALLAX INFERENCE SELF-TEST ==="
-T0=$(date +%s.%N)
-RESP=$(curl -sS --max-time 120 http://127.0.0.1:11434/api/generate \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"Reply with exactly: PARALLAX-LIVE\",\"stream\":false,\"options\":{\"temperature\":0,\"num_predict\":16}}" 2>&1 || echo '{"error":"selftest_failed"}')
-T1=$(date +%s.%N)
+# Use the ollama CLI (the image has no curl) to run ONE real generation and log it. Genuine liveness
+# proof read from Railway logs; never a research finding.
+T0=$(date +%s)
+RESP=$(ollama run "$MODEL" "Reply with exactly the single token: PARALLAX-LIVE" 2>&1 || echo "selftest_failed")
+T1=$(date +%s)
 echo "SELFTEST_MODEL=$MODEL"
-echo "SELFTEST_RESPONSE=$RESP"
-echo "SELFTEST_DURATION_S=$(echo "$T1 - $T0" | bc 2>/dev/null || echo '?')"
+echo "SELFTEST_RESPONSE<<<$RESP>>>"
+echo "SELFTEST_DURATION_S=$((T1 - T0))"
 echo "=== END SELF-TEST ==="
 
 wait "$OLLAMA_PID"
