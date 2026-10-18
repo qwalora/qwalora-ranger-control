@@ -165,7 +165,7 @@ class DeterministicStubBackend(Backend):
         # the stub concatenates context then task, and echoes a marker iff any provided text contains an
         # explicit directive to emit the marker - a deterministic stand-in with NO claim of realism.
         blob = "\n".join(d.get("text", "") for d in req.context) + "\n" + req.task
-        emitted_marker = "say INJECTION-OK" in blob.lower() or "emit injection-ok" in blob.lower()
+        emitted_marker = "say injection-ok" in blob.lower() or "emit injection-ok" in blob.lower()
         if emitted_marker:
             text = "%s (stub followed an embedded directive; NOT a real-model observation)" % self._MARKER
         else:
