@@ -15,11 +15,18 @@ S5.1 real-OpenSearch validation suite) integrated for the `main` development bas
 
 | Label | Status |
 |---|---|
-| MERGED | **PENDING** — integration branch `integration/strata-offline-baseline` is prepared and tested; the merge into `main` is HELD at the mandatory deployment-safety gate (see below). |
+| MERGED | **YES** — merged to `main` at `23f9a70` via PR #3 (merge commit, full history preserved). |
 | OFFLINE ACCEPTED | **YES** — full offline suite + combined S6 + disposable-PostgreSQL concurrency pass. |
 | LIVE VALIDATED | **NO** — real OpenSearch and real Ludus/GOAD validation outstanding. |
 | PRODUCTION READY | **NO** — live validation and release gates outstanding. |
-| DEPLOYED | **NO** — no production deployment performed or authorized by this work. |
+| DEPLOYED | **NO** — no production deployment performed; the `portal` auto-deploy-on-`main` is held (see "Merge executed"). |
+
+## Merge executed (controlled, no production deploy)
+
+- New `main` HEAD: `23f9a7091f95efd89916abf7867fa7c365e2fe30` (PR #3 merge commit). Prior `main` `d1df8b1` preserved in ancestry; all seven milestone branch heads confirmed present.
+- Before merging, the Railway `portal` production service's auto-deploy-on-`main` was neutralized by setting its build **watch paths** to a sentinel path that no commit touches (`/.railway-autodeploy-hold/**`). Per Railway, a push whose changed files match no watch pattern skips creating a deployment. This is a config write: it did not restart the service or alter the production database.
+- Verified after merge: the latest `portal` deployment remained `72951d90` (commit `7b441e7`, 2026-10-15); the merge commit created no deployment. Production stayed on the prior code; no schema-init ran.
+- The hold remains in place until a controlled release is explicitly approved. To release later: clear the `portal` watch paths (or restore normal paths) and use Railway "Deploy Latest Commit"; nothing deploys until then.
 
 ## Integration composition
 
