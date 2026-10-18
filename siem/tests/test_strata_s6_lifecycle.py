@@ -221,9 +221,12 @@ def test_power_off_on_are_power_toggles_not_snapshots():
 
 
 def test_broker_distinguishes_accepted_from_confirmed(monkeypatch):
-    # §2/R3-3: a live power-off whose confirmation never sees all VMs stopped is NOT confirmed, so a
-    # caller must not free the slot. An UNKNOWN VM -> PENDING; a probe error -> UNKNOWN; a VM still
-    # running -> FAILED (power-off ineffective). None is a pass.
+    # §2/R4-2/R4-3: a live power-off whose confirmation never sees all VMs stopped is NOT confirmed,
+    # so a caller must not free the slot. An UNKNOWN VM -> PENDING; a non-target (still-running) VM
+    # after an accepted request is ALSO PENDING (the op may still be queued), never a false failure;
+    # a probe error -> UNKNOWN; FAILED comes ONLY from an authoritative terminal Ludus signal. None is
+    # a pass. (These VM lists carry no configured inventory, so expected_inventory is None and
+    # confirmation stays conservatively PENDING even when a subset looks right.)
     os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
     monkeypatch.setattr(broker, "_req", lambda *a, **k: {})  # POST accepted
     # a VM with no recognized power field is UNKNOWN -> power-off PENDING, not confirmed
@@ -231,18 +234,36 @@ def test_broker_distinguishes_accepted_from_confirmed(monkeypatch):
                         lambda *a, **k: {"VMs": [{"name": "DC01", "powerState": "transitioning"}]})
     confirmed, _d, outcome = broker.power_off(_C())
     assert confirmed is False and outcome == broker.OP_PENDING
-    # a VM still running means power-off did not take -> FAILED (definitive), still not a pass
+    # a VM still running right after an accepted power-off is NOT a definitive failure (async): the
+    # command may be queued. This is PENDING, so the slot stays reserved - never a premature release.
     monkeypatch.setattr(broker, "range_detail",
                         lambda *a, **k: {"VMs": [{"name": "DC01", "poweredOn": True}]})
     cf, _df, of = broker.power_off(_C())
-    assert cf is False and of == broker.OP_FAILED
+    assert cf is False and of == broker.OP_PENDING
+    # FAILED only on an AUTHORITATIVE terminal Ludus signal (an error range-state)
+    monkeypatch.setattr(broker, "range_detail",
+                        lambda *a, **k: {"rangeState": "ERROR", "VMs": [{"name": "DC01", "poweredOn": True}]})
+    cfx, _dfx, ofx = broker.power_off(_C())
+    assert cfx is False and ofx == broker.OP_FAILED
     # a probe error -> UNKNOWN (conservative, retryable), never a false confirmation
     def _boom(*a, **k):
         raise broker.LudusUnavailable("503", status=503)
     monkeypatch.setattr(broker, "range_detail", _boom)
     confirmed2, _d2, outcome2 = broker.power_off(_C())
     assert confirmed2 is False and outcome2 == broker.OP_UNKNOWN
-    # destroy: range still present on poll -> PENDING (absence not confirmed)
+    # a complete, verified inventory all explicitly stopped -> CONFIRMED (the one true pass)
+    monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01", "SRV02"])
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": False}, {"name": "SRV02", "poweredOn": False}]})
+    cok, _dk, ook = broker.power_off(_C())
+    assert cok is True and ook == broker.OP_CONFIRMED
+    # but the SAME all-stopped observation with an expected VM MISSING is not a pass (R4-3)
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": False}]})  # SRV02 omitted entirely
+    cmiss, _dm, omiss = broker.power_off(_C())
+    assert cmiss is False and omiss == broker.OP_PENDING
+    # destroy: range still present on poll -> PENDING (absence not confirmed); destroy does not use
+    # the power-confirmation inventory, so it is unaffected by the expected_inventory patch above.
     monkeypatch.setattr(broker, "range_detail",
                         lambda *a, **k: {"rangeState": "SUCCESS", "VMs": []})
     cdestroy, _d3, outcome3 = broker.destroy_range(_C())

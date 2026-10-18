@@ -192,6 +192,51 @@ skip each). Per-file execution (`run_s6_acceptance.sh`) remains the CI strategy.
    `deploying` range keeps counting), no duplicate power operations (power-on issued exactly once,
    resolution is read-only), and no premature evidence deletion.
 
+## 4d. Final state-integrity patch (fourth review)
+
+1. **Every range-status write path is fail-closed.** All range-state updates now route through one
+   shared policy, `_apply_range_probe(rr, st, detail)`. It (a) never lets an `unknown`/transient probe
+   replace a slot-occupying state with a non-occupying one, (b) never resolves a `resuming` range to
+   `deployed` on a bare status probe (only the power-confirmation poll may), and (c) wraps the write in
+   `range_lifecycle.assert_transition`, holding the reservation on any illegal transition. The three
+   call sites - candidate `/labs/status`, admin `/admin/ranges/<id>` action=refresh, and the background
+   `_poll_deploying` maintenance - all go through it. Covered by
+   `test_candidate_status_poll_unknown_preserves_reservation`,
+   `test_admin_refresh_unknown_preserves_reservation`,
+   `test_status_paths_never_resolve_resuming_without_power_confirmation` and
+   `test_status_probe_illegal_transition_holds`.
+2. **Observed power state is distinct from definitive failure (async-safe).** `confirm_power` issues no
+   power command (read-only) and treats a non-target observation after an accepted request as PENDING,
+   not failure - a power-on may still be queued while VMs report stopped. The reservation is released
+   only on (a) positively confirmed target state, (b) an AUTHORITATIVE terminal signal from Ludus
+   (`_authoritative_terminal_failure`: an error range-state or per-VM error flag), or (c) a positively
+   confirmed rollback. A probe/transport error is UNKNOWN (ambiguous), never a rejection, and no
+   uncertain power command is auto-reissued. Covered by
+   `test_delayed_power_on_holds_capacity_until_running` (stopped -> stopped -> starting -> running,
+   capacity held throughout), `test_all_stopped_after_resume_holds_not_releases`, and the rewritten
+   `test_definitive_resume_failure_releases_slot` (release requires an authoritative terminal signal).
+3. **Complete expected-inventory validation.** Confirmation requires the expected VM inventory to be
+   known and verified (`broker.expected_inventory`, which returns `None` when a live range does not
+   report a configured inventory, keeping confirmation conservatively PENDING). `_inventory_report`
+   detects a VM omitted entirely, a duplicate name, a malformed entry, or a bad-shape VM list; any of
+   these, or any expected VM without an explicitly recognized state in the target, is never a complete
+   confirmation. Success is never inferred from a subset. Covered by
+   `test_confirm_power_read_only_complete_inventory_and_async_safe` and the lifecycle
+   `test_broker_distinguishes_accepted_from_confirmed` (all-stopped -> PENDING; missing VM -> PENDING;
+   authoritative error -> FAILED; complete all-stopped -> CONFIRMED).
+4. **PG concurrency test corrected and broadened.** The threaded workers now send their candidate
+   `handle` + token (the old `json={}` returned 400 before `_auth_candidate`, never reaching
+   admission). Each worker captures HTTP status + body, asserts it reached the lab-start admission path
+   (200 + a post-admission range state), surfaces any thread exception (a crashed/empty worker can no
+   longer masquerade as a passing race), and the test asserts the PERSISTED weighted capacity and the
+   resulting range states. Four races are covered - deploy/deploy, resume/resume, deploy/resume and
+   deploy/reconcile (`test_pg_race_*`) - each on a disposable PG gated by `RANGER_PG_TEST_URL` +
+   `RANGER_PG_TEST_DISPOSABLE=1` + `RANGER_TEST_ALLOW_DB_MUTATION`, skipping transparently (category C
+   UNVERIFIED) otherwise.
+
+Combined S6 regression runs deterministically forward and reversed (93 passed, 4 skipped - the four
+disposable-PG race tests).
+
 ## 5. Restrictions (unchanged)
 
 The 95% bar and mandatory human report approval are unchanged. No PARALLAX. No production deployment,

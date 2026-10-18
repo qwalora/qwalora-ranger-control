@@ -1052,6 +1052,41 @@ def create_app():
         hosts.add("primary")
         return hosts
 
+    def _apply_range_probe(rr, st, detail):
+        """The SINGLE fail-closed policy for applying a bare range-status probe to a range's state
+        (S6 R4-1). Every status-writing path (candidate /labs/status, admin refresh, background
+        _poll_deploying) routes through here so none can downgrade a reservation on an uncertain probe.
+
+        Rules:
+          * A 'resuming' range is NEVER resolved by a bare status probe - only the power-confirmation
+            poll (_poll_resuming / confirm_power) may move it to deployed/suspended. Held here.
+          * An 'unknown' (transient/unrecognized) probe NEVER changes a slot-occupying range; the
+            reservation is held and re-checked later.
+          * A probe result that would move a slot-occupying range to a NON-slot-occupying state is
+            applied only if it is a legal lifecycle transition; an illegal/unexpected transition is
+            refused (held). This prevents a transient probe from silently freeing capacity.
+        Returns True if the stored status changed."""
+        rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+        if rr.status == "resuming":
+            rr.detail = ("resuming; status probe observed %r (resolution requires power confirmation)"
+                         % st)[:200]
+            return False
+        if st == "unknown" or st == rr.status:
+            if st == "unknown":
+                rr.detail = ("status unconfirmed (holding %s): %s" % (rr.status, detail))[:200]
+            else:
+                rr.detail = detail
+            return False
+        try:
+            range_lifecycle.assert_transition(rr.status, st)
+        except range_lifecycle.IllegalTransition:
+            rr.detail = ("status probe %r is not a legal transition from %s; holding reservation"
+                         % (st, rr.status))[:200]
+            return False
+        rr.status = st
+        rr.detail = detail
+        return True
+
     def _poll_deploying():
         """Refresh the status of ranges mid-flight (deploying), so the dashboard
         advances without a human clicking Refresh. Returns how many changed."""
@@ -1066,17 +1101,9 @@ def create_app():
                 st, sdetail = broker.range_status(c, user_key=_candidate_key(c))
             except Exception:  # noqa: BLE001
                 continue
-            rr.last_checked_at = now
-            # R3-2: 'unknown' (transient probe error / unrecognized state) keeps the range 'deploying'
-            # (still counted); never free or re-fail an in-flight range on an uncertain probe.
-            if st == "unknown":
-                rr.detail = ("deploy status unconfirmed (holding reservation): %s" % sdetail)[:200]
-                continue
-            if st != rr.status:
-                rr.status = st
-                rr.detail = sdetail
+            if _apply_range_probe(rr, st, sdetail):
                 changed += 1
-            if st == "deployed" and not rr.deployed_at:
+            if rr.status == "deployed" and not rr.deployed_at:
                 rr.deployed_at = now
                 if not rr.wireguard_config:
                     try:
@@ -1102,7 +1129,9 @@ def create_app():
                 continue
             now = _dt.datetime.now(_dt.timezone.utc)
             try:
-                confirmed, outcome = broker.confirm_power(c, "running", user_key=_candidate_key(c))
+                _key = _candidate_key(c)
+                confirmed, outcome = broker.confirm_power(
+                    c, "running", user_key=_key, expected_vms=broker.expected_inventory(c, user_key=_key))
             except Exception:  # noqa: BLE001
                 continue  # keep 'resuming' (counted); re-check on a later pass
             rr.last_checked_at = now
@@ -1797,14 +1826,15 @@ def create_app():
         if rr is None:
             return jsonify(ok=True, handle=c.handle, board=n, range_status="none",
                            detail="no range provisioned yet"), 200
-        if P.is_isolated(n) and rr.status in ("deploying", "deployed"):
+        # R4-1: a candidate status poll refreshes an in-flight range THROUGH the shared fail-closed
+        # policy - an unknown/transient probe never frees the reservation, and a 'resuming' range is
+        # never resolved to deployed here (only the power-confirmation poll may).
+        if P.is_isolated(n) and rr.status in RangeRequest.OCCUPIES_SLOT:
             key = _candidate_key(c)
             st, sdetail = broker.range_status(c, user_key=key)
-            now = _dt.datetime.now(_dt.timezone.utc)
-            rr.status, rr.detail = st, sdetail
-            rr.last_checked_at = now
-            if st == "deployed" and not rr.deployed_at:
-                rr.deployed_at = now
+            _apply_range_probe(rr, st, sdetail)
+            if rr.status == "deployed" and not rr.deployed_at:
+                rr.deployed_at = _dt.datetime.now(_dt.timezone.utc)
         _touch(c, n)
         db.session.commit()
         return jsonify(ok=True, handle=c.handle, board=n, tier=P.tier_of(n),
@@ -2682,9 +2712,10 @@ def create_app():
         if action == "deploy":
             rr = _provision_for_board(c, n, auto_deploy=True)
         elif action == "refresh" and rr is not None and P.is_isolated(n):
+            # R4-1: admin refresh goes through the shared fail-closed policy - it cannot free a
+            # reservation on an unknown probe, nor resolve a 'resuming' range without power confirmation.
             st, sdetail = broker.range_status(c, user_key=key)
-            rr.status, rr.detail = st, sdetail
-            rr.last_checked_at = _dt.datetime.now(_dt.timezone.utc)
+            _apply_range_probe(rr, st, sdetail)
         elif action in ("destroy", "force_destroy") and rr is not None:
             host = rr.host or "primary"
             if rr.host != "shared":

@@ -66,26 +66,68 @@ def test_power_on_not_confirmed_when_any_vm_unknown_or_unrecognized(monkeypatch)
     assert confirmed is False
 
 
-def test_confirm_power_is_read_only_and_tri_state(monkeypatch):
+def test_confirm_power_read_only_complete_inventory_and_async_safe(monkeypatch):
     os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
 
     class C:
         ludus_user_id = "U"
+    exp = ["DC01", "SRV02"]
     # confirm_power must NOT issue any request (no power command); only range_detail is read
-    def _no_req(*a, **k):
-        raise AssertionError("confirm_power must not issue any API request")
-    monkeypatch.setattr(broker, "_req", _no_req)
+    monkeypatch.setattr(broker, "_req",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no API request allowed")))
+    # all expected VMs explicitly running -> CONFIRMED
     monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
         "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02", "poweredOn": True}]})
-    assert broker.confirm_power(C(), "running") == (True, broker.OP_CONFIRMED)
-    # all stopped while we wanted running -> definitive failure
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (True, broker.OP_CONFIRMED)
+    # R4-2: all stopped after an accepted power-on is PENDING (may be queued), NOT a failure
     monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
         "VMs": [{"name": "DC01", "poweredOn": False}, {"name": "SRV02", "poweredOn": False}]})
-    assert broker.confirm_power(C(), "running") == (False, broker.OP_FAILED)
-    # mixed / unknown -> pending (hold)
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (False, broker.OP_PENDING)
+    # terminal failure ONLY from an authoritative Ludus error -> FAILED
     monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
-        "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "SRV02"}]})
-    assert broker.confirm_power(C(), "running") == (False, broker.OP_PENDING)
+        "rangeState": "FAILURE", "VMs": [{"name": "DC01", "poweredOn": False}]})
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (False, broker.OP_FAILED)
+    # R4-3: an expected VM MISSING from the response -> never confirmed (no success from a subset)
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": True}]})  # SRV02 omitted
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (False, broker.OP_PENDING)
+    # R4-3: a DUPLICATE VM name -> inventory mismatch -> never confirmed
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": True}, {"name": "DC01", "poweredOn": True},
+                {"name": "SRV02", "poweredOn": True}]})
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (False, broker.OP_PENDING)
+    # R4-3: a MALFORMED entry -> inventory mismatch -> never confirmed
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": True}, {"poweredOn": True}]})  # entry with no name
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (False, broker.OP_PENDING)
+    # unknown expected inventory -> cannot positively confirm even if observed look running
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+        "VMs": [{"name": "DC01", "poweredOn": True}]})
+    assert broker.confirm_power(C(), "running", expected_vms=None) == (False, broker.OP_PENDING)
+
+
+def test_delayed_power_on_holds_capacity_until_running(monkeypatch):
+    """R4-2: a delayed power-on sequence stopped -> stopped -> starting -> running must keep the
+    reservation (PENDING) until positively running, never flipping to failure on an interim state."""
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+
+    class C:
+        ludus_user_id = "U"
+    exp = ["DC01"]
+    seq = iter([
+        {"VMs": [{"name": "DC01", "poweredOn": False}]},                 # stopped
+        {"VMs": [{"name": "DC01", "poweredOn": False}]},                 # still stopped
+        {"VMs": [{"name": "DC01", "powerState": "starting"}]},           # starting (unknown)
+        {"VMs": [{"name": "DC01", "poweredOn": True}]},                  # running
+    ])
+    cur = {"d": None}
+    monkeypatch.setattr(broker, "range_detail", lambda *a, **k: cur["d"])
+    for _ in range(3):
+        cur["d"] = next(seq)
+        confirmed, outcome = broker.confirm_power(C(), "running", expected_vms=exp)
+        assert confirmed is False and outcome == broker.OP_PENDING, "interim states must hold, not fail"
+    cur["d"] = next(seq)
+    assert broker.confirm_power(C(), "running", expected_vms=exp) == (True, broker.OP_CONFIRMED)
 
 
 # ============================================================ R3-2 / R3-5: app integration =========
@@ -143,8 +185,11 @@ def test_uncertain_resume_holds_capacity_then_recovers(monkeypatch):
                 return {}
             return {}
         monkeypatch.setattr(broker, "_req", _req)
-        # VMs in an UNKNOWN (still-transitioning) state at resume time -> PENDING -> 'resuming'
-        # (not all-stopped, which would be a definitive failure).
+        # The authoritative expected inventory for this range (every confirmation must account for it).
+        monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01", "SRV02"])
+        # VMs in an UNKNOWN (still-transitioning) state at resume time -> PENDING -> 'resuming'.
+        # all-stopped would ALSO be PENDING now (async-safe, R4-2); only an authoritative terminal
+        # Ludus signal is a definitive failure. Here SRV02 is still 'starting' (unknown).
         monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
             "VMs": [{"name": "DC01"}, {"name": "SRV02", "powerState": "starting"}]})
         client = expiring_client(application, db)
@@ -182,6 +227,7 @@ def test_resuming_range_counts_against_capacity(monkeypatch):
         c = _cand(db, "rs_hold", 5)
         rr = _suspended_range(db, c)
         monkeypatch.setattr(broker, "_req", lambda *a, **k: {})
+        monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01"])
         monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
             "VMs": [{"name": "DC01", "powerState": "starting"}]})  # unknown/transitioning -> pending
         client = expiring_client(application, db)
@@ -198,7 +244,33 @@ def test_resuming_range_counts_against_capacity(monkeypatch):
         ctx.pop()
 
 
+def test_all_stopped_after_resume_holds_not_releases(monkeypatch):
+    """R4-2: observing all VMs still STOPPED right after an accepted power-on is NOT a definitive
+    failure (the op may be queued). The reservation is HELD ('resuming'), never released on that
+    observation alone - only an authoritative terminal Ludus signal releases it."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_hold2", 5)
+        rr = _suspended_range(db, c)
+        monkeypatch.setattr(broker, "_req", lambda *a, **k: {})
+        monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01", "SRV02"])
+        # all-stopped immediately after an accepted power-on -> PENDING (async-safe), slot held
+        monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+            "VMs": [{"name": "DC01", "poweredOn": False}, {"name": "SRV02", "poweredOn": False}]})
+        client = expiring_client(application, db)
+        client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "resuming", "all-stopped alone must NOT release; the reservation is held"
+    finally:
+        ctx.pop()
+
+
 def test_definitive_resume_failure_releases_slot(monkeypatch):
+    """Only an AUTHORITATIVE terminal failure from Ludus (an error range-state) releases a resuming
+    reservation back to 'suspended'. A mere non-target power observation never does (see R4-2)."""
     appmod, application, db, ctx = _app()
     os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
     os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
@@ -207,14 +279,122 @@ def test_definitive_resume_failure_releases_slot(monkeypatch):
         c = _cand(db, "rs_fail", 5)
         rr = _suspended_range(db, c)
         monkeypatch.setattr(broker, "_req", lambda *a, **k: {})
-        # VMs confirmed STOPPED after a power-on attempt = definitive failure -> back to suspended
+        monkeypatch.setattr(broker, "expected_inventory", lambda *a, **k: ["DC01", "SRV02"])
+        # Ludus authoritatively reports the range in an error state -> OP_FAILED -> suspended
         monkeypatch.setattr(broker, "range_detail", lambda *a, **k: {
+            "rangeState": "FAILURE",
             "VMs": [{"name": "DC01", "poweredOn": False}, {"name": "SRV02", "poweredOn": False}]})
-        # power_on confirm sees all-stopped -> OP_FAILED
         client = expiring_client(application, db)
         client.post("/labs/start", json={"handle": c.handle}, headers={"X-Candidate-Token": c.token})
         rr = RangeRequest.query.get(rr.id)
-        assert rr.status == "suspended", "a definitive resume failure releases the reservation"
+        assert rr.status == "suspended", "an authoritative terminal failure releases the reservation"
+    finally:
+        ctx.pop()
+
+
+# ============================================================ R4-1: status-write-path integrity =====
+def _deployed_range(db, c, host="primary", board=5, status="deployed"):
+    from models import RangeRequest
+    rr = RangeRequest(candidate_id=c.id, board=board, host=host, status=status,
+                      ludus_range_id="RID-%s" % c.handle, template="goad",
+                      deployed_at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=5))
+    db.session.add(rr); db.session.commit()
+    return rr
+
+
+def test_candidate_status_poll_unknown_preserves_reservation(monkeypatch):
+    """R4-1: a candidate /labs/status poll that observes an UNKNOWN (transient) probe must NOT free a
+    slot-occupying range - the reservation (and weighted capacity) is held. Repeated unknowns never
+    erode it."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_poll", 5)
+        rr = _deployed_range(db, c, status="deploying")
+        monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("unknown", "probe timeout (transient)"))
+        client = expiring_client(application, db)
+        hdr = {"X-Candidate-Token": c.token}
+        for _ in range(4):  # repeated unknown polls must not erode the reservation
+            r = client.post("/labs/status", json={"handle": c.handle}, headers=hdr)
+            assert r.status_code == 200
+            rr = RangeRequest.query.get(rr.id)
+            assert rr.status == "deploying", "an unknown candidate poll must keep the slot reserved"
+        assert rr.status in RangeRequest.OCCUPIES_SLOT
+    finally:
+        ctx.pop()
+
+
+def test_admin_refresh_unknown_preserves_reservation(monkeypatch):
+    """R4-1: an administrator /admin/ranges/<id> action=refresh observing UNKNOWN must go through the
+    same fail-closed policy - it cannot drop a deployed range to a non-occupying state."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_adm", 5)
+        rr = _deployed_range(db, c, status="deployed")
+        monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("unknown", "probe error (transient)"))
+        client = expiring_client(application, db)
+        admin = {"Authorization": "Bearer s6-rs-admin"}
+        r = client.post("/admin/ranges/%d" % c.id, data={"action": "refresh"}, headers=admin)
+        assert r.status_code in (200, 302)
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "deployed", "an unknown admin refresh must not free the reservation"
+        assert rr.status in RangeRequest.OCCUPIES_SLOT
+    finally:
+        ctx.pop()
+
+
+def test_status_paths_never_resolve_resuming_without_power_confirmation(monkeypatch):
+    """R4-1: neither a candidate poll nor an admin refresh may resolve a 'resuming' range to
+    'deployed' on a bare status probe - only the power-confirmation poll (_poll_resuming) may. Even a
+    probe that reports 'deployed' must leave a resuming range resuming (slot still held)."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_resv", 5)
+        rr = _deployed_range(db, c, status="resuming")
+        # a bare status probe that even claims 'deployed' must NOT resolve a resuming range
+        monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("deployed", "range reports up"))
+        client = expiring_client(application, db)
+        hdr = {"X-Candidate-Token": c.token}
+        r = client.post("/labs/status", json={"handle": c.handle}, headers=hdr)
+        assert r.status_code == 200
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "resuming", "a candidate poll must not resolve resuming without power confirmation"
+        # same guarantee on the admin refresh path
+        admin = {"Authorization": "Bearer s6-rs-admin"}
+        client.post("/admin/ranges/%d" % c.id, data={"action": "refresh"}, headers=admin)
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "resuming", "an admin refresh must not resolve resuming without power confirmation"
+        assert rr.status in RangeRequest.OCCUPIES_SLOT
+    finally:
+        ctx.pop()
+
+
+def test_status_probe_illegal_transition_holds(monkeypatch):
+    """R4-1: a probe reporting a status that is not a LEGAL lifecycle transition from the current
+    slot-occupying state is rejected (held), never written blindly - the reservation stands."""
+    appmod, application, db, ctx = _app()
+    os.environ["LUDUS_API_URL"] = "https://ludus.invalid"
+    os.environ["LUDUS_ADAPTER_VERIFIED"] = "1"
+    try:
+        from models import RangeRequest
+        c = _cand(db, "rs_illegal", 5)
+        rr = _deployed_range(db, c, status="deploying")
+        # 'resuming' is not a legal transition from 'deploying' via a bare probe -> hold
+        monkeypatch.setattr(broker, "range_status", lambda *a, **k: ("resuming", "probe confusion"))
+        client = expiring_client(application, db)
+        hdr = {"X-Candidate-Token": c.token}
+        client.post("/labs/status", json={"handle": c.handle}, headers=hdr)
+        rr = RangeRequest.query.get(rr.id)
+        assert rr.status == "deploying", "an illegal probe transition must hold, not be written blindly"
+        assert rr.status in RangeRequest.OCCUPIES_SLOT
     finally:
         ctx.pop()
 

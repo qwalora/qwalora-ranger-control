@@ -596,27 +596,115 @@ def _all_running(states):
     return bool(states) and all(s == VM_RUNNING for s in states.values())
 
 
-def confirm_power(candidate, want, user_key=None, *, attempts=1):
+_TERMINAL_RANGE_STATES = frozenset({"ERROR", "FAILURE", "FAILED", "DEPLOY_FAILED"})
+
+
+def _authoritative_terminal_failure(detail):
+    """True only when Ludus AUTHORITATIVELY reports the range/operation terminally failed - an explicit
+    error range-state or a per-VM error flag. A VM merely not yet in the target power state is NOT a
+    terminal failure (the operation may still be queued/in-progress)."""
+    state = str(detail.get("rangeState") or detail.get("state") or "").strip().upper()
+    if state in _TERMINAL_RANGE_STATES:
+        return True
+    for vm in (detail.get("VMs") or detail.get("vms") or []):
+        if isinstance(vm, dict):
+            vs = str(vm.get("powerState") or vm.get("state") or vm.get("status") or "").strip().lower()
+            if vs in ("error", "failed", "failure") or vm.get("error"):
+                return True
+    return False
+
+
+def _inventory_report(detail):
+    """Parse a range detail's VM list into {name: tri-state}, flagging a malformed or duplicate
+    inventory. A VM list that is absent or not a list is 'bad shape'."""
+    vms = detail.get("VMs")
+    if vms is None:
+        vms = detail.get("vms")
+    if not isinstance(vms, (list, tuple)):
+        return {"states": {}, "malformed": True, "duplicate": False, "bad_shape": True}
+    states, malformed, duplicate = {}, False, False
+    for vm in vms:
+        if isinstance(vm, dict):
+            name = vm.get("name") or vm.get("Name")
+            if not name:
+                malformed = True
+                continue
+            st = _classify_vm(vm)
+        elif isinstance(vm, str):
+            name, st = vm, VM_UNKNOWN
+        else:
+            malformed = True
+            continue
+        if name in states:
+            duplicate = True
+        states[name] = st
+    return {"states": states, "malformed": malformed, "duplicate": duplicate, "bad_shape": False}
+
+
+def confirm_power(candidate, want, user_key=None, *, expected_vms=None, attempts=1):
     """READ-ONLY confirmation of a range's VM power state - issues NO power command (so it never
     re-sends a destructive/uncertain operation). want is 'running' or 'stopped'. Returns
-    (confirmed, outcome), polling up to `attempts` times. Mock is treated as confirmed. A probe error
-    is UNKNOWN; every VM explicitly in the target state is CONFIRMED; every VM explicitly in the
-    definitive opposite state (e.g. all stopped when a resume wanted running) is FAILED; anything else
-    (mixed, or any unknown/missing VM) is PENDING - never confirmed on doubt."""
+    (confirmed, outcome), polling up to `attempts` times. Mock is treated as confirmed.
+
+    Confirmation is COMPLETE-INVENTORY and ASYNC-SAFE (S6 R4-2/R4-3):
+      * CONFIRMED only when the expected VM inventory is known and every expected VM is present, has
+        an explicitly recognized power state, and is in the target state. An incomplete list, a missing
+        expected VM, a duplicate name, a malformed entry, or an unknown state -> NOT confirmed.
+      * A non-target observed state (even all-opposite) after an accepted request is PENDING, NOT a
+        failure: the operation may still be queued/in-progress. Terminal FAILED comes ONLY from an
+        authoritative Ludus terminal signal (error range-state / per-VM error).
+      * A probe/transport error is UNKNOWN (ambiguous), never a definitive rejection.
+      Capacity is therefore held on any doubt; nothing here reissues a power command."""
     if not is_live():
         return (True, OP_CONFIRMED)
+    exp = set(expected_vms) if expected_vms else None
     for _ in range(max(1, attempts)):
         try:
-            states = _vm_power_states(range_detail(candidate, user_key=user_key))
+            detail = range_detail(candidate, user_key=user_key)
         except LudusError:
             return (False, OP_UNKNOWN)
         except Exception:  # noqa: BLE001
             return (False, OP_UNKNOWN)
-        if (_all_running(states) if want == "running" else _all_stopped(states)):
+        if _authoritative_terminal_failure(detail):
+            return (False, OP_FAILED)   # explicit authoritative terminal failure from Ludus
+        rep = _inventory_report(detail)
+        if rep["bad_shape"] or rep["malformed"] or rep["duplicate"]:
+            continue                    # inventory mismatch: never a confirmation
+        states = rep["states"]
+        if exp is None or not exp:
+            continue                    # expected inventory unknown -> cannot positively confirm
+        target = VM_RUNNING if want == "running" else VM_STOPPED
+        present_and_explicit = all(n in states and states[n] != VM_UNKNOWN for n in exp)
+        if present_and_explicit and all(states[n] == target for n in exp):
             return (True, OP_CONFIRMED)
-        if (_all_stopped(states) if want == "running" else _all_running(states)):
-            return (False, OP_FAILED)   # definitive opposite: the operation did not take
+        # otherwise: not yet in target / incomplete -> keep waiting (PENDING)
     return (False, OP_PENDING)
+
+
+def expected_inventory(candidate, user_key=None):
+    """The EXPECTED VM inventory for a candidate's range (the authoritative set every confirmation
+    must account for). In mock mode there is no live range, so there is nothing to enumerate. In live
+    mode this reads the range's CONFIGURED VM list from the range detail; if the node does not report
+    a configured inventory, returns None - and confirm_power then stays conservative (never CONFIRMED),
+    because success must never be inferred from an unverified inventory. The real source of truth is
+    the range blueprint on a live Ludus host (category D, unverified)."""
+    if not is_live():
+        return None
+    try:
+        detail = range_detail(candidate, user_key=user_key)
+    except LudusError:
+        return None
+    configured = (detail.get("configuredVMs") or detail.get("expectedVMs")
+                  or detail.get("ConfiguredVMs"))
+    names = []
+    for vm in (configured or []):
+        if isinstance(vm, dict):
+            n = vm.get("name") or vm.get("Name")
+            if n:
+                names.append(n)
+        elif isinstance(vm, str):
+            names.append(vm)
+    return names or None
 
 
 def power_off(candidate, user_key=None, *, confirm=True):
@@ -636,12 +724,15 @@ def power_off(candidate, user_key=None, *, confirm=True):
         return (False, f"power-off request failed: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-off accepted (VMs stopping; not yet confirmed)", OP_ACCEPTED)
-    # Resolve via the tri-state confirmation: all stopped -> CONFIRMED; all running (power-off did not
-    # take) -> FAILED; mixed/unknown -> PENDING. Never confirm on any unknown/missing/running VM.
-    ok, outcome = confirm_power(candidate, "stopped", user_key=user_key, attempts=_CONFIRM_POLLS)
+    # Complete-inventory, async-safe confirmation (R4-2/R4-3): CONFIRMED only when every expected VM
+    # is present and explicitly stopped; a still-running VM is PENDING (not a failure); terminal FAILED
+    # only on an authoritative Ludus error.
+    ok, outcome = confirm_power(candidate, "stopped", user_key=user_key,
+                               expected_vms=expected_inventory(candidate, user_key=user_key),
+                               attempts=_CONFIRM_POLLS)
     msg = {OP_CONFIRMED: "power-off confirmed (all VMs stopped; disks preserved)",
-           OP_FAILED: "power-off not effective (VMs still running)",
-           OP_PENDING: "power-off accepted but VMs not yet confirmed stopped",
+           OP_FAILED: "power-off terminally failed (authoritative Ludus error)",
+           OP_PENDING: "power-off accepted but not yet confirmed stopped (holding)",
            OP_UNKNOWN: "power-off accepted but remote state could not be confirmed"}[outcome]
     return (ok, msg, outcome)
 
@@ -659,11 +750,15 @@ def power_on(candidate, user_key=None, *, confirm=True):
         return (False, f"power-on request failed: {e}", OP_FAILED)
     if not confirm:
         return (False, "power-on accepted (VMs starting; not yet confirmed)", OP_ACCEPTED)
-    # all running -> CONFIRMED; all stopped (power-on did not take) -> FAILED; mixed/unknown -> PENDING.
-    ok, outcome = confirm_power(candidate, "running", user_key=user_key, attempts=_CONFIRM_POLLS)
+    # Complete-inventory, async-safe confirmation: CONFIRMED only when every expected VM is present and
+    # explicitly running; a still-stopped VM after an accepted power-on is PENDING (may be queued), not
+    # a failure; terminal FAILED only on an authoritative Ludus error.
+    ok, outcome = confirm_power(candidate, "running", user_key=user_key,
+                               expected_vms=expected_inventory(candidate, user_key=user_key),
+                               attempts=_CONFIRM_POLLS)
     msg = {OP_CONFIRMED: "power-on confirmed (all VMs running)",
-           OP_FAILED: "power-on not effective (VMs still stopped)",
-           OP_PENDING: "power-on accepted but VMs not yet confirmed running",
+           OP_FAILED: "power-on terminally failed (authoritative Ludus error)",
+           OP_PENDING: "power-on accepted but VMs not yet confirmed running (holding)",
            OP_UNKNOWN: "power-on accepted but remote state could not be confirmed"}[outcome]
     return (ok, msg, outcome)
 
