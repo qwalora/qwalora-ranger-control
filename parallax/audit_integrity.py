@@ -182,3 +182,68 @@ def integrity_report(db, stream: str = _STREAM) -> Dict[str, Any]:
         "anchor_independence": a["anchor_independence"],
         "limitations": LIMITATIONS,
     }
+
+
+# --- threat model + external-anchor interface (Phase 1D Workstream C) -----------------------------
+# What the SAME-STORE, SAME-KEY checkpoint demonstrably mitigates, and what it does not. Keyed by the
+# adversary's capability; each value is (mitigated: bool, how).
+THREAT_MODEL = {
+    "accidental_corruption":
+        (True, "chain hash + per-event signature + seq ordering detect accidental edits/loss"),
+    "unauthorized_db_modification_without_signing_key":
+        (True, "any edit/insert/reorder breaks a signature or the hash chain (attacker lacks the key)"),
+    "tail_truncation_without_signing_key":
+        (True, "the signed checkpoint anchors event COUNT + head; a shorter live chain is TRUNCATED"),
+    "truncation_plus_checkpoint_deletion_without_key":
+        (True, "detected ONLY if an external anchor (export_anchor) was emitted; otherwise degrades to "
+               "NO_CHECKPOINT, which is itself an anomaly but not positive proof"),
+    "compromised_signing_key_without_db_write":
+        (True, "the key alone cannot insert/alter rows; DB-side chain + unique(seq) still constrain"),
+    "simultaneous_db_and_signing_key_compromise":
+        (False, "NOT mitigated by a same-store same-key checkpoint: the attacker can forge events AND "
+                "a matching checkpoint. Requires an INDEPENDENT external anchor outside the signing "
+                "authority's control (OPEN - see export_anchor and the Phase 1D report architecture)"),
+}
+
+
+def anchor_record(cp) -> Dict[str, Any]:
+    """The minimal, independently-verifiable record a verifier needs from a checkpoint: stream, count,
+    head hash, checkpoint hash, ts, kid. Contains no secrets or event payloads."""
+    return {"stream": cp.stream, "event_count": cp.event_count, "head_hash": cp.head_hash,
+            "head_seq": cp.head_seq, "checkpoint_hash": cp.checkpoint_hash, "ts": cp.ts,
+            "signing_kid": cp.signing_kid}
+
+
+def export_anchor(db, *, sink, stream: str = _STREAM):
+    """Emit the latest checkpoint's anchor_record to an EXTERNAL sink (a callable receiving the dict).
+
+    This is the INTERFACE for independent anchoring. Its security value depends entirely on where the
+    sink writes: an anchor stored OUTSIDE the signing authority's control (append-only object storage
+    with immutability, a transparency log, or a separately-managed authority) is what would detect the
+    simultaneous DB+key compromise that the in-DB checkpoint cannot. A sink that writes back to the
+    same database or same host provides NO additional independence. No external/paid service is
+    activated here; selecting and provisioning an independent sink is an OPEN founder decision
+    (architecture + validation plan in the Phase 1D report)."""
+    cp = latest_checkpoint(db, stream)
+    if cp is None:
+        raise ValueError("no checkpoint to anchor")
+    rec = anchor_record(cp)
+    sink(rec)
+    return rec
+
+
+def verify_against_external_anchor(db, anchor: Dict[str, Any], stream: str = _STREAM) -> Dict[str, Any]:
+    """Compare the live chain to an anchor held EXTERNALLY (previously emitted by export_anchor). This
+    is the detection path for truncation/rewrite even if every in-DB checkpoint was also deleted or
+    forged. Returns {status, detail} with status ok | truncated | rewritten | broken_chain."""
+    v = verify_events(db, stream)
+    if not v["ok"]:
+        return {"status": BROKEN, "detail": v["reason"]}
+    live_count, live_head = v["count"], v.get("head")
+    a_count, a_head = anchor.get("event_count"), anchor.get("head_hash")
+    if live_count < a_count:
+        return {"status": TRUNCATED,
+                "detail": "external anchor commits to %d events; live chain has %d" % (a_count, live_count)}
+    if live_count == a_count and live_head != a_head:
+        return {"status": REWRITTEN, "detail": "external anchor head differs from live head at equal count"}
+    return {"status": OK, "detail": "live chain is consistent with the external anchor"}

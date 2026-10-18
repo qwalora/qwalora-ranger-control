@@ -42,6 +42,23 @@ from siem import forensic_sandbox as sb          # noqa: E402
 from siem import forensic_ops as fo              # noqa: E402
 from siem import forensic_jobs as fj             # noqa: E402
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _own_fixture_registry():
+    """Phase 1D: each F4 test owns its trusted-fixture registry, so it can never inherit a DB-backed
+    registry leaked by an earlier PostgreSQL suite (the Phase 1C cross-test contamination, whose
+    demonstrated cause was the process-global evidence_validation._REGISTRY). State-ownership
+    isolation only - no assertion or STRATA behavior changes."""
+    saved = valn.fixture_registry()
+    valn.set_fixture_registry(valn.InMemoryFixtureRegistry())
+    try:
+        yield
+    finally:
+        valn.set_fixture_registry(saved)
+
+
 P = F = U = 0
 def check(name, ok):
     global P, F

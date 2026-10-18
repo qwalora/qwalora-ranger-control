@@ -272,7 +272,12 @@ def verify(payload, signature, public_key_b64_str=None, kid=None):
         except Exception:  # noqa: BLE001
             return False
         return _verify_with_pub(pub, signature, message)
+    return _resolve_and_verify(message, signature, kid)
 
+
+def _resolve_and_verify(message, signature, kid):
+    """Shared kid-resolution + fail-closed policy over raw message bytes (used by verify and
+    verify_domain)."""
     reg = _registry()
     if kid is not None:
         entry = reg.get(kid)
@@ -281,9 +286,40 @@ def verify(payload, signature, public_key_b64_str=None, kid=None):
         if entry.state not in _VERIFY_TRUSTED:
             return False                       # revoked/untrusted -> fail closed
         return _verify_with_pub(entry.public(), signature, message)
-
-    # legacy: try every currently-trusted key, deterministically
     for entry in reg.values():
         if entry.state in _VERIFY_TRUSTED and _verify_with_pub(entry.public(), signature, message):
             return True
     return False
+
+
+# --- explicit domain separation (Phase 1D Workstream D) ------------------------------------------
+# For NEW signed artifact types, bind the artifact TYPE + SCHEMA VERSION + SECURITY CONTEXT into the
+# signed bytes as a length/separator-delimited header, so a signature over one (domain, payload) can
+# never verify a different domain or a plain (legacy) signature, and vice versa - cryptographic, not
+# merely structural, context separation. This is ADDITIVE: plain sign()/verify() and every existing
+# signed record are byte-for-byte unchanged, so no historical signature is invalidated. Existing record
+# types are already mutually non-verifiable by structure (distinct required fields); this primitive is
+# the explicit, forward-looking binding for new types and is the migration path should any type ever
+# need it. `domain` is a stable ASCII label such as "parallax.audit_event.v1".
+_SIG_SCHEME = b"ranger.sig.domain.v1"
+_DOMAIN_SEP = b"\x1f"
+
+
+def _domain_message(domain, payload):
+    d = domain.encode("utf-8")
+    # length-prefix the domain so it cannot be shifted into/out of the payload region.
+    return b"%s%s%d%s%s%s%s" % (_SIG_SCHEME, _DOMAIN_SEP, len(d), _DOMAIN_SEP, d, _DOMAIN_SEP,
+                                canonical(payload))
+
+
+def sign_domain(domain, payload):
+    """Sign (domain, payload) under the active key with explicit domain separation. Returns
+    (signature_b64, kid)."""
+    msg = _domain_message(domain, payload)
+    return base64.b64encode(_active_entry().private().sign(msg)).decode(), active_kid()
+
+
+def verify_domain(domain, payload, signature, kid=None):
+    """Verify a domain-separated signature. Same kid-resolution and fail-closed policy as verify(); a
+    mismatched domain, an unknown/revoked kid, or a plain (non-domain) signature all fail closed."""
+    return _resolve_and_verify(_domain_message(domain, payload), signature, kid)

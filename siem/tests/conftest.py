@@ -12,7 +12,30 @@ bind freshly to whatever app context that test establishes. This makes the combi
 and order-independent (verified in CI by running the whole siem/tests directory in one process). It is
 standard test hygiene and changes no production behavior.
 """
+import os
+import random
+
 import pytest
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Phase 1D (Workstream B): a narrowly-scoped, reproducible collection shuffler for test-order
+    independence checks. A no-op unless RANGER_TEST_SHUFFLE_SEED is set; when set, the collected items
+    are shuffled deterministically by that integer seed, so any failure is reproducible by re-running
+    with the same seed. This adds no third-party dependency and never changes order in a normal run."""
+    raw = os.environ.get("RANGER_TEST_SHUFFLE_SEED")
+    if raw is None or raw == "":
+        return
+    try:
+        seed = int(raw)
+    except ValueError:
+        seed = hash(raw)
+    random.Random(seed).shuffle(items)
+    try:
+        session.config.pluginmanager.get_plugin("terminalreporter")._tw.line(
+            "RANGER_TEST_SHUFFLE_SEED=%s applied: %d items shuffled" % (raw, len(items)))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @pytest.fixture(autouse=True)
