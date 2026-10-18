@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Workbench · Access{% endblock %}
+{% block body %}
+{% set wb_ctx='Workbench' %}
+{% include "_wb_top.html" %}
+  <div style="max-width:620px;margin:40px auto 0">
+    <div class="wb-card"><div class="b">
+      <div class="wb-eyebrow"><span class="dot"></span>Workbench access</div>
+      <div class="ttl" style="font-size:20px">Access not granted</div>
+      <div class="wb-note warn" style="margin-top:16px">{{ ic('lock','ic') }}<div>
+        <b>Your account is not an admitted Ranger candidate</b>
+        A GitHub sign-in is not admission. Your current status is <b>{{ status }}</b>. An administrator admits candidates and assigns investigations; the workbench opens once you are admitted to a cohort.</div></div>
+    </div></div>
+  </div>
+{% include "_wb_bottom.html" %}
+{% endblock %}

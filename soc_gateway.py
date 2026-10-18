@@ -63,6 +63,11 @@ _STRIP_CLIENT = {"authorization", "securitytenant", "x-forwarded-for", "x-forwar
 _last_hit: dict[str, list] = {}  # naive per-candidate rate limiter
 
 
+def _s5_binding_on():
+    """S5: provision Board 2 qualification from the authoritative ScenarioBinding (default off)."""
+    return os.environ.get("RANGER_B2_BINDING", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _log(event, **kv):
     # Security audit, never includes the token or secrets.
     safe = {k: v for k, v in kv.items() if k not in ("token", "jwt", "password")}
@@ -84,8 +89,20 @@ def _ca_path():
     return p
 
 
+_cluster_factory = None
+
+
+def set_cluster_factory(fn):
+    """Test-only: inject the broker cluster (e.g. an in-process OpenSearch double) instead of a live
+    LiveCluster. Never used in production, where the real admin credential builds a LiveCluster."""
+    global _cluster_factory
+    _cluster_factory = fn
+
+
 def _admin_cluster():
     """Broker identity (portal holds the OpenSearch admin credential)."""
+    if _cluster_factory is not None:
+        return _cluster_factory()
     return LiveCluster(OS_URL, os.environ.get("OPENSEARCH_ADMIN_USER", "admin"),
                        os.environ["OPENSEARCH_ADMIN_PASSWORD"], ca_path=_ca_path(), timeout=30)
 
@@ -239,6 +256,18 @@ def register(app, candidate_model, db):
                     tenant_permissions=[{"tenant_patterns": ["__user__"],
                                          "allowed_actions": ["kibana_all_write"]}])
         cl.put_rolesmapping(role, users=[subject])
+        # S5: when the binding integration is on, Board 2 qualification is provisioned from the
+        # candidate's authoritative, pinned ScenarioBinding (approved cohort scenario), into the
+        # separate qualification index, idempotently and fingerprint-verified. The legacy per-candidate
+        # seed is NOT the source of truth here. Other SIEM boards keep the legacy operational index.
+        if _s5_binding_on() and int(SIEM_BOARD) == 2 and kind == "candidate":
+            import strata_board2 as b2
+            a = b2.resolve_assignment(db, cand)         # fail-closed on missing/revoked/corrupt
+            info = b2.provision(cl, a)
+            idx = a.index_name
+            _ensure_dataview(subject, cohort, f"cand-{slug}-b{SIEM_BOARD}-q{a.attempt}", idx)
+            return {"role": role, "index": idx, "data_view": idx,
+                    "scenario_version": a.spec_version, "action": info.get("action")}
         idx = authz.index_name(cohort, slug, SIEM_BOARD)
         if not cl.index_exists(idx):
             from siem import enterprise, schema

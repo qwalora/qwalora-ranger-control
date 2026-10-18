@@ -1,0 +1,13 @@
+{% from "_brand.html" import qlogo %}
+<link rel="stylesheet" href="{{ url_for('static', filename='workbench.css') }}?v={{ asset_ver }}">
+<div class="wb">
+  <header class="wb-top"><div class="wb-top-in">
+    <a class="wb-brand" href="/workbench">{{ qlogo('dark',26) }}<b>QWALORA <span>Ranger</span></b>
+      {% if wb_ctx %}<span class="wb-sep">/</span><span class="wb-ctx">{{ wb_ctx }}</span>{% endif %}</a>
+    <nav class="wb-nav">
+      {% if not wb_review_nav %}<a class="wb-navlink {{ 'on' if wb_active=='overview' }}" href="/workbench">Overview</a>{% endif %}
+      {% if wb_review_nav %}<a class="wb-navlink {{ 'on' if wb_active=='review' }}" href="/workbench/review/submissions">Submissions</a>{% endif %}
+      <a class="wb-signout" href="/auth/logout">Sign out</a>
+    </nav>
+  </div></header>
+  <main class="wb-main">

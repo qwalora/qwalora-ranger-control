@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% block title %}Submission #{{ vm.sid }} · Review{% endblock %}
+{% block body %}
+{% set wb_active='review' %}{% set wb_ctx='Submission' %}{% set wb_review_nav=true %}
+{% include "_wb_top.html" %}
+
+  <a class="wb-back" href="/workbench/review/submissions">{{ ic('arrow','ic ic-sm') }} Back to submissions</a>
+
+  <div class="wb-head">
+    <div class="wb-eyebrow"><span class="dot"></span>{{ vm.pathway|upper }} · {{ vm.cohort }}</div>
+    <h1 class="wb-h1">Submission #{{ vm.sid }} · Case #{{ vm.case_id }}</h1>
+    <div class="wb-stats">
+      <div class="wb-stat"><div class="k">Candidate</div><div class="v">{{ ic('user','ic ic-sm') }} {{ vm.candidate_id }}</div></div>
+      <div class="wb-stat"><div class="k">Status</div><div class="v"><span class="wb-pill violet"><span class="d"></span>{{ vm.status }}</span></div></div>
+      <div class="wb-stat"><div class="k">Receipt</div><div class="v"><span class="wb-pill {{ 'ok' if vm.receipt_ok else 'amber' }}"><span class="d"></span>{{ 'verified' if vm.receipt_ok else 'unverified' }}</span></div></div>
+      {% if vm.receipt %}<div class="wb-stat"><div class="k">Submitted</div><div class="v" style="font-size:13px">{{ vm.receipt.submitted_ts[:19] }}</div></div>{% endif %}
+    </div>
+  </div>
+
+  <div class="wb-grid" style="grid-template-columns:minmax(0,1fr) minmax(300px,360px)">
+    <div class="wb-ops">
+      <div class="wb-card"><div class="b">
+        <div class="ttl">{{ ic('edit','ic ic-sm') }} Findings</div>
+        <div style="margin-top:14px">
+        {% for f in vm.payload.findings %}
+          <div class="wb-finding">
+            <div class="claim">{{ f.claim }}</div>
+            <dl class="wb-fgrid">
+              {% if f.significance %}<dt>Significance</dt><dd>{{ f.significance }}</dd>{% endif %}
+              {% if f.methodology %}<dt>Methodology</dt><dd>{{ f.methodology }}</dd>{% endif %}
+              {% if f.limitations %}<dt>Limitations</dt><dd>{{ f.limitations }}</dd>{% endif %}
+              {% if f.evidence_refs %}<dt>Evidence</dt><dd class="mono">{{ f.evidence_refs|join(', ') }}</dd>{% endif %}
+            </dl>
+          </div>
+        {% else %}<div class="wb-empty">No findings.</div>{% endfor %}
+        </div>
+      </div></div>
+
+      <div class="wb-card"><div class="b">
+        <div class="ttl">{{ ic('hash','ic ic-sm') }} Attached evidence</div>
+        <div class="wb-tbl" style="margin-top:14px">
+          <div class="wb-tr head" style="grid-template-columns:28px minmax(0,1.4fr) 1fr auto"><span></span><span>Evidence</span><span class="c3">Type</span><span>Review state</span></div>
+          {% for e in vm.evidence %}
+          <div class="wb-tr" style="grid-template-columns:28px minmax(0,1.4fr) 1fr auto">
+            <span class="ic">{{ ic('hash','ic ic-sm') }}</span>
+            <span class="nm">{{ e.evidence_type }}<span class="id">{{ e.sha256 }}… · {{ e.media_type or '—' }}</span></span>
+            <span class="mt c3">{{ e.media_type or '—' }}</span>
+            <span class="wb-pill"><span class="d"></span>{{ e.validation_state }}</span>
+          </div>
+          {% else %}<div class="wb-tr"><span></span><span class="nm" style="color:var(--mut);font-weight:400">No evidence attached.</span><span></span><span></span></div>{% endfor %}
+        </div>
+      </div></div>
+    </div>
+
+    <div class="wb-ops">
+      <div class="wb-submit">
+        <div class="ttl" style="margin-bottom:12px">{{ ic('lock','ic ic-sm') }} Signed receipt</div>
+        {% if vm.receipt %}
+        <div class="wb-receipt"><code id="rh">{{ vm.receipt.receipt_hash }}</code>
+          <button class="wb-copy" type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('rh').textContent)" title="Copy">{{ ic('layers','ic ic-sm') }}</button></div>
+        <div class="wb-ready" style="margin-top:14px">
+          <div class="row {{ 'ok' if vm.receipt_ok else '' }}"><span class="mk">{{ ic('activity','ic ic-sm') }}</span>Signature &amp; binding {{ 'verified' if vm.receipt_ok else 'FAILED' }}</div>
+          <div class="row"><span class="mk">{{ ic('layers','ic ic-sm') }}</span>Contract version {{ vm.receipt.contract_version }}</div>
+          <div class="row"><span class="mk">{{ ic('hash','ic ic-sm') }}</span>{{ vm.receipt.evidence_refs|length }} evidence reference(s) bound</div>
+          <div class="row"><span class="mk">{{ ic('clock','ic ic-sm') }}</span>{{ vm.receipt.submitted_ts[:19] }}</div>
+        </div>
+        {% if not vm.receipt_ok %}<div class="wb-note warn" style="margin-top:12px">{{ ic('flag','ic') }}<div><b>Integrity warning</b>The receipt does not match the current submission contents. Do not treat this package as intact.</div></div>{% endif %}
+        {% else %}<div class="wb-empty" style="color:#c2bde0;border-color:#352c66">No receipt recorded.</div>{% endif %}
+      </div>
+      <div class="wb-note info" style="background:#fff">{{ ic('shield','ic') }}<div><b>Verification is independent</b>This package is candidate-submitted. Submission is not qualification; the outcome is established by authorized technical verification and reviewer adjudication, not by self-attestation. A valid receipt proves integrity and provenance, not correctness.</div></div>
+    </div>
+  </div>
+
+{% include "_wb_bottom.html" %}
+{% endblock %}

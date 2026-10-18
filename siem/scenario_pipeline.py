@@ -190,15 +190,48 @@ def diversity_axes(spec: dict) -> dict:
                              for d in (admin.get("benign_decoys") or []))}
 
 
-def is_materially_diverse(spec: dict, prior_specs: list) -> dict:
-    """A spec is NOT materially diverse if any prior shares its full axis vector
-    (i.e. it differs only in identifiers/timestamps). Returns {material, collisions}."""
-    mine = diversity_axes(spec)
+# A scenario must differ from every prior on at least this many MATERIAL axes; a trivial
+# difference on a single axis (while every other axis matches) does NOT qualify.
+MIN_DIVERGENT_AXES = 2
+
+
+def axis_divergence(a: dict, b: dict) -> int:
+    """Number of axis keys on which two diversity-axis dicts differ. Order-insensitive for list
+    values. Identifiers/timestamps are never part of a diversity-axis dict by construction."""
+    keys = set(a) | set(b)
+    n = 0
+    for k in keys:
+        av, bv = a.get(k), b.get(k)
+        if isinstance(av, list) or isinstance(bv, list):
+            if sorted(map(str, av or [])) != sorted(map(str, bv or [])):
+                n += 1
+        elif av != bv:
+            n += 1
+    return n
+
+
+def axes_materially_diverse(mine: dict, prior_axes: list, *, min_divergent: int = MIN_DIVERGENT_AXES):
+    """Generic (board-agnostic) material-diversity check over diversity-axis dicts: `mine` must differ
+    from EVERY prior on at least `min_divergent` axes. Returns {material, collisions} where a
+    collision is a prior that is too similar (differs on fewer than min_divergent axes)."""
     collisions = []
-    for p in prior_specs:
-        if diversity_axes(p) == mine:
-            collisions.append(p.get("spec_id"))
-    return {"material": not collisions, "collisions": collisions}
+    for i, p in enumerate(prior_axes):
+        if axis_divergence(mine, p) < min_divergent:
+            collisions.append(i)
+    return {"material": not collisions, "collisions": collisions,
+            "min_divergent": min_divergent}
+
+
+def is_materially_diverse(spec: dict, prior_specs: list) -> dict:
+    """A spec is materially diverse only if it differs from EVERY prior on at least
+    MIN_DIVERGENT_AXES material axes. A trivial one-axis difference (or only identifier/timestamp
+    changes, which are excluded from the axes entirely) does NOT qualify. Returns
+    {material, collisions} where a collision names a prior that is too similar."""
+    mine = diversity_axes(spec)
+    res = axes_materially_diverse(mine, [diversity_axes(p) for p in prior_specs])
+    collisions = [prior_specs[i].get("spec_id") for i in res["collisions"]]
+    return {"material": not collisions, "collisions": collisions,
+            "min_divergent": MIN_DIVERGENT_AXES}
 
 
 # --- promote -----------------------------------------------------------------

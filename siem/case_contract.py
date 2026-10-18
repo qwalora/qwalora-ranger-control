@@ -395,7 +395,7 @@ def candidate_verification(payload: dict, reader, candidate_index: str) -> dict:
 # --- Evidence preservation + signing -----------------------------------------
 # Preservation format version. Bumped when the record schema changes so an old
 # record is still verifiable under the format it was signed with.
-PRESERVATION_VERSION = 2
+PRESERVATION_VERSION = 4   # v4: binds a SHA-256 of the full payload (+attempt) into the signed record
 #
 # Retention & access model (enforced by the storage/HTTP layers, documented here
 # so the contract is self-describing):
@@ -417,6 +417,12 @@ PRESERVATION_VERSION = 2
 
 def _sha256_source(src: dict) -> str:
     return hashlib.sha256(signing.canonical(src)).hexdigest()
+
+
+def payload_digest(payload: dict) -> str:
+    """Canonical SHA-256 of the full investigation payload, used to bind the whole submission to the
+    signed preservation record so any post-signing edit to the stored payload is detectable."""
+    return hashlib.sha256(signing.canonical(payload)).hexdigest()
 
 
 def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict,
@@ -463,11 +469,19 @@ def preserve_and_sign(payload: dict, reader, candidate_index: str, meta: dict,
         "candidate": meta.get("candidate"),
         "board": meta.get("board"),
         "cohort": meta.get("cohort"),
-        "seed": meta.get("seed"),
+        # The protected generator seed is NEVER embedded in the preservation artifact. An opaque
+        # case reference correlates the record without allowing reconstruction of the grading world;
+        # server-side replay/regrading uses the seed held on the Case row, not this record.
+        "scenario_ref": meta.get("scenario_ref"),
         "scenario_version": meta.get("scenario_version", SCENARIO_VERSION),
         "rubric_version": meta.get("rubric_version", RUBRIC_VERSION),
         "case_id": meta.get("case_id"),
+        "attempt": meta.get("attempt"),
         "index": candidate_index,
+        # Bind the WHOLE investigation payload (conclusions, timeline, citations, detection
+        # assessment, everything) to the signature, not just the cited snapshots. A grader can then
+        # detect any change to the stored payload made after the candidate finalized + signed.
+        "payload_sha256": payload_digest(payload),
         "submitted_at": meta.get("submitted_at"),
         "preserved_at": meta.get("preserved_at") or meta.get("submitted_at"),
         "cited": cited,

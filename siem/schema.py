@@ -10,7 +10,48 @@ of a normalized event.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
+
 from . import SCHEMA_VERSION, GENERATOR_VERSION
+
+# The protected generator seed is NEVER embedded in a normalized (indexed) event, nor returned to a
+# candidate. In its place events carry `ranger.scenario_ref`: an opaque correlation id for
+# (candidate_id, board, seed). It is stable per (candidate, board, scenario) so SOC retrieval and
+# provenance still work, but it cannot be used to reconstruct the grading world.
+#
+# The reference is a KEYED MAC (HMAC-SHA256 under a server secret), not a bare digest. A bare digest
+# is reversible by brute force when the seed has low entropy: some legacy assignments were minted
+# with `secrets.token_hex(8)` = 64-bit seeds, which are within offline brute-force reach against a
+# known SHA-256. Keying the reference means that, without the server secret, neither a 64-bit legacy
+# seed nor any seed can be recovered from the published reference. Server-side deterministic replay
+# always uses the seed held in the Ranger backend (ScenarioAssignment / ScenarioBinding / Case),
+# never a value read back out of a telemetry document, so keying the reference costs nothing
+# operationally. The reference is a correlator only; nothing is looked up by it, so key rotation is
+# safe (it only changes refs minted afterward).
+_REF_DOMAIN = "ranger-scenario-ref\x1f"
+
+
+def _mac_key() -> bytes:
+    raw = os.environ.get("RANGER_REF_KEY") or os.environ.get("SECRET_KEY") or "qwalora-ranger-dev"
+    return hashlib.sha256(raw.encode("utf-8")).digest()
+
+
+def keyed_mac(material: bytes) -> str:
+    """HMAC-SHA256 hex digest under the server secret. Shared by the scenario reference and the
+    generation-contract integrity MAC so there is one keyed primitive."""
+    return hmac.new(_mac_key(), material, hashlib.sha256).hexdigest()
+
+
+def case_ref(candidate_id, board, seed) -> str:
+    """Opaque, keyed, non-invertible scenario/case reference. Safe to index and to show to a
+    candidate; reveals neither the seed nor the hidden truth, and is not brute-forceable back to the
+    seed without the server secret. Returns None only when there is no seed to reference yet."""
+    if not seed:
+        return None
+    material = ("%s%s\x1f%s\x1f%s" % (_REF_DOMAIN, candidate_id or "", board, seed)).encode("utf-8")
+    return keyed_mac(material)[:24]
 
 # Event categories this SIEM carries, and the ECS-style category/type they map to.
 SOURCES = ("linux-auth", "linux-sudo", "linux-process", "linux-file",
@@ -20,7 +61,7 @@ SOURCES = ("linux-auth", "linux-sudo", "linux-process", "linux-file",
 # The fields a normalized event must carry.
 REQUIRED = ("@timestamp", "event.kind", "event.category", "event.action",
             "event.dataset", "host.name", "message",
-            "ranger.candidate_id", "ranger.board", "ranger.scenario_seed",
+            "ranger.candidate_id", "ranger.board", "ranger.scenario_ref",
             "ranger.schema_version", "ranger.generator_version", "data.synthetic")
 
 
@@ -40,7 +81,8 @@ def normalized(candidate_id: str, board: int, seed: str, dataset: str,
             # document-level-security filter value.
             "candidate_id": candidate_id,
             "board": board,
-            "scenario_seed": seed,
+            # Opaque correlation id, NOT the protected seed (which is never indexed).
+            "scenario_ref": case_ref(candidate_id, board, seed),
             "schema_version": SCHEMA_VERSION,
             "generator_version": GENERATOR_VERSION,
         },
@@ -83,6 +125,52 @@ def validate(doc: dict) -> list[str]:
     return problems
 
 
+# --- strict candidate-facing event projection -------------------------------------------------
+# A candidate's investigation surface must carry ONLY analyst-relevant ECS fields. This is an
+# ALLOWLIST (not a denylist): anything not named here is dropped, so a future internal/truth field
+# added to a document can never leak by omission. The whole `ranger.*` provenance block is excluded
+# in particular - it is where the opaque ref, candidate_id and generator metadata live, none of which
+# the candidate needs to analyze the telemetry. Event identity (`_id`) is preserved so a candidate
+# can cite evidence.
+CANDIDATE_EVENT_ALLOW = (
+    "@timestamp", "message",
+    "event.kind", "event.category", "event.action", "event.dataset", "event.module",
+    "host.name",
+    "source.ip", "source.port", "destination.ip", "destination.port",
+    "user.name", "user.target",
+    "process.name", "process.command_line", "process.pid",
+    "dns.question.name", "url.original",
+    "http.request.method", "http.response.status_code",
+    "network.transport", "network.action",
+    "winlog.event_id", "winlog.logon_type",
+    "data.synthetic",
+)
+
+
+def project_candidate_source(source: dict) -> dict:
+    """Project one event `_source` to the candidate allowlist. Pure structural copy of allowed
+    dotted paths; never emits `ranger.*`, `_malicious`, `_key`, seeds, truth, or any field not in
+    CANDIDATE_EVENT_ALLOW."""
+    out: dict = {}
+    for path in CANDIDATE_EVENT_ALLOW:
+        val = _get_path(source, path)
+        if val is not None:
+            _set_path(out, path, val)
+    return out
+
+
+def project_candidate_event(ev: dict) -> dict:
+    """Project one candidate-index event item ({_id, _source, ...}) to the candidate-safe shape:
+    only `_id` and the allowlisted `_source` fields survive. Sibling keys such as `_malicious` are
+    dropped by construction (not copied)."""
+    src = ev.get("_source") if isinstance(ev, dict) else None
+    return {"_id": (ev or {}).get("_id"), "_source": project_candidate_source(src or {})}
+
+
+def project_candidate_events(events) -> list:
+    return [project_candidate_event(e) for e in (events or [])]
+
+
 # OpenSearch index mapping for a candidate index. Keyword for exact-match fields,
 # date for the timestamp, text for the free-text message.
 INDEX_MAPPING = {
@@ -112,7 +200,7 @@ INDEX_MAPPING = {
                                       "logon_type": {"type": "integer"}}},
             "ranger": {"properties": {
                 "candidate_id": {"type": "keyword"}, "board": {"type": "integer"},
-                "scenario_seed": {"type": "keyword"}, "schema_version": {"type": "keyword"},
+                "scenario_ref": {"type": "keyword"}, "schema_version": {"type": "keyword"},
                 "generator_version": {"type": "keyword"},
                 "scenario": {"type": "keyword"}, "event_uid": {"type": "keyword"}}},
             "data": {"properties": {"synthetic": {"type": "boolean"}}},

@@ -126,12 +126,56 @@ def register(app, candidate_model, db, helpers):
     def _slug(c):
         return authz._slug(c.github_id or c.handle)
 
+    def _s5_binding_on():
+        """S5: when on, Board 2 qualification cases are pinned to the S3/S4 approved, cohort-specific
+        ScenarioBinding (one authoritative assignment), instead of a legacy per-candidate seed.
+        Default off, so nothing changes until the binding integration is enabled for a cohort."""
+        return os.environ.get("RANGER_B2_BINDING", "").strip().lower() in ("1", "true", "yes", "on")
+
     def _ensure_case(c):
-        """Assign (idempotently) the candidate's Board 2 qualification case."""
+        """Assign (idempotently) the candidate's Board 2 qualification case.
+
+        S5: when RANGER_B2_BINDING is on, the case is DEFINITIVELY associated with the candidate's
+        authoritative Board 2 ScenarioBinding (strata_board2.resolve_assignment), so /soc, /case and
+        grading share one pinned scenario, index, seed, spec version and rubric. A returning candidate
+        resumes their assigned case; an already-submitted case is never silently re-pinned (its
+        scenario/rubric are frozen). Fail closed: if no approved cohort assignment can be resolved,
+        the case is NOT created from a legacy seed."""
         cohort = c.cohort or _DEFCO
-        case = (Case.query.filter_by(candidate_id=c.id, board=CASE_BOARD,
-                                     plane="qualification")
+        case = (Case.query.filter_by(candidate_id=c.id, board=CASE_BOARD, plane="qualification")
                 .order_by(Case.attempt.desc()).first())
+        if _s5_binding_on():
+            import strata_board2 as b2
+            a = b2.resolve_assignment(db, c)   # fail-closed; raises on missing/revoked/corrupt
+            if case is not None:
+                # Resume. Never mutate a submitted/locked case's pinned scenario (immutability).
+                if not _locked(case) and case.binding_id != a.binding_id:
+                    case.index_name = a.index_name
+                    case.seed = a.seed
+                    case.scenario_version = a.spec_version
+                    case.rubric_version = a.rubric_version
+                    case.binding_id = a.binding_id
+                    case.content_hash = a.content_hash
+                    case.variant_id = a.variant_id
+                    # Opaque case correlation only. scenario_ref is left untouched (F5
+                    # approved-scenario-metadata meaning); the opaque ref lives in case_ref.
+                    case.case_ref = b2.schema.case_ref(a.slug, CASE_BOARD, a.seed)
+                    db.session.commit()
+                return case
+            case = Case(candidate_id=c.id, board=CASE_BOARD, cohort=a.cohort,
+                        plane="qualification", workflow="qualification",
+                        index_name=a.index_name, seed=a.seed,
+                        scenario_version=a.spec_version, rubric_version=a.rubric_version,
+                        attempt=a.attempt, status="assigned",
+                        binding_id=a.binding_id, content_hash=a.content_hash,
+                        variant_id=a.variant_id,
+                        # opaque case correlation (NOT an F5 scenario-metadata ref); scenario_ref
+                        # stays None for S5 cohort cases so F5 reports instructions via the mission.
+                        case_ref=b2.schema.case_ref(a.slug, CASE_BOARD, a.seed))
+            db.session.add(case)
+            db.session.commit()
+            return case
+        # Legacy (flag off): per-candidate seed, unchanged.
         if case:
             return case
         a = ensure_seed(c, CASE_BOARD)
@@ -259,10 +303,13 @@ def register(app, candidate_model, db, helpers):
             return jsonify({"ok": False, "stage": "evidence", "verification": verification}), 422
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
+        from siem import schema as _schema
         meta = {"candidate": _slug(c), "board": CASE_BOARD, "cohort": case.cohort,
-                "seed": case.seed, "scenario_version": case.scenario_version,
+                # opaque case reference, not the protected seed (which stays on the Case row only)
+                "scenario_ref": _schema.case_ref(_slug(c), CASE_BOARD, case.seed),
+                "scenario_version": case.scenario_version,
                 "rubric_version": case.rubric_version, "case_id": case.id,
-                "submitted_at": now_iso}
+                "attempt": case.attempt, "submitted_at": now_iso}
         record, sig = cc.preserve_and_sign(payload, reader, case.index_name, meta)
         if sub is None:
             sub = CaseSubmission(case_id=case.id, candidate_id=c.id, attempt=case.attempt,
