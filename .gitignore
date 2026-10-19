@@ -7,3 +7,6 @@ venv/
 instance/
 _preview/
 node_modules/
+
+# Handbook build outputs (regenerable via scripts/build_handbook.py)
+docs/handbook/dist/

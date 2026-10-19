@@ -105,20 +105,30 @@ def run_check():
         if BROKEN_HANDBOOK in txt:
             failures.append("handbook-link: candidate nav still references the broken /handbook path")
 
-    # 4. internal relative links inside docs/ resolve
+    # 4. required candidate-facing documents exist (a release must not drop them)
+    for rel in ("docs/handbook/RANGER_CANDIDATE_HANDBOOK.md",
+                "docs/HANDBOOK_AUDIT_DISCREPANCY_REGISTER.md",
+                "docs/RELEASE_DOC_VALIDATION.md"):
+        if not os.path.exists(os.path.join(ROOT, rel)):
+            failures.append(f"doc-missing: required document {rel} is absent")
+
+    # 5. internal relative links inside docs/ (recursively) resolve
     docs_dir = os.path.join(ROOT, "docs")
     link_re = re.compile(r"\[[^\]]+\]\((?!https?://|#|mailto:)([^)]+)\)")
-    for fn in sorted(os.listdir(docs_dir)) if os.path.isdir(docs_dir) else []:
-        if not fn.endswith(".md"):
+    for base, _dirs, files in os.walk(docs_dir):
+        if os.sep + "dist" in base:   # skip generated build outputs
             continue
-        path = os.path.join(docs_dir, fn)
-        for m in link_re.finditer(open(path).read()):
-            target = m.group(1).split("#", 1)[0].strip()
-            if not target:
+        for fn in files:
+            if not fn.endswith(".md"):
                 continue
-            resolved = os.path.normpath(os.path.join(docs_dir, target))
-            if not os.path.exists(resolved):
-                failures.append(f"broken-internal-link: {fn} -> {target}")
+            path = os.path.join(base, fn)
+            for m in link_re.finditer(open(path).read()):
+                target = m.group(1).split("#", 1)[0].strip()
+                if not target:
+                    continue
+                resolved = os.path.normpath(os.path.join(base, target))
+                if not os.path.exists(resolved):
+                    failures.append(f"broken-internal-link: {os.path.relpath(path, ROOT)} -> {target}")
 
     metadata = {
         "app_git_commit": _git_commit(),
