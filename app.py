@@ -3781,8 +3781,11 @@ def create_app():
                 next_action = ("Launch your SOC workspace and triage the alert queue"
                                if not obj_done else
                                "Refine your triage adjudication and resubmit to reach %g%%" % P.PASS_BAR)
-            elif n != 1 and rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
+            elif P.tier_of(n) == "isolated" and rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
                 next_action = "Start your lab for board %d" % n
+            elif n != 1 and not strata_missions.environment_availability(n)["available"]:
+                next_action = ("Board %d's environment is not yet available here; review your "
+                               "mission brief while it is prepared" % n)
             elif rep_status in (None, "needs_changes", "rejected"):
                 next_action = "Submit your written report for board %d" % n
             elif rep_status == "pending":
@@ -3840,10 +3843,12 @@ def create_app():
         pkg = strata_missions.get(n)
         if not pkg:
             return None
-        avail = strata_missions.environment_availability(n)
+        desc = strata_missions.environment_descriptor(n)
         return {"title": pkg["title"], "version": pkg["version"], "role_title": pkg.get("role_title"),
-                "env_kind": pkg["environment_kind"], "available": avail["available"],
-                "env_state": avail["state"], "env_message": avail["message"]}
+                "env_kind": pkg["environment_kind"], "available": desc["available"],
+                "env_state": desc["state"], "env_message": desc["message"],
+                "env_label": desc["label"], "env_platform": desc["platform"],
+                "env_launch": desc["launch"]}
 
     def _demo_vm(n, graduated):
         """A synthetic dashboard for the admin demo preview: no real candidate,
@@ -3956,11 +3961,13 @@ def create_app():
         if not pkg:
             abort(404)
         avail = strata_missions.environment_availability(n)
+        envdesc = strata_missions.environment_descriptor(n, availability=avail)
         # a concise one-line mission summary for the always-visible overview (derived from the
         # approved business context; the full text is preserved in the Mission tab).
         bc = pkg.get("business_context") or ""
         summary = (bc.split(". ")[0].strip() + ".") if bc else None
-        vm = {**_cand_nav_vm(c, "strata"), "pkg": pkg, "avail": avail, "board": n, "handle": c.handle,
+        vm = {**_cand_nav_vm(c, "strata"), "pkg": pkg, "avail": avail, "envdesc": envdesc,
+              "board": n, "handle": c.handle,
               "summary": summary, "cohort": c.cohort,
               "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-")}
         return render_template("mission_brief.html", vm=vm)

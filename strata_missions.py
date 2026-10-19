@@ -511,12 +511,28 @@ def for_binding(binding, *, broker_mod=None):
     return out
 
 
-def environment_availability(board, *, broker_mod=None, siem_live=None):
+def _siem_candidate_accessible():
+    """Honest check for whether the Board-2 OpenSearch SOC is actually reachable by a candidate in
+    THIS deployment. A running backend service alone does not make it accessible: the candidate
+    needs both the Board-2 investigation UI (RANGER_CASE_UI) AND a configured SOC gateway
+    (signing key + OpenSearch admin credential, the exact pair app.py requires to register /soc).
+    Fail-closed: if either is absent the environment is reported unavailable rather than 'ready'."""
+    import os  # noqa: PLC0415
+    case_ui = os.environ.get("RANGER_CASE_UI", "").strip().lower() in ("1", "true", "yes", "on")
+    gateway = bool(os.environ.get("RANGER_JWT_PRIVATE_B64")
+                   and os.environ.get("OPENSEARCH_ADMIN_PASSWORD"))
+    return case_ui and gateway
+
+
+def environment_availability(board, *, broker_mod=None, siem_live=None, siem_available=None):
     """Compute REAL environment availability for a board's mission. Documentation existing never
-    implies availability. Returns {"available", "state", "message"}.
+    implies availability, and a backend service merely running never implies candidate access.
+    Returns {"available", "state", "message"}.
 
       dataset (boards 1,3,4): available to an authorized candidate (the seeded workspace).
-      siem    (board 2): provisioned; candidate access is granted on assignment.
+      siem    (board 2): available ONLY when the SOC gateway and the Board-2 UI are actually
+              configured in this environment (see _siem_candidate_accessible); otherwise the live
+              OpenSearch SOC is reported unavailable here, never falsely 'ready'.
       range   (boards 5,6): available ONLY when the Ludus broker is live; mock mode = unavailable
               until a real GOAD range is approved, deployed, and validated.
     """
@@ -526,9 +542,18 @@ def environment_availability(board, *, broker_mod=None, siem_live=None):
         return {"available": True, "state": "dataset_ready",
                 "message": "Your seeded analysis workspace is available from your board workspace."}
     if kind == ENV_SIEM:
-        return {"available": True, "state": "siem_on_assignment",
-                "message": "The SOC environment is provisioned; access is granted on assignment "
-                           "through the SOC gateway using your authorized identity."}
+        if siem_available is None:
+            siem_available = _siem_candidate_accessible()
+        if siem_available:
+            return {"available": True, "state": "siem_on_assignment",
+                    "message": "The SOC environment is provisioned; access is granted on assignment "
+                               "through the SOC gateway using your authorized identity."}
+        return {"available": False, "state": "siem_unavailable",
+                "message": "The live OpenSearch SOC for this board is not yet available in this "
+                           "environment. Board 2 runs in a private OpenSearch SIEM reached through "
+                           "the Ranger SOC gateway, opened only once that gateway and a per-candidate "
+                           "index are configured and authorized here. Mission instructions are "
+                           "available for preparation; the environment is not."}
     if kind == ENV_RANGE:
         if broker_mod is None:
             try:
@@ -546,6 +571,52 @@ def environment_availability(board, *, broker_mod=None, siem_live=None):
                            "the environment is not."}
     return {"available": False, "state": "unknown",
             "message": "No environment is defined for this board."}
+
+
+# Plain-language environment descriptors so a candidate can tell, at a glance, exactly which
+# platform a board runs on and how to reach it. Candidate-safe (no answers, no internal hosts).
+_ENV_DESCRIPTOR = {
+    ENV_DATASET: {
+        "label": "Portal-hosted SOC workspace",
+        "platform": "Runs in your browser on this platform, on a per-candidate seeded dataset. "
+                    "No external SIEM, OpenSearch, Docker, VPN, or local install is required.",
+        "launch": "soc_workspace",
+    },
+    ENV_SIEM: {
+        "label": "Private OpenSearch SOC (Ranger gateway)",
+        "platform": "Runs in a private OpenSearch SIEM with Dashboards, reached through the Ranger "
+                    "SOC gateway with your authorized identity. You do not install or run OpenSearch "
+                    "yourself and you never receive direct cluster credentials.",
+        "launch": "soc_gateway",
+    },
+    ENV_RANGE: {
+        "label": "Isolated GOAD range (WireGuard)",
+        "platform": "An isolated Active Directory range you reach over a per-candidate WireGuard "
+                    "tunnel. It is deployed on demand and torn down after use.",
+        "launch": "range",
+    },
+}
+
+
+def environment_descriptor(board, *, availability=None, broker_mod=None, siem_available=None):
+    """Combine a board's environment KIND with its REAL availability into a candidate-facing
+    descriptor: which platform it is, in plain language, and whether it is reachable here now.
+    `availability` may be passed in to avoid recomputing; otherwise it is computed honestly."""
+    pkg = get(board)
+    kind = (pkg or {}).get("environment_kind")
+    base = _ENV_DESCRIPTOR.get(kind, {"label": "Not defined", "platform": "", "launch": None})
+    if availability is None:
+        availability = environment_availability(board, broker_mod=broker_mod,
+                                                siem_available=siem_available)
+    return {
+        "kind": kind,
+        "label": base["label"],
+        "platform": base["platform"],
+        "launch": base["launch"],
+        "available": availability["available"],
+        "state": availability["state"],
+        "message": availability["message"],
+    }
 
 
 def mission_index():

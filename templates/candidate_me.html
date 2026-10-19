@@ -143,27 +143,41 @@
             </div>
             {% endif %}
             <div>
-              <label class="label">Your lab</label>
-              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
+              <label class="label">Environment</label>
+              {% if vm.mission %}
+              <div style="padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                  <b style="font:600 13px/1.2 var(--f);color:var(--ink)">{{ vm.mission.env_label }}</b>
+                  {% if vm.mission.available %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Available</span>
+                  {% else %}<span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('lock','ic ic-sm') }} Not available yet</span>{% endif %}
+                </div>
+                <p class="dim" style="font-size:12px;margin:8px 0 0">{{ vm.mission.env_platform }}</p>
+                {% if not vm.mission.available %}<p class="dim" style="font-size:12px;margin:6px 0 0">{{ vm.mission.env_message }}</p>{% endif %}
+              </div>
+              {% endif %}
+              {% if vm.tier == 'isolated' %}
+              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;margin-top:10px">
                 <span class="pill {{ vm.range_pcls }}"><span class="dot {{ vm.range_dot }}"></span>{{ vm.range_label }}</span>
                 <span class="muted" style="font-size:12.5px">{{ vm.range_detail }}</span>
               </div>
+              {% endif %}
               <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
                 {% if vm.preview %}
-                {% if vm.board == 1 %}<span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</span>{% endif %}
-                {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>{% endif %}
+                {% if vm.board == 1 %}<span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</span>
+                <span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('layers','ic ic-sm') }} Incident investigation</span>{% endif %}
+                {% if vm.tier == 'isolated' and vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>{% endif %}
                 {% if vm.has_wg %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('key','ic ic-sm') }} Download WireGuard</span>{% endif %}
                 {% else %}
-                {% if vm.board == 1 %}<a class="btn btn-primary" href="/me/workspace">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</a>{% endif %}
-                {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn {% if vm.board == 1 %}btn-outline{% else %}btn-primary{% endif %}">{{ ic('server','ic ic-sm') }} Start lab</button></form>{% endif %}
+                {% if vm.board == 1 %}<a class="btn btn-primary" href="/me/workspace">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</a>
+                <a class="btn btn-outline" href="/me/workspace/incident">{{ ic('layers','ic ic-sm') }} Incident investigation</a>{% endif %}
+                {% if vm.tier == 'isolated' and vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>{% endif %}
                 {% if vm.has_wg %}<a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>{% endif %}
                 {% endif %}
               </div>
               {% if vm.board == 1 %}
-              <p class="dim" style="font-size:12px;margin-top:8px">Launch your SOC workspace to triage this board's seeded alert queue in the browser: adjudicate each alert, assign severity, attribute technique and indicators. Grading is answer-free and server-side.</p>
-              {% elif vm.tier == 'shared' and vm.range_status == 'deployed' %}
-              {% if vm.siem_live %}<p class="dim" style="font-size:12px;margin-top:8px">Your shared SOC SIEM session is ready. Investigate this board's telemetry in the console; grading is answer-free and server-side.</p>
-              {% else %}<p class="dim" style="font-size:12px;margin-top:8px">Your analysis workspace is ready: a per-ranger seeded dataset for this board, worked in the browser. Grading is answer-free and server-side.</p>{% endif %}
+              <p class="dim" style="font-size:12px;margin-top:8px">Launch your SOC workspace to triage this board's seeded alert queue in the browser: adjudicate each alert, assign severity, attribute technique and indicators. Incident investigation is an additional, non-graded reconstruction exercise. Grading is answer-free and server-side.</p>
+              {% elif vm.tier == 'isolated' and vm.range_status == 'deployed' %}
+              <p class="dim" style="font-size:12px;margin-top:8px">Your isolated range is deployed. Connect over WireGuard and work the mission; grading is answer-free and server-side.</p>
               {% endif %}
             </div>
             <div>

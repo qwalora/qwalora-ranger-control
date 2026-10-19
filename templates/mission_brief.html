@@ -69,6 +69,12 @@
 
         {# ===== Environment: authorized scope, systems/access, troubleshooting ===== #}
         <section class="mw-panel" id="mwp-env">
+          {% if vm.envdesc %}
+          <div class="mw-sec">
+            <div class="lbl">{{ ic('server','ic ic-sm') }} Platform: {{ vm.envdesc.label }}</div>
+            <p>{{ vm.envdesc.platform }}</p>
+          </div>
+          {% endif %}
           {% if vm.avail.available %}
           <div class="mw-envbox ok">
             <div class="t"><span class="pill pill-ok"><span class="dot"></span>Environment ready</span></div>

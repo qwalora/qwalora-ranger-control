@@ -77,14 +77,46 @@ def test_versioned_and_approval_is_explicit():
 
 
 def test_environment_availability_from_real_signals():
-    # dataset boards (1,3,4) and the SIEM board (2) are available to an authorized candidate
-    for b in (1, 2, 3, 4):
+    # dataset boards (1,3,4) are available to an authorized candidate (portal-hosted workspace)
+    for b in (1, 3, 4):
         assert sm.environment_availability(b)["available"] is True
+    # the SIEM board (2) is available ONLY when the SOC gateway + Board-2 UI are actually
+    # configured here; a backend merely running never implies candidate access (no false promise)
+    assert sm.environment_availability(2, siem_available=False)["available"] is False
+    av2 = sm.environment_availability(2, siem_available=False)
+    assert av2["state"] == "siem_unavailable" and "not yet available" in av2["message"].lower()
+    assert sm.environment_availability(2, siem_available=True)["available"] is True
+    assert sm.environment_availability(2, siem_available=True)["state"] == "siem_on_assignment"
     # range boards (5,6) are UNAVAILABLE while the broker is mock, even though the docs exist
     for b in (5, 6):
         av = sm.environment_availability(b)
         assert av["available"] is False and av["state"] == "range_unavailable"
         assert "not yet available" in av["message"].lower()
+
+
+def test_siem_board2_not_falsely_available_by_default():
+    # With no SOC gateway / Board-2 UI env configured, Board 2 must report unavailable, never
+    # a false 'ready' for an OpenSearch SIEM the candidate cannot actually reach.
+    import os
+    saved = {k: os.environ.get(k) for k in
+             ("RANGER_CASE_UI", "RANGER_JWT_PRIVATE_B64", "OPENSEARCH_ADMIN_PASSWORD")}
+    for k in saved:
+        os.environ.pop(k, None)
+    try:
+        d = sm.environment_descriptor(2)
+        assert d["available"] is False and d["state"] == "siem_unavailable"
+        assert "opensearch" in d["label"].lower()
+        # fully configured -> genuinely available
+        os.environ["RANGER_CASE_UI"] = "1"
+        os.environ["RANGER_JWT_PRIVATE_B64"] = "x"
+        os.environ["OPENSEARCH_ADMIN_PASSWORD"] = "y"
+        assert sm.environment_descriptor(2)["available"] is True
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def test_availability_independent_of_documentation_existence():
