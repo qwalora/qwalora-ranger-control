@@ -1,3 +1,8 @@
+> STATUS UPDATE (direction change): the operator chose Railway's NATIVE PostgreSQL volume backup as
+> the only mechanism for now - no external S3, no Railway storage bucket, no separate runner service,
+> no PITR. The S3/runner path described below (sections A1 Option 1/2, B) is retained as DOCUMENTED,
+> NOT-OPERATIONALIZED tooling for future use. The active plan is docs/WS9_NATIVE_BACKUP_ACTIVATION.md.
+
 # WS9 - operational backup activation plan (exact configs + approval request)
 
 Continues from WS8 (commit 13b7390, deployment 4fef1c65). Two actions are AUTHORIZATION-GATED and are
