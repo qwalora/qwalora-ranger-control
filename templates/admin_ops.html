@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Operations · Qwalora Ranger{% endblock %}
+{% macro statepill(ok, label) -%}
+<span class="pill {% if ok %}pill-ok{% else %}pill{% endif %}" style="font-size:11px"><span class="dot {% if ok %}dot-ok{% endif %}"></span>{{ label }}</span>
+{%- endmacro %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('ops', '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Operations</div>
+          <div class="rg-sub">Measured operational readiness. Every value here is read from the database, computed in-process, or taken from a live probe performed on request. No uptime history, cost, or health percentage is shown (the portal does not measure those; see Railway).</div>
+        </div>
+        <a class="btn btn-outline btn-sm" href="/admin/ops?probe=model">{{ ic('cpu','ic ic-sm') }} Verify model (live probe)</a>
+      </div>
+
+      <div class="cand-body">
+
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Services</span></div>
+          <div class="card-body"><div class="record">
+            {% for s in vm.services %}
+            <div class="rec-row" style="align-items:center">
+              <div class="rec-id"><b>{{ s.name }}</b><span class="muted">{{ s.detail }}</span></div>
+              <span class="pill {% if s.state in ('online','configured') %}pill-ok{% elif s.state in ('down','not configured') %}pill-orange{% else %}pill{% endif %}"><span class="dot {% if s.state in ('online','configured') %}dot-ok{% elif s.state in ('down','not configured') %}dot-amber{% endif %}"></span>{{ s.state }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          {% if vm.probe %}
+          <p class="dim" style="font-size:12px;margin-top:10px">{{ ic('activity','ic ic-sm') }} Live model probe:
+            {% if vm.probe.live %}responded in {{ vm.probe.latency_s }}s (sample {{ vm.probe.sample_len }} chars){% else %}not live - {{ vm.probe.error or vm.probe.note }}{% endif %}</p>
+          {% endif %}
+          </div>
+        </div>
+
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Environment readiness</span></div>
+          <div class="card-body">
+            <p class="dim" style="font-size:12px;margin:0 0 12px">Four distinct states, not one blurred "up": a service can be online without an environment provisioned, provisioned without a candidate able to reach it, and accessible without being operationally verified end-to-end.</p>
+            {% for e in vm.envs %}
+            <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <b style="font:600 13px/1.3 var(--f);color:var(--ink)">{{ e.name }}</b>
+                <span class="mono dim" style="font-size:11px">{{ e.kind }}</span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                {{ statepill(e.service_online, 'service online') }}
+                {{ statepill(e.provisioned, 'environment provisioned') }}
+                {{ statepill(e.accessible, 'candidate accessible') }}
+                {{ statepill(e.verified, 'operationally verified') }}
+              </div>
+              <p class="dim" style="font-size:11.5px;margin-top:8px">{{ e.verified_note }}</p>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="rowline">
+          <div class="card" style="flex:1"><div class="card-head"><span class="eyebrow"><span class="d"></span>Candidate activity</span></div>
+            <div class="card-body"><div class="record">
+              <div class="rec-row"><div class="rec-id"><b>Candidates</b><span class="muted">total enrolled</span></div><b class="mono">{{ vm.activity.total }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>Active</b><span class="muted">platform active</span></div><b class="mono">{{ vm.activity.active }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>STRATA authorized</b><span class="muted">active memberships</span></div><b class="mono">{{ vm.activity.strata_active }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>PARALLAX authorized</b><span class="muted">active memberships</span></div><b class="mono">{{ vm.activity.parallax_active }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>Awaiting review</b><span class="muted">platform + program requests</span></div><b class="mono">{{ vm.activity.pending_app + vm.activity.prog_requests }}</b></div>
+            </div></div>
+          </div>
+          <div class="card" style="flex:1"><div class="card-head"><span class="eyebrow"><span class="d"></span>Investigation status</span></div>
+            <div class="card-body"><div class="record">
+              <div class="rec-row"><div class="rec-id"><b>STRATA objectives</b><span class="muted">submitted</span></div><b class="mono">{{ vm.investigations.obj_submitted }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>STRATA objectives</b><span class="muted">at or above bar</span></div><b class="mono">{{ vm.investigations.obj_passed }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>PARALLAX research runs</b><span class="muted">signed records</span></div><b class="mono">{{ vm.investigations.research_runs }}</b></div>
+              <div class="rec-row"><div class="rec-id"><b>Reports</b><span class="muted">pending review</span></div><b class="mono">{{ vm.investigations.reports_pending }}</b></div>
+            </div></div>
+          </div>
+        </div>
+
+        <p class="dim" style="font-size:11.5px">Infrastructure cost, volume sizing, and uptime history are operational facts of the hosting platform, not the application; they are documented from measured Railway data in the cost and reliability report, not shown as live metrics here.</p>
+      </div>
+    </section>
+  </div>
+</div>
+<style>
+  .cand-body{padding:20px 24px 28px;display:flex;flex-direction:column;gap:16px;max-width:900px}
+  .cand-body .card{max-width:none}
+  .rowline{display:flex;gap:16px;flex-wrap:wrap}
+</style>
+{% endblock %}

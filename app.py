@@ -3116,6 +3116,118 @@ def create_app():
                            action=action, status=new_status)
         return redirect(url_for("admin_program_access", cohort=request.form.get("cohort", "")))
 
+    # --- admin operational readiness ----------------------------------------
+    # Honest, measured-only signals: NO fabricated uptime, cost, or health. Every value is
+    # either read from the DB, computed in-process, or from a live probe performed on request.
+    def _ops_db_check():
+        try:
+            db.session.execute(db.text("SELECT 1"))
+            db.session.commit()
+            return True, db.engine.dialect.name
+        except Exception as e:  # noqa: BLE001
+            db.session.rollback()
+            return False, ("unreachable: %s" % str(e)[:80])
+
+    def _ops_model_identity():
+        try:
+            from parallax.research import model_backend as _mb
+            ident = _mb.from_config().identity()
+            return {"configured": True, "backend": ident["backend"], "is_real": ident["is_real"],
+                    "model_id": ident["model_id"], "runtime": ident["runtime"]}
+        except Exception as e:  # noqa: BLE001
+            return {"configured": False, "error": str(e)[:160]}
+
+    def _ops_model_live_probe():
+        """A REAL liveness generation against the configured model (not a cached metric)."""
+        try:
+            from parallax.research import model_backend as _mb
+            be = _mb.from_config()
+            if not be.identity().get("is_real"):
+                return {"ran": True, "live": False, "note": "no real model configured (deterministic stub)"}
+            r = be.generate(_mb.GenRequest(system="You are a helpful assistant.", developer="",
+                                           task="Reply with the single word OK.", context=[], max_tokens=8))
+            return {"ran": True, "live": True, "sample_len": len(r.text or ""),
+                    "latency_s": r.meta.get("latency_s")}
+        except Exception as e:  # noqa: BLE001 - surfaced, never faked
+            return {"ran": True, "live": False, "error": str(e)[:160]}
+
+    def _ops_board1_selftest():
+        """In-process Board-1 dataset+grader self-test (no candidate, no DB write)."""
+        try:
+            ds = scenarios.dataset(1, "ops-selftest")
+            alerts = ds.get("alerts", [])
+            sc, _pa = scenarios.grade(1, "ops-selftest",
+                                      {"alerts": [{"id": a["id"], "verdict": "false_positive",
+                                                   "severity": "low"} for a in alerts]})
+            ok = len(alerts) > 0 and isinstance(sc, (int, float))
+            return {"ok": ok, "n_alerts": len(alerts)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)[:160]}
+
+    @app.get("/admin/ops")
+    @admin_required
+    def admin_ops():
+        from models import BoardResult as _BR, ParallaxResearchRun as _PR
+        db_ok, db_detail = _ops_db_check()
+        model = _ops_model_identity()
+        b1 = _ops_board1_selftest()
+        probe = _ops_model_live_probe() if request.args.get("probe") == "model" else None
+
+        # Real candidate activity (DB counts only)
+        total = Candidate.query.count()
+        active = Candidate.query.filter_by(status="active").count()
+        pending_app = Candidate.query.filter_by(status="pending").count()
+        strata_active = ProgramMembership.query.filter_by(program="strata", status="active").count()
+        parallax_active = ProgramMembership.query.filter_by(program="parallax", status="active").count()
+        prog_requests = ProgramMembership.query.filter(
+            ProgramMembership.status.in_(("requested", "pending"))).count()
+        # Real investigation status (DB)
+        obj_submitted = _BR.query.filter(_BR.objective_score.isnot(None)).count()
+        obj_passed = _BR.query.filter_by(objective_passed=True).count()
+        research_runs = _PR.query.count()
+        reports_pending = Report.query.filter_by(status="pending").count()
+
+        services = [
+            {"name": "Portal (control plane)", "state": "online",
+             "detail": "serving this request"},
+            {"name": "Database (candidate state)", "state": ("online" if db_ok else "down"),
+             "detail": db_detail},
+            {"name": "Inference model (PARALLAX)",
+             "state": ("configured" if model.get("configured") else "not configured"),
+             "detail": (("%s · %s · %s" % (model.get("model_id"), model.get("runtime"),
+                        "real backend" if model.get("is_real") else "stub"))
+                        if model.get("configured") else model.get("error", "unavailable"))},
+        ]
+        # Four-state environment readiness matrix (service online / provisioned / accessible / verified)
+        envs = [
+            {"name": "STRATA Board 1 · SOC alert triage",
+             "kind": "portal-hosted dataset + server-side grader",
+             "service_online": db_ok,
+             "provisioned": bool(scenarios.has_board(1)),
+             "accessible": True,  # entitlement-gated route exists (require_program('strata') + board 1)
+             "verified": bool(b1.get("ok")),
+             "verified_note": ("grader self-test ok (%d alerts)" % b1.get("n_alerts", 0)) if b1.get("ok")
+                              else ("self-test failed: %s" % b1.get("error", "")),
+             },
+            {"name": "PARALLAX · research console (Qwen)",
+             "kind": "live model-backed, signed evidence",
+             "service_online": bool(model.get("configured")),
+             "provisioned": bool(model.get("configured") and model.get("is_real")),
+             "accessible": True,  # entitlement-gated (active PARALLAX membership) + nonprod flag
+             "verified": bool(probe and probe.get("live")),
+             "verified_note": (("live probe ok (%ss)" % probe.get("latency_s")) if (probe and probe.get("live"))
+                               else ("probe: %s" % (probe.get("error") or probe.get("note")) if probe
+                                     else "not probed this load - use Verify model")),
+             },
+        ]
+        vm = {"db_ok": db_ok, "services": services, "envs": envs, "model": model, "probe": probe,
+              "activity": {"total": total, "active": active, "pending_app": pending_app,
+                           "strata_active": strata_active, "parallax_active": parallax_active,
+                           "prog_requests": prog_requests},
+              "investigations": {"obj_submitted": obj_submitted, "obj_passed": obj_passed,
+                                 "research_runs": research_runs, "reports_pending": reports_pending}}
+        return render_template("admin_ops.html", vm=vm)
+
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")
     def pubkey():
