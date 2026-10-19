@@ -38,6 +38,10 @@ REQUIRED_ROUTES = [
     "/me/workspace/incident", "/me/workspace/incident/data", "/me/workspace/incident/draft",
     "/me/report", "/me/report/draft", "/me/mission",
     "/account", "/parallax/workspace", "/resources",
+    # PARALLAX research-workspace draft persistence (nonprod + flag gated at request time; the URL
+    # rules are always registered, so the doc check can assert they exist).
+    "/parallax/research/draft", "/parallax/research/experiment/draft",
+    "/parallax/research/investigation/draft",
 ]
 
 # Per-board environment facts the docs state (board -> expected environment_kind).

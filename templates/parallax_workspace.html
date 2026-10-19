@@ -68,6 +68,11 @@
                 <button class="btn btn-primary" id="btn-attack">Run adversarial trial</button>
               </div>
               <div class="pxw-state mono" id="trial-status" role="status" aria-live="polite"></div>
+              <div class="pxw-saverow">
+                <button class="btn btn-ghost btn-sm" id="exp-save" type="button">Save progress</button>
+                <span class="pxw-savestate mono" id="exp-savestate" role="status" aria-live="polite" data-s="idle">Not saved yet</span>
+                <span class="pxw-savehint">Save progress stores your setup only — it never runs a trial.</span>
+              </div>
             </div>
           </div>
         </div>
@@ -117,6 +122,11 @@
                   placeholder="Explain what the evidence shows about the trust-boundary behavior…"></textarea></div>
               <div class="pxw-actions"><button class="btn btn-ghost" id="btn-investigate">Submit investigation</button></div>
               <div class="pxw-state mono" id="inv-status" role="status" aria-live="polite"></div>
+              <div class="pxw-saverow">
+                <button class="btn btn-ghost btn-sm" id="inv-save" type="button">Save progress</button>
+                <span class="pxw-savestate mono" id="inv-savestate" role="status" aria-live="polite" data-s="idle">Not saved yet</span>
+                <span class="pxw-savehint">Save progress stores your draft analysis only — it never submits.</span>
+              </div>
             </div>
           </div>
         </div>
@@ -244,6 +254,15 @@
   .pxw-table td:first-child{color:var(--ink)}
   .pxw-tag-ok{color:#0f7a48} .pxw-tag-sim{color:var(--mut)}
 
+  .pxw-saverow{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line2)}
+  .pxw-savestate{font-size:11.5px;color:var(--mut)}
+  .pxw-savestate::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--mut)}
+  .pxw-savestate[data-s="saving"]{color:var(--violet)} .pxw-savestate[data-s="saving"]::before{background:var(--violet)}
+  .pxw-savestate[data-s="saved"]{color:#0f7a48} .pxw-savestate[data-s="saved"]::before{background:#0f7a48}
+  .pxw-savestate[data-s="unsaved"]{color:#b4690e} .pxw-savestate[data-s="unsaved"]::before{background:#b4690e}
+  .pxw-savestate[data-s="failed"]{color:#c0392b} .pxw-savestate[data-s="failed"]::before{background:#c0392b}
+  .pxw-savehint{font-size:10.5px;color:var(--mut);margin-left:auto}
+
   @media (max-width:900px){ .pxw-split{grid-template-columns:1fr} .pxw-pair{grid-template-columns:1fr}
     .pxw-head{flex-direction:column} .pxw-target{width:100%;justify-content:space-between} }
 </style>
@@ -255,6 +274,7 @@
   function post(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(b||{})}).then(function(r){return r.json().then(function(j){return {status:r.status,body:j};});});}
   function get(u){return fetch(u,{headers:{'Accept':'application/json'}}).then(function(r){return r.json();});}
   function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  var expDraft=null, invDraft=null;   // durable Save-Progress controllers (assigned below)
 
   var tabs=document.querySelectorAll('.seg-i');
   tabs.forEach(function(t){t.addEventListener('click',function(){
@@ -315,7 +335,7 @@
       '<span>duration <b>'+esc(t.duration_s)+'s</b></span>'+
       '<span>retrieved <b>'+((b.retrieved_doc_ids||[]).length)+'</b></span>';
     $('r-raw').textContent=JSON.stringify(b,null,2);
-    if(b.trial_id)$('ev-id').value=b.trial_id;}
+    if(b.trial_id){$('ev-id').value=b.trial_id;if(invDraft)invDraft.nudge();}}
 
   function runTrial(withAttack){var st=$('trial-status');
     var payload={task_id:$('task').value};if(withAttack&&attack.value.length)payload.attack_text=attack.value;
@@ -333,7 +353,9 @@
     if(!bd.evidence_run_id){st.dataset.k='err';st.textContent='Run a trial first to produce an evidence id.';return;}
     st.dataset.k='run';st.textContent='submitting…';
     post('/parallax/research/investigation',bd).then(function(r){st.dataset.k=(r.status===201?'ok':'err');
-      st.textContent=(r.body.investigation_id?('submitted · '+r.body.investigation_id+' · status: under review'):(r.body.error||('HTTP '+r.status)));});});
+      st.textContent=(r.body.investigation_id?('submitted · '+r.body.investigation_id+' · status: under review'):(r.body.error||('HTTP '+r.status)));
+      if(r.status===201&&r.body.investigation_id){ // supersede the draft so submitted analysis does not resurface
+        $('analysis').value='';$('ev-id').value='';if(invDraft)invDraft.supersede();}});});
 
   $('btn-history').addEventListener('click',function(){get('/parallax/research/history').then(function(j){
     var rows=(j.runs||[]),tb=$('hist-rows');
@@ -342,6 +364,65 @@
     tb.innerHTML=rows.map(function(x){return '<tr><td>'+esc(x.run_id)+'</td><td>'+esc((x.model_id&&x.model_id!=='n/a')?'trial':'record')+
       '</td><td class="'+(x.backend_provenance==='infrastructure_backed'?'pxw-tag-ok':'pxw-tag-sim')+'">'+esc(x.backend_provenance)+
       '</td><td>'+esc(x.record_count)+'</td><td>'+(x.is_empirical_finding?'yes':'no')+'</td></tr>';}).join('');});});
+
+  // ===================== durable draft persistence (Save Progress) =====================
+  // Autosaves IN-PROGRESS candidate inputs to the shared server-side draft service. Save Progress
+  // is NOT Run and NOT Submit: it only calls the /draft endpoints, which never run a model, consume
+  // trial quota, submit, sign evidence, or grade. Values are preserved across navigation, refresh,
+  // logout/login and new sessions, and on a save failure the on-screen text is never discarded.
+  function mkDraft(opts){
+    var base=0,timer=null,dirty=false,inflight=false,snapAtSend=null;
+    var btn=$(opts.btn),state=$(opts.state);
+    function setState(s,msg){state.dataset.s=s;if(msg!=null)state.textContent=msg;}
+    function ser(){return JSON.stringify(opts.collect());}
+    function doSave(){
+      if(inflight){dirty=true;return;}
+      var payload=opts.collect(),snap=JSON.stringify(payload);
+      inflight=true;setState('saving','Saving…');
+      post(opts.url,{payload:payload,base_version:base}).then(function(r){
+        inflight=false;
+        if(r.status===200&&r.body&&r.body.ok){
+          base=r.body.version;snapAtSend=snap;
+          if(ser()!==snap){dirty=false;setState('unsaved','Unsaved changes');schedule();}
+          else{dirty=false;setState('saved','Saved');}
+        }else if(r.status===409){ // optimistic-concurrency conflict with another tab/session
+          var cur=r.body&&r.body.current;if(cur&&typeof cur.version==='number')base=cur.version;
+          // keep the user's on-screen text; surface the conflict; do NOT silently overwrite newer work
+          setState('unsaved','Updated in another session — your edits are kept; Save again to overwrite');
+        }else{setState('failed',(r.body&&r.body.error)?('Save failed: '+r.body.error):'Save failed — click Save progress to retry');}
+      }).catch(function(){inflight=false;setState('failed','Save failed — click Save progress to retry');});
+    }
+    function schedule(){if(timer)clearTimeout(timer);timer=setTimeout(doSave,1200);}
+    function onEdit(){dirty=true;setState('unsaved','Unsaved changes');schedule();}
+    (opts.fields||[]).forEach(function(el){if(el){el.addEventListener('input',onEdit);el.addEventListener('change',onEdit);}});
+    if(btn)btn.addEventListener('click',function(){if(timer)clearTimeout(timer);doSave();});
+    return {
+      nudge:onEdit,
+      restore:function(d){if(d&&d.payload){opts.apply(d.payload);base=d.version||0;snapAtSend=ser();dirty=false;setState('saved','Restored');}},
+      supersede:function(){ // after an explicit Submit: persist the now-empty draft so it won't resurface
+        if(timer)clearTimeout(timer);dirty=true;doSave();},
+      flush:function(){ // best-effort save on navigation using a keepalive request
+        if(!dirty||inflight)return;
+        try{fetch(opts.url,{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+          body:JSON.stringify({payload:opts.collect(),base_version:base})});}catch(e){}}
+    };
+  }
+
+  expDraft=mkDraft({url:'/parallax/research/experiment/draft',fields:[$('task'),attack],btn:'exp-save',state:'exp-savestate',
+    collect:function(){return {task_id:$('task').value||'',attack_text:attack.value||''};},
+    apply:function(p){if(p.task_id)$('task').value=p.task_id;attack.value=p.attack_text||'';syncCond();}});
+  invDraft=mkDraft({url:'/parallax/research/investigation/draft',fields:[$('ev-id'),$('analysis')],btn:'inv-save',state:'inv-savestate',
+    collect:function(){return {evidence_run_id:$('ev-id').value||'',analysis:$('analysis').value||''};},
+    apply:function(p){if(p.evidence_run_id)$('ev-id').value=p.evidence_run_id;$('analysis').value=p.analysis||'';}});
+
+  // Restore any saved drafts for the active protocol (navigation / refresh / logout-login / new session)
+  get('/parallax/research/draft').then(function(j){
+    if(j&&j.ok){if(j.experiment)expDraft.restore(j.experiment);if(j.investigation)invDraft.restore(j.investigation);}
+  }).catch(function(){});
+
+  // Flush unsaved edits on navigation away so nothing composed is lost
+  window.addEventListener('pagehide',function(){expDraft.flush();invDraft.flush();});
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden'){expDraft.flush();invDraft.flush();}});
 })();
 </script>
 {% endblock %}

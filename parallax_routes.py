@@ -48,12 +48,13 @@ def _admins():
 _RUN_HITS: dict = {}
 
 
-def _rate_limited(key: str) -> bool:
+def _rate_limited(key: str, limit: int = None) -> bool:
     import time as _t
-    try:
-        limit = int(os.environ.get("RANGER_RESEARCH_RUN_LIMIT_PER_MIN", "20") or "20")
-    except ValueError:
-        limit = 20
+    if limit is None:
+        try:
+            limit = int(os.environ.get("RANGER_RESEARCH_RUN_LIMIT_PER_MIN", "20") or "20")
+        except ValueError:
+            limit = 20
     now = _t.time()
     window = [t for t in _RUN_HITS.get(key, []) if now - t < 60.0]
     if len(window) >= limit:
@@ -600,6 +601,121 @@ def register(app, candidate_model=None, db=None, helpers=None):
                        assessment_only=True, pathway_qualified=False), 201
     app.add_url_rule("/parallax/research/investigation", "parallax_research_investigation",
                      parallax_research_investigation, methods=["POST"])
+
+    # ---- Phase 2D: durable draft persistence for the PARALLAX research workspace -------------------
+    # Save Progress for the IN-PROGRESS experiment configuration and research analysis, on the SAME
+    # shared drafts.py service + workspace_drafts table that backs the STRATA surfaces. A draft is
+    # mutable candidate-authored working text; it is NOT a trial, a submission, or signed evidence.
+    #
+    # Hard boundary (enforced by construction): these handlers call ONLY drafts.save / drafts.load.
+    # They never touch model_backend.from_config(), harness.run_trial, store.persist_run, the trial
+    # rate-limiter, or any signing path - so a draft save can never launch a model execution, consume
+    # trial quota, submit an experiment, create a signed research artifact, or change qualification.
+    # The immutable Ed25519-signed ParallaxResearchRun records are untouched; a draft only remembers
+    # which evidence run id the candidate referenced (inside its opaque payload).
+
+    def _draft_ctx():
+        """Authorize a PARALLAX draft request and resolve the owning candidate row.
+        Returns (candidate, None) on success, or (None, (response, status)) on failure.
+        Nonprod-gated; requires an active authenticated candidate SESSION holding an ACTIVE PARALLAX
+        membership (no STRATA fallback, so a STRATA-only candidate is denied). It does NOT require the
+        signed Lab-A approval: a draft is in-progress candidate text, never a research execution."""
+        if not _nonprod():
+            return None, ("not found", 404)
+        c = _resolve_candidate()                         # active status enforced here
+        if not c:
+            return None, (jsonify(error="active authenticated researcher session required"), 401)
+        if not _parallax_member_cid(c.id):               # explicit PARALLAX entitlement (no fallback)
+            return None, (jsonify(error="not authorized for the PARALLAX program"), 403)
+        return c, None
+
+    def _research_scope(kind):
+        """(board, case_key, dataset_version) for a PARALLAX research draft. PARALLAX has no board
+        concept (the workspace vm fixes board=1), so board is 1 and the research PROTOCOL identity
+        (protocol + harness + prompt-template + corpus version/content-hash) is folded into BOTH the
+        case_key and the dataset_version. Because drafts.load/save scope on case_key, a draft composed
+        under one protocol/corpus/prompt-template can never silently reattach to an incompatible one:
+        a version bump changes the hash, which changes the case_key, which segregates the draft."""
+        import hashlib as _hl
+        from parallax.research import protocol as _P, corpus as _corpus
+        from parallax.research import HARNESS_VERSION as _HV
+        from parallax.research.model_backend import PROMPT_TEMPLATE_VERSION as _PTV
+        corpus = _corpus.default_corpus()
+        proto = "|".join([_P.PROTOCOL_VERSION, str(_HV), _PTV, corpus.version, corpus.content_hash()])
+        h = _hl.sha256(proto.encode()).hexdigest()
+        prefix = {"parallax_experiment": "px-exp", "parallax_investigation": "px-inv"}[kind]
+        return 1, "%s:%s" % (prefix, h[:40]), h[:16]
+
+    def _draft_rate_limited(kind, cid):
+        try:
+            lim = int(os.environ.get("RANGER_RESEARCH_DRAFT_LIMIT_PER_MIN", "120") or "120")
+        except ValueError:
+            lim = 120
+        return _rate_limited("draft:%s:%s" % (kind, cid), limit=lim)
+
+    def _save_research_draft(kind):
+        c, err = _draft_ctx()
+        if err:
+            return err
+        if _draft_rate_limited(kind, c.id):
+            return jsonify(ok=False, error="draft-save rate limit exceeded; try again shortly"), 429
+        body = request.get_json(silent=True) or {}
+        payload = body.get("payload")
+        if not isinstance(payload, dict):
+            return jsonify(ok=False, error="a payload object is required"), 400
+        base_version = body.get("base_version", 0)
+        if not isinstance(base_version, int) or base_version < 0:
+            return jsonify(ok=False, error="base_version must be a non-negative integer"), 400
+        # Program rule (task_id must be a real legitimate task) lives at the route so drafts.py stays
+        # program-agnostic. An empty task_id is allowed - a draft may be saved before a task is chosen.
+        if kind == "parallax_experiment":
+            tid = str(payload.get("task_id") or "")
+            if tid:
+                from parallax.research import protocol as _P
+                if not any(t["task_id"] == tid for t in _P.LEGIT_TASKS):
+                    return jsonify(ok=False, error="unknown task_id; choose one from the brief"), 400
+        board, case_key, dsv = _research_scope(kind)
+        import drafts as _drafts
+        try:
+            res = _drafts.save(c.id, "parallax", board, kind, case_key, dsv, payload, base_version)
+        except _drafts.DraftError as e:
+            return jsonify(ok=False, error="invalid draft: %s" % e), 400
+        if res.get("conflict"):
+            return jsonify(ok=False, conflict=True, current=res.get("current")), 409
+        return jsonify(ok=True, version=res["version"], saved_at=res["updated_at"]), 200
+
+    def parallax_research_experiment_draft():
+        """Autosave the IN-PROGRESS experiment configuration ({task_id, attack_text}). Never runs a
+        trial, consumes quota, signs evidence, or qualifies - the explicit run action does that."""
+        return _save_research_draft("parallax_experiment")
+    app.add_url_rule("/parallax/research/experiment/draft", "parallax_research_experiment_draft",
+                     parallax_research_experiment_draft, methods=["POST"])
+
+    def parallax_research_investigation_draft():
+        """Autosave the IN-PROGRESS research analysis ({evidence_run_id, analysis}). Never submits,
+        grades, reruns an experiment, or mutates the immutable signed evidence it references."""
+        return _save_research_draft("parallax_investigation")
+    app.add_url_rule("/parallax/research/investigation/draft",
+                     "parallax_research_investigation_draft",
+                     parallax_research_investigation_draft, methods=["POST"])
+
+    def parallax_research_draft_load():
+        """Return this candidate's current experiment + investigation drafts for the active protocol,
+        so the workspace restores unfinished work after navigation, refresh, logout/login, or a new
+        authenticated session. Read-only: no model call, no quota, no evidence, no grading."""
+        c, err = _draft_ctx()
+        if err:
+            return err
+        import drafts as _drafts
+        _, exp_key, _ = _research_scope("parallax_experiment")
+        _, inv_key, _ = _research_scope("parallax_investigation")
+        return jsonify(
+            ok=True,
+            experiment=_drafts.load(c.id, "parallax", 1, "parallax_experiment", exp_key),
+            investigation=_drafts.load(c.id, "parallax", 1, "parallax_investigation", inv_key),
+        ), 200
+    app.add_url_rule("/parallax/research/draft", "parallax_research_draft_load",
+                     parallax_research_draft_load, methods=["GET"])
 
     def _reviewers():
         return {r.strip() for r in os.environ.get("REVIEWER_GITHUB_IDS", "").split(",") if r.strip()}

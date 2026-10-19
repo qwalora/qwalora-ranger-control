@@ -17,6 +17,8 @@ from models import WorkspaceDraft, db as _db, _now
 
 MAX_PAYLOAD_BYTES = 262144  # 256 KiB hard cap on a serialized draft payload (holds long reports)
 MAX_REPORT_BODY_CHARS = 100000  # generous ceiling for a long technical report draft
+MAX_ATTACK_CHARS = 4000      # PARALLAX experiment attacker-document draft cap (mirrors the run route)
+MAX_ANALYSIS_CHARS = 20000   # PARALLAX investigation analysis draft cap (mirrors the submit route)
 
 _VERDICTS = {"", "true_positive", "false_positive"}
 _SEVERITIES = {"", "low", "medium", "high", "critical"}
@@ -133,9 +135,51 @@ def _validate_strata_report(payload):
     return {"body": body}
 
 
+def _validate_parallax_experiment(payload):
+    """PARALLAX experiment-workspace draft: {"task_id": "<legit task id|''>", "attack_text": "<text>"}.
+    The candidate's IN-PROGRESS experiment configuration: the selected research task and the
+    composed lower-trust attacker document. Saving this NEVER runs a trial, consumes trial quota,
+    signs evidence, or changes qualification — those happen only through the explicit run action.
+    Bounded + type-checked here; task_id membership in LEGIT_TASKS is enforced at the route so the
+    draft service stays program-agnostic. An empty task_id/attack_text is valid for a draft."""
+    if not isinstance(payload, dict):
+        raise DraftError("payload must be an object")
+    task_id = payload.get("task_id", "")
+    if not isinstance(task_id, str) or len(task_id) > 80:
+        raise DraftError("invalid task_id")
+    attack_text = payload.get("attack_text", "")
+    if not isinstance(attack_text, str):
+        raise DraftError("attack_text must be a string")
+    if len(attack_text) > MAX_ATTACK_CHARS:
+        raise DraftError("attack_text too long")
+    return {"task_id": task_id, "attack_text": attack_text}
+
+
+def _validate_parallax_investigation(payload):
+    """PARALLAX investigation/analysis-workspace draft:
+       {"evidence_run_id": "<run id|''>", "analysis": "<written analysis>"}.
+    The candidate's IN-PROGRESS trust-boundary analysis plus the id of the evidence run it
+    references. Saving this NEVER modifies the immutable signed run, reruns an experiment, submits,
+    or grades. Bounded + type-checked here; evidence-run ownership is enforced at the submit route.
+    An empty evidence_run_id/analysis is valid for a draft (work in progress)."""
+    if not isinstance(payload, dict):
+        raise DraftError("payload must be an object")
+    run_id = payload.get("evidence_run_id", "")
+    if not isinstance(run_id, str) or len(run_id) > 80:
+        raise DraftError("invalid evidence_run_id")
+    analysis = payload.get("analysis", "")
+    if not isinstance(analysis, str):
+        raise DraftError("analysis must be a string")
+    if len(analysis) > MAX_ANALYSIS_CHARS:
+        raise DraftError("analysis too long")
+    return {"evidence_run_id": run_id, "analysis": analysis}
+
+
 _VALIDATORS = {"board1_triage": _validate_board1_triage,
                "board1_incident": _validate_board1_incident,
-               "strata_report": _validate_strata_report}
+               "strata_report": _validate_strata_report,
+               "parallax_experiment": _validate_parallax_experiment,
+               "parallax_investigation": _validate_parallax_investigation}
 
 
 def validate(kind, payload):
@@ -194,7 +238,7 @@ def save(candidate_id, program, board, kind, case_key, dataset_version, payload,
     if row is None:
         # creating: the client must not believe a draft already exists
         if base_version not in (0, None):
-            return {"conflict": True, "current": {"payload": {"adjudications": {}}, "version": 0,
+            return {"conflict": True, "current": {"payload": {}, "version": 0,
                                                   "dataset_version": dataset_version,
                                                   "updated_at": None}}
         row = WorkspaceDraft(candidate_id=candidate_id, program=program, board=board, kind=kind,

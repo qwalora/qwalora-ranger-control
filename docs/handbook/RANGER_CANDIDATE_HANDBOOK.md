@@ -176,8 +176,33 @@ confirmation) that sends your report to a reviewer. The established report polic
 empty report is rejected server-side, and no new minimum length or scoring was introduced. A
 successful submission supersedes the draft so it does not resurface as unsubmitted work.
 
-*(Draft autosave now covers the Board-1 SOC triage, the Board-1 incident investigation, and the
-written report. The PARALLAX workspaces are tracked for the same treatment; see
+### PARALLAX research workspace
+
+The PARALLAX research console autosaves your in-progress work the same way, on the same shared
+server-side draft service, with the same program/board/protocol scoping and optimistic-concurrency
+protection. Two independent drafts are kept:
+
+- **Experiment setup** — the legitimate task you selected and the attacker-controlled (low-trust)
+  document you are composing. Restored after navigation, refresh, logout/login, and a new
+  authenticated session, with **Saving**, **Saved**, **Unsaved changes**, and **Save failed**
+  indicators and an explicit **Save progress** button beside the run controls.
+- **Research analysis** — your reasoned trust-boundary analysis and the evidence (trial) id it
+  references. Restored the same way, with its own **Save progress** button beside **Submit
+  investigation**. Restoring an analysis never reruns an experiment.
+
+**Save progress is not Run and not Submit.** Saving a PARALLAX draft only stores your unfinished
+text. It never launches a model execution, consumes trial quota, submits an experiment, creates a
+signed research artifact, grades, or changes qualification state. An experiment runs only through
+**Run benign control** / **Run adversarial trial**, and an analysis is submitted only through
+**Submit investigation** — both unchanged. Your drafts are scoped to the active research protocol
+version (protocol, harness, prompt-template, and corpus version), so a draft composed under one
+protocol can never silently reattach to an incompatible one. Immutable Ed25519-signed evidence,
+completed trials, and submitted research assessments are separate records and are never altered by
+draft saving. A successful investigation submission supersedes the analysis draft so submitted work
+does not resurface as unsubmitted.
+
+*(Draft autosave now covers the Board-1 SOC triage, the Board-1 incident investigation, the written
+report, and both PARALLAX research workspaces — experiment setup and research analysis. See
 docs/DRAFT_PERSISTENCE_AUDIT.md.)*
 
 ## 10. Reviewer workflows
