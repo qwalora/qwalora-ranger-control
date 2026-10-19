@@ -264,7 +264,7 @@ h1.t{font:700 26px/1.08 var(--f);letter-spacing:-.8px;margin-top:12px;color:var(
 }
 
 /* ---- Ranges admin (infrastructure view) ------------------------------- */
-.app.app-2col{grid-template-columns:238px 1fr 60px}
+.app.app-2col{grid-template-columns:238px 1fr}
 .ranges-main{background:#fff;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 .rg-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px;border-bottom:1px solid var(--line)}
 .rg-head .ttl{display:flex;align-items:center;gap:8px;font:600 17px/1 var(--f);letter-spacing:-.3px}
