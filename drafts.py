@@ -60,7 +60,66 @@ def _validate_board1_triage(payload):
     return {"adjudications": clean}
 
 
-_VALIDATORS = {"board1_triage": _validate_board1_triage}
+def _s(v, cap):
+    """Coerce to a string and cap its length; reject non-strings."""
+    if not isinstance(v, str):
+        raise DraftError("expected a string field")
+    if len(v) > cap:
+        raise DraftError("field too long")
+    return v
+
+
+def _validate_board1_incident(payload):
+    """Board-1 incident investigation draft:
+       {"incidents":[{key,label,entry,chain,hosts,accts,evidence}],
+        "assign":{alert_id: incident_key}, "nextInc": int, "selKey": str|null}
+    Values are the candidate's own in-progress inputs (never an answer key). Bounded + type-checked."""
+    if not isinstance(payload, dict):
+        raise DraftError("payload must be an object")
+    incs_in = payload.get("incidents", [])
+    assign_in = payload.get("assign", {})
+    if not isinstance(incs_in, list) or len(incs_in) > 200:
+        raise DraftError("invalid incidents")
+    if not isinstance(assign_in, dict) or len(assign_in) > 5000:
+        raise DraftError("invalid assign")
+    keys = set()
+    incidents = []
+    for it in incs_in:
+        if not isinstance(it, dict):
+            raise DraftError("invalid incident entry")
+        key = _s(it.get("key", ""), 40)
+        if not key or key in keys:
+            raise DraftError("invalid or duplicate incident key")
+        keys.add(key)
+        incidents.append({
+            "key": key,
+            "label": _s(it.get("label", ""), 80),
+            "entry": _s(it.get("entry", ""), 40),
+            "chain": _s(it.get("chain", ""), 600),
+            "hosts": _s(it.get("hosts", ""), 800),
+            "accts": _s(it.get("accts", ""), 800),
+            "evidence": _s(it.get("evidence", ""), 4000),
+        })
+    assign = {}
+    for aid, k in assign_in.items():
+        if not isinstance(aid, str) or len(aid) > 40:
+            raise DraftError("invalid alert id in assign")
+        kk = _s(k if k is not None else "", 40)
+        if kk:  # only keep real assignments; an assignment to a missing incident is dropped
+            if kk in keys:
+                assign[aid] = kk
+    nxt = payload.get("nextInc", 1)
+    if not isinstance(nxt, int) or nxt < 1 or nxt > 100000:
+        raise DraftError("invalid nextInc")
+    sel = payload.get("selKey", "")
+    sel = _s(sel if sel is not None else "", 40)
+    if sel and sel not in keys:
+        sel = ""
+    return {"incidents": incidents, "assign": assign, "nextInc": nxt, "selKey": sel}
+
+
+_VALIDATORS = {"board1_triage": _validate_board1_triage,
+               "board1_incident": _validate_board1_incident}
 
 
 def validate(kind, payload):

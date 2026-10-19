@@ -35,7 +35,8 @@ sys.path.insert(0, ROOT)
 # that reference it are stale and this check fails.
 REQUIRED_ROUTES = [
     "/me", "/me/workspace", "/me/workspace/data", "/me/workspace/draft",
-    "/me/workspace/incident", "/me/mission",
+    "/me/workspace/incident", "/me/workspace/incident/data", "/me/workspace/incident/draft",
+    "/me/mission",
     "/account", "/parallax/workspace", "/resources",
 ]
 

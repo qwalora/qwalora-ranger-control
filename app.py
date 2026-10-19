@@ -590,6 +590,7 @@ def create_app():
         "grade_submit": (120, 60), "lab_dataset": (120, 60),
         # autosave is debounced client-side; generous per-IP ceiling to blunt abuse only
         "candidate_workspace_draft": (300, 60),
+        "candidate_incident_draft": (300, 60),
     }
 
     def _client_ip():
@@ -4256,10 +4257,14 @@ def create_app():
         from models import IncidentAssessment
         prev = (IncidentAssessment.query.filter_by(candidate_id=c.id, board=n)
                 .order_by(IncidentAssessment.id.desc()).first())
-        return jsonify(ok=True, board=n, case_ref=_scenario_ref(c, n, seed),
+        case_ref = _scenario_ref(c, n, seed)
+        import drafts as _drafts
+        draft = _drafts.load(c.id, "strata", n, "board1_incident", case_ref)
+        return jsonify(ok=True, board=n, case_ref=case_ref,
                        theme=ds.get("theme"), alerts=ds.get("alerts", []),
                        last_score=(prev.score if prev else None),
-                       attempts=(prev.attempts if prev else 0)), 200
+                       attempts=(prev.attempts if prev else 0),
+                       dataset_version=_dataset_version(seed), draft=draft), 200
 
     @app.post("/me/workspace/incident/submit")
     @require_program("strata")
@@ -4287,6 +4292,16 @@ def create_app():
                 return jsonify(error="submission must be valid JSON"), 400
         if not isinstance(submission, dict):
             return jsonify(error="a submission object is required"), 400
+        # Completeness gate: never grade (and never record a signed attempt for) an empty or
+        # unassigned investigation. A draft is how in-progress work is kept; a SUBMISSION must
+        # contain at least one incident with at least one assigned alert.
+        incs = submission.get("incidents")
+        if not isinstance(incs, list) or not incs:
+            return jsonify(error="Create at least one incident before submitting."), 400
+        total_assigned = sum(len(i.get("alert_ids") or [])
+                             for i in incs if isinstance(i, dict))
+        if total_assigned == 0:
+            return jsonify(error="Assign at least one alert to an incident before submitting."), 400
         seed = _current_seed(c)
         if not seed:
             _ensure_seed(c, n); seed = _current_seed(c)
@@ -4298,6 +4313,47 @@ def create_app():
                        per_incident=per_incident, reference_bar=P.PASS_BAR,
                        note="Incident investigation is an additive assessment; it does not change "
                             "Board-1 scoring or qualification."), 200
+
+    @app.post("/me/workspace/incident/draft")
+    @require_program("strata")
+    def candidate_incident_draft():
+        """Autosave the candidate's IN-PROGRESS incident investigation (incidents, alert
+        assignments, entry/technique-chain/hosts/accounts/evidence). Same security envelope as the
+        triage draft: session+CSRF, STRATA-entitled, active, Board 1, own seed-derived case,
+        optimistic concurrency. A draft save is NOT a submission: it NEVER grades, records a signed
+        IncidentAssessment, increments attempts, or changes qualification."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no incident workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow"), 409
+        body = request.get_json(silent=True) or {}
+        payload = body.get("payload")
+        if not isinstance(payload, dict):
+            return jsonify(error="a payload object is required"), 400
+        base_version = body.get("base_version", 0)
+        if not isinstance(base_version, int) or base_version < 0:
+            return jsonify(error="base_version must be a non-negative integer"), 400
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+            db.session.commit()
+        case_ref = _scenario_ref(c, n, seed)
+        import drafts as _drafts
+        try:
+            res = _drafts.save(c.id, "strata", n, "board1_incident", case_ref,
+                               _dataset_version(seed), payload, base_version)
+        except _drafts.DraftError as e:
+            return jsonify(ok=False, error="invalid draft: %s" % e), 400
+        if res.get("conflict"):
+            return jsonify(ok=False, conflict=True, current=res.get("current")), 409
+        return jsonify(ok=True, version=res["version"], saved_at=res["updated_at"]), 200
 
     def _account_vm(c):
         brands = _program_brands()

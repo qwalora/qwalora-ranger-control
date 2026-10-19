@@ -146,8 +146,24 @@ launch control for your current board.
 - **Your drafts are private to you** and scoped to your program, board, case, and dataset attempt.
   They are never shared across candidates or programs.
 
-*(Draft autosave currently covers the Board-1 SOC triage. The incident investigation, written
-report, and PARALLAX workspaces are tracked for the same treatment; see
+### Incident investigation (Board 1)
+
+The Board-1 incident investigation autosaves the same way. Your whole in-progress investigation —
+the incidents you create, which alerts you assign to each, the entry alert, the ordered MITRE
+ATT&CK technique chain, affected hosts and accounts, and evidence references — is saved to the
+server and restored after navigation, refresh, logout/login, and a new session. It shows
+**Saving**, **Saved**, **Unsaved changes**, and **Save failed** states and an explicit
+**Save progress** button beside **Submit investigation**.
+
+**Submitting an investigation** is separate and explicit, and requires at least one incident with
+at least one assigned alert: the **Submit investigation** button is disabled until you have
+assigned an alert, and the server rejects an empty or unassigned submission so it is never graded
+or recorded as an attempt. Saving progress never grades, never records a scored attempt, and never
+changes qualification. (The incident investigation is an additional, non-graded exercise; it does
+not affect Board-1 scoring or the 95% standard.)
+
+*(Draft autosave now covers the Board-1 SOC triage and the Board-1 incident investigation. The
+written report and PARALLAX workspaces are tracked for the same treatment; see
 docs/DRAFT_PERSISTENCE_AUDIT.md.)*
 
 ## 10. Reviewer workflows
