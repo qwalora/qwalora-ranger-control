@@ -1,28 +1,26 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_candnav.html" import candnav %}
 {% block title %}Your Ranger · Qwalora{% endblock %}
 {% block body %}
-<div class="page">
+<div class="shell">
   {% if vm.preview %}
-  <div style="background:var(--amber-bg,#2a2410);border-bottom:1px solid var(--amber,#8a6d1f);padding:10px 16px">
-    <div style="max-width:980px;margin:0 auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <div style="background:var(--amber-bg,#2a2410);border:1px solid var(--amber,#8a6d1f);border-radius:12px;padding:10px 16px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('user','ic ic-sm') }} Admin preview{% if vm.demo %} · demo{% endif %}</span>
-      <span class="muted" style="font-size:12.5px">Read-only. {% if vm.demo %}A sample dashboard, no real ranger.{% else %}You are viewing a ranger's dashboard, not acting as them.{% endif %}</span>
+      <span class="muted" style="font-size:12.5px;color:#d8cf9f">Read-only. {% if vm.demo %}A sample dashboard, no real ranger.{% else %}Viewing a ranger's dashboard, not acting as them.{% endif %}</span>
       {% if vm.demo %}
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-        <label class="muted" style="font-size:12px">Persona</label>
         <select class="input" style="padding:6px 10px;font:500 13px/1 var(--f)" onchange="window.location=this.value">
           {% for p in vm.personas %}
           <option value="/admin/preview?board={{ p.n }}" {% if not vm.persona_graduated and vm.persona_board == p.n %}selected{% endif %}>Board {{ p.n }} · {{ p.role_title }} ({{ p.badge }}){% if p.tier=='isolated' %} · isolated{% endif %}</option>
           {% endfor %}
-          <option value="/admin/preview?state=graduated" {% if vm.persona_graduated %}selected{% endif %}>Graduated · Qwalora Ranger, Certified</option>
+          <option value="/admin/preview?state=graduated" {% if vm.persona_graduated %}selected{% endif %}>Graduated · Certified</option>
         </select>
         <a class="btn btn-ghost btn-sm" href="/admin/cohort">Back to admin</a>
       </div>
       {% else %}
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-        <label class="muted" style="font-size:12px">Switch ranger</label>
         <select class="input" style="padding:6px 10px;font:500 13px/1 var(--f)"
                 onchange="if(this.value)window.location='/admin/preview/'+this.value">
           {% for o in vm.preview_candidates %}
@@ -35,118 +33,88 @@
     </div>
   </div>
   {% endif %}
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    {% if vm.preview %}
-    <span class="btn btn-ghost btn-pill" style="opacity:.5;pointer-events:none">Sign out</span>
-    {% else %}
-    <div style="display:flex;gap:8px;align-items:center">
-      <a class="btn btn-ghost btn-pill" href="/account">{{ ic('user','ic ic-sm') }} Account</a>
-      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-    </div>
-    {% endif %}
-  </div></header>
 
-  <div class="page-main">
-    <div class="card" style="max-width:620px">
-      <div class="card-head">
-        <span class="eyebrow"><span class="d"></span>Cohort {{ vm.cohort }} ·
-          {% if vm.status == 'graduated' %}Certified{% else %}{{ vm.status }}{% endif %}</span>
-        <h1 class="t">{{ vm.name }} <span class="mono dim" style="font-size:15px;font-weight:400">@{{ vm.handle }}</span></h1>
+  <div class="app app-2col">
+    {{ candnav('dashboard', vm) }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">{{ vm.name }} <span class="mono dim" style="font-weight:400;font-size:14px">@{{ vm.handle }}</span></div>
+          <div class="rg-sub">Cohort {{ vm.cohort }} ·
+            {% if vm.status == 'graduated' %}Certified{% else %}{{ vm.status }}{% endif %}{% if vm.is_dual %} · viewing {{ vm.program_brands[vm.selected_program] }}{% endif %}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          {% if vm.status == 'active' and vm.selected_program == 'strata' and vm.status != 'graduated' %}
+          <span class="pill {% if vm.cur_objective_passed %}pill-ok{% else %}pill-violet{% endif %}"><span class="dot {% if vm.cur_objective_passed %}dot-ok{% else %}dot-violet{% endif %}"></span>Board {{ vm.board }} · {{ vm.role_title }}</span>
+          {% elif vm.selected_program == 'parallax' %}
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ vm.program_brands['parallax'] }} · assessment-only</span>
+          {% endif %}
+        </div>
       </div>
-      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
+
+      <div class="cand-body">
 
         {% if vm.applied %}
-        <div class="verify-banner vb-warn">
-          {{ ic('clock','ic') }}
-          <div>
-            <b>Application pending review</b>
-            <span>An admin reviews each applicant before a seat and environment are granted.
-            You will be notified by email when it is decided. Nothing is provisioned yet.</span>
-          </div>
+        <div class="verify-banner vb-warn">{{ ic('clock','ic') }}
+          <div><b>Application pending review</b>
+            <span>An admin reviews each applicant before a seat and environment are granted. You will be notified by email when it is decided. Nothing is provisioned yet.</span></div>
         </div>
         {% elif vm.rejected %}
-        <div class="verify-banner vb-warn">
-          {{ ic('shield','ic') }}
-          <div>
-            <b>Not accepted for this cohort</b>
-            <span>Thank you for applying. Your application was not accepted this time. You're
-            welcome to apply again for a future cohort.</span>
-          </div>
-        </div>
-        {% endif %}
-
-        {% if vm.is_dual %}
-        <div class="field">
-          <label class="label">Program</label>
-          <div class="seg" role="tablist" aria-label="Your programs">
-            {% for p in vm.programs %}
-            <a class="seg-i {% if p == vm.selected_program %}on{% endif %}" role="tab"
-               aria-selected="{{ 'true' if p == vm.selected_program else 'false' }}"
-               href="/me?program={{ p }}">{{ vm.program_brands[p] }}</a>
-            {% endfor %}
-          </div>
-          <p class="dim" style="font-size:11.5px;margin-top:6px">You are authorized for both programs.
-            Each keeps its own assignments, progress, and records.</p>
+        <div class="verify-banner vb-warn">{{ ic('shield','ic') }}
+          <div><b>Not accepted for this cohort</b>
+            <span>Thank you for applying. Your application was not accepted this time. You're welcome to apply again for a future cohort.</span></div>
         </div>
         {% endif %}
 
         {% if vm.no_access %}
-        <div class="field">
-          <div class="empty" style="padding:28px 16px">
+        <div class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+          <div class="empty" style="padding:26px 16px">
             <span class="ring">{{ ic('lock','ic') }}</span>
             <b style="font:600 15px/1.2 var(--f)">No program access yet</b>
-            <p class="muted" style="font-size:13px;max-width:420px">Your Ranger account is active, but you
-              are not currently authorized for a program. Manage and request program access from your account.</p>
+            <p class="muted" style="font-size:13px;max-width:440px">Your Ranger account is active, but you are not currently authorized for a program. Manage and request program access from your account.</p>
             {% if vm.pending_programs %}
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px">
-              {% for p in vm.pending_programs %}
-              <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ vm.program_brands[p] }} · in review</span>
-              {% endfor %}
+              {% for p in vm.pending_programs %}<span class="pill pill-amber"><span class="dot dot-amber"></span>{{ vm.program_brands[p] }} · in review</span>{% endfor %}
             </div>
             {% endif %}
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
             <a class="btn btn-primary btn-sm" href="/account">{{ ic('user','ic ic-sm') }} Go to Program access</a>
           </div>
-        </div>
+        </div></div>
         {% endif %}
 
         {% if vm.next_action and vm.status == 'active' and not vm.no_access %}
-        <div class="field">
-          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px">
-            <span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>Next</span>
-            <b style="font:600 13px/1.35 var(--f);color:var(--ink)">{{ vm.next_action }}</b>
-          </div>
+        <div class="cand-next">
+          <span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>Next</span>
+          <b>{{ vm.next_action }}</b>
         </div>
         {% endif %}
 
         {% if not vm.applied and not vm.rejected and vm.selected_program == 'strata' %}
-        <div class="field">
-          <label class="label">Your progress</label>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            {% if vm.status == 'graduated' %}
-            <span class="pill pill-ok"><span class="dot dot-ok"></span>Graduated · certified</span>
-            {% else %}
-            <b style="font:600 15px/1 var(--f)">Board {{ vm.board }}</b>
-            <span class="muted">{{ vm.role_title }}</span>
-            <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
-            {% endif %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your progress</span></div>
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              {% if vm.status == 'graduated' %}
+              <span class="pill pill-ok"><span class="dot dot-ok"></span>Graduated · certified</span>
+              {% else %}
+              <b style="font:600 15px/1 var(--f)">Board {{ vm.board }}</b><span class="muted">{{ vm.role_title }}</span>
+              <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
+              {% endif %}
+            </div>
+            <div class="chain" style="margin-top:12px">
+              {% for b in vm.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
+              <span class="pip cert {% if vm.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
+            </div>
+            {% if vm.board_coverage %}<p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>{% endif %}
           </div>
-          <div class="chain" style="margin-top:12px">
-            {% for b in vm.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
-            <span class="pip cert {% if vm.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
-          </div>
-          {% if vm.board_coverage %}
-          <p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>
-          {% endif %}
         </div>
         {% endif %}
 
         {% if vm.notifications %}
-        <div class="field">
-          <label class="label">Updates{% if vm.unread %} <span class="unread-dot">{{ vm.unread }} new</span>{% endif %}</label>
-          <div class="notes">
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Updates{% if vm.unread %} · {{ vm.unread }} new{% endif %}</span></div>
+          <div class="card-body"><div class="notes">
             {% for nt in vm.notifications %}
             <div class="note-row {% if not nt.read %}note-new{% endif %}">
               <span class="note-ic note-{{ nt.kind }}">{% if nt.kind=='promotion' or nt.kind=='graduation' %}{{ ic('medal','ic ic-sm') }}{% elif nt.kind=='report' %}{{ ic('inbox','ic ic-sm') }}{% elif nt.kind=='range' %}{{ ic('server','ic ic-sm') }}{% else %}{{ ic('activity','ic ic-sm') }}{% endif %}</span>
@@ -154,99 +122,83 @@
               <span class="mono dim note-when">{{ nt.when }}</span>
             </div>
             {% endfor %}
-          </div>
+          </div></div>
         </div>
         {% endif %}
 
         {% if vm.status == 'active' and vm.selected_program == 'strata' %}
-        {% if vm.mission %}
-        <div class="field">
-          <label class="label">Mission brief</label>
-          <a href="/me/mission" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-              <div>
-                <b style="font:600 13.5px/1.2 var(--f);color:var(--ink,#e8e5ff)">{{ vm.mission.title }}</b>
-                <span class="muted" style="font-size:12px;display:block;margin-top:2px">{{ vm.mission.role_title }} · board {{ vm.board }} mission instructions</span>
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Assignment &amp; lab</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+            {% if vm.mission %}
+            <div>
+              <label class="label">Mission brief</label>
+              <a href="/me/mission" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                  <div><b style="font:600 13.5px/1.2 var(--f);color:var(--ink)">{{ vm.mission.title }}</b>
+                    <span class="muted" style="font-size:12px;display:block;margin-top:2px">{{ vm.mission.role_title }} · board {{ vm.board }} mission instructions</span></div>
+                  {% if vm.mission.available %}<span class="pill pill-ok"><span class="dot dot-ok"></span>environment ready</span>
+                  {% else %}<span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('lock','ic ic-sm') }} environment unavailable</span>{% endif %}
+                </div>
+              </a>
+            </div>
+            {% endif %}
+            <div>
+              <label class="label">Your lab</label>
+              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
+                <span class="pill {{ vm.range_pcls }}"><span class="dot {{ vm.range_dot }}"></span>{{ vm.range_label }}</span>
+                <span class="muted" style="font-size:12.5px">{{ vm.range_detail }}</span>
               </div>
-              {% if vm.mission.available %}
-              <span class="pill pill-ok"><span class="dot dot-ok"></span>environment ready</span>
-              {% else %}
-              <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ic('lock','ic ic-sm') }} environment unavailable</span>
+              <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+                {% if vm.preview %}
+                {% if vm.board == 1 %}<span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</span>{% endif %}
+                {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>{% endif %}
+                {% if vm.has_wg %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('key','ic ic-sm') }} Download WireGuard</span>{% endif %}
+                {% else %}
+                {% if vm.board == 1 %}<a class="btn btn-primary" href="/me/workspace">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</a>{% endif %}
+                {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn {% if vm.board == 1 %}btn-outline{% else %}btn-primary{% endif %}">{{ ic('server','ic ic-sm') }} Start lab</button></form>{% endif %}
+                {% if vm.has_wg %}<a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>{% endif %}
+                {% endif %}
+              </div>
+              {% if vm.board == 1 %}
+              <p class="dim" style="font-size:12px;margin-top:8px">Launch your SOC workspace to triage this board's seeded alert queue in the browser: adjudicate each alert, assign severity, attribute technique and indicators. Grading is answer-free and server-side.</p>
+              {% elif vm.tier == 'shared' and vm.range_status == 'deployed' %}
+              {% if vm.siem_live %}<p class="dim" style="font-size:12px;margin-top:8px">Your shared SOC SIEM session is ready. Investigate this board's telemetry in the console; grading is answer-free and server-side.</p>
+              {% else %}<p class="dim" style="font-size:12px;margin-top:8px">Your analysis workspace is ready: a per-ranger seeded dataset for this board, worked in the browser. Grading is answer-free and server-side.</p>{% endif %}
               {% endif %}
             </div>
-          </a>
-          <p class="dim" style="font-size:11px;margin-top:6px">Read your full mission brief: scope, objectives, deliverables, evidence and support.</p>
-        </div>
-        {% endif %}
-        <div class="field">
-          <label class="label">Your lab</label>
-          <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:10px">
-            <span class="pill {{ vm.range_pcls }}"><span class="dot {{ vm.range_dot }}"></span>{{ vm.range_label }}</span>
-            <span class="muted" style="font-size:12.5px">{{ vm.range_detail }}</span>
-          </div>
-          <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
-            {% if vm.preview %}
-            {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
-            <span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>
-            {% endif %}
-            {% if vm.has_wg %}
-            <span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('key','ic ic-sm') }} Download WireGuard</span>
-            {% endif %}
-            {% else %}
-            {% if vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}
-            <form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>
-            {% endif %}
-            {% if vm.has_wg %}
-            <a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>
-            {% endif %}
-            {% endif %}
-          </div>
-          {% if vm.tier == 'shared' and vm.range_status == 'deployed' %}
-          {% if vm.siem_live %}
-          <p class="dim" style="font-size:12px;margin-top:8px">Your shared SOC SIEM session is ready. Investigate this board's telemetry in the console; grading is answer-free and server-side.</p>
-          {% else %}
-          <p class="dim" style="font-size:12px;margin-top:8px">Your analysis workspace is ready: a per-ranger seeded dataset for this board, worked in the browser. Grading is answer-free and server-side. (The hosted shared SIEM is rolling out.)</p>
-          {% endif %}
-          {% endif %}
-        </div>
-
-        <div class="field">
-          <label class="label">Clear board {{ vm.board }}</label>
-          <div class="gate">
-            <div class="gate-ch">
-              <span class="pill {% if vm.cur_objective_passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot {% if vm.cur_objective_passed %}dot-ok{% else %}dot-amber{% endif %}"></span>Objective</span>
-              <span class="muted" style="font-size:12.5px">{% if vm.cur_objective_score is not none %}{{ vm.cur_objective_score }}% (need {{ vm.pass_bar }}%){% else %}not submitted yet{% endif %}</span>
-            </div>
-            <div class="gate-ch">
-              <span class="pill {% if vm.cur_report_status=='approved' %}pill-ok{% elif vm.cur_report_status %}pill-amber{% else %}pill{% endif %}"><span class="dot {% if vm.cur_report_status=='approved' %}dot-ok{% elif vm.cur_report_status %}dot-amber{% else %}dot{% endif %}"></span>Report</span>
-              <span class="muted" style="font-size:12.5px">{{ vm.cur_report_label or 'not submitted yet' }}</span>
+            <div>
+              <label class="label">Clear board {{ vm.board }}</label>
+              <div class="gate">
+                <div class="gate-ch">
+                  <span class="pill {% if vm.cur_objective_passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot {% if vm.cur_objective_passed %}dot-ok{% else %}dot-amber{% endif %}"></span>Objective</span>
+                  <span class="muted" style="font-size:12.5px">{% if vm.cur_objective_score is not none %}{{ vm.cur_objective_score }}% (need {{ vm.pass_bar }}%){% else %}not submitted yet{% endif %}</span>
+                </div>
+                <div class="gate-ch">
+                  <span class="pill {% if vm.cur_report_status=='approved' %}pill-ok{% elif vm.cur_report_status %}pill-amber{% else %}pill{% endif %}"><span class="dot {% if vm.cur_report_status=='approved' %}dot-ok{% elif vm.cur_report_status %}dot-amber{% else %}dot{% endif %}"></span>Report</span>
+                  <span class="muted" style="font-size:12.5px">{{ vm.cur_report_label or 'not submitted yet' }}</span>
+                </div>
+              </div>
+              {% if vm.report_ok %}<p class="note-ok">{{ ic('medal','ic ic-sm') }} Report submitted. It is now in review.</p>{% endif %}
+              {% if vm.report_error %}<p class="note-warn">{{ vm.report_error }}</p>{% endif %}
+              {% if vm.cur_report_notes and vm.cur_report_status in ('needs_changes','rejected') %}<div class="reviewnote"><b>Reviewer:</b> {{ vm.cur_report_notes }}</div>{% endif %}
+              {% if vm.report_open %}
+              <form method="post" action="/me/report" style="margin-top:10px">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <textarea name="body" class="input" rows="5" placeholder="Your written analysis for board {{ vm.board }}: what you found, how, and the evidence. This is reviewed alongside your objective score." {% if vm.preview %}disabled{% endif %}></textarea>
+                {% if vm.preview %}<span class="btn btn-primary btn-sm" style="opacity:.5;pointer-events:none;margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</span>
+                {% else %}<button class="btn btn-primary btn-sm" style="margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</button>{% endif %}
+              </form>
+              {% elif vm.cur_report_status == 'pending' %}
+              <p class="dim" style="font-size:12px;margin-top:8px">Your report is in review. You will be promoted when it is approved and your objective is at {{ vm.pass_bar }}%.</p>
+              {% endif %}
             </div>
           </div>
-          {% if vm.report_ok %}<p class="note-ok">{{ ic('medal','ic ic-sm') }} Report submitted. It is now in review.</p>{% endif %}
-          {% if vm.report_error %}<p class="note-warn">{{ vm.report_error }}</p>{% endif %}
-          {% if vm.cur_report_notes and vm.cur_report_status in ('needs_changes','rejected') %}
-          <div class="reviewnote"><b>Reviewer:</b> {{ vm.cur_report_notes }}</div>
-          {% endif %}
-          {% if vm.report_open %}
-          <form method="post" action="/me/report" style="margin-top:10px">
-            <input type="hidden" name="csrf" value="{{ csrf_token }}">
-            <textarea name="body" class="input" rows="5" placeholder="Your written analysis for board {{ vm.board }}: what you found, how, and the evidence. This is reviewed alongside your objective score." {% if vm.preview %}disabled{% endif %}></textarea>
-            {% if vm.preview %}
-            <span class="btn btn-primary btn-sm" style="opacity:.5;pointer-events:none;margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</span>
-            {% else %}
-            <button class="btn btn-primary btn-sm" style="margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</button>
-            {% endif %}
-          </form>
-          {% elif vm.cur_report_status == 'pending' %}
-          <p class="dim" style="font-size:12px;margin-top:8px">Your report is in review. You will be promoted when it is approved and your objective is at {{ vm.pass_bar }}%.</p>
-          {% endif %}
         </div>
         {% endif %}
 
         {% if vm.resources and vm.selected_program == 'strata' %}
-        <div class="field">
-          <label class="label">Resources for this board</label>
-          <div class="record">
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Resources for this board</span></div>
+          <div class="card-body"><div class="record">
             {% for r in vm.resources %}
             <a class="rec-row rec-cleared" {% if r.url %}href="{{ r.url }}" target="_blank" rel="noopener"{% else %}href="/resources"{% endif %} style="text-decoration:none">
               <span class="res-type res-type-{{ r.rtype }}" style="flex:none">{{ r.rtype }}</span>
@@ -256,13 +208,13 @@
             {% endfor %}
           </div>
           <p class="dim" style="font-size:11.5px;margin-top:6px">Reference material, not lab solutions. More in the <a href="/resources">resource library</a>.</p>
+          </div>
         </div>
         {% endif %}
 
         {% if vm.selected_program == 'strata' %}
-        <div class="field">
-          <label class="label">Your record</label>
-          <div class="record">
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your record</span></div>
+          <div class="card-body"><div class="record">
             {% for p in vm.progress %}
             <div class="rec-row rec-{{ p.state }}">
               <span class="rec-pip t{{ p.board }}">{{ p.board }}</span>
@@ -277,70 +229,64 @@
             </div>
             {% endfor %}
           </div>
-        </div>
-
-        <div class="rowline">
-          <div class="field">
-            <label class="label">Your scenario</label>
-            <div class="tokenbox"><code>{{ vm.scenario_ref or 'assigned when you start' }}</code></div>
-            <p class="dim" style="font-size:11.5px">Your unique case reference. The scenario is generated and graded server-side; the generator seed is never exposed.</p>
+          <div class="rowline" style="margin-top:14px">
+            <div class="field"><label class="label">Your scenario</label>
+              <div class="tokenbox"><code>{{ vm.scenario_ref or 'assigned when you start' }}</code></div></div>
+            <div class="field"><label class="label">Submission token</label>
+              <div class="tokenbox"><code>{{ vm.token }}</code></div>
+              <p class="dim" style="font-size:11.5px">Send as <span class="mono">X-Candidate-Token</span> for the API.</p></div>
           </div>
-          <div class="field">
-            <label class="label">Submission token</label>
-            <div class="tokenbox"><code>{{ vm.token }}</code></div>
-            <p class="dim" style="font-size:11.5px">Send as <span class="mono">X-Candidate-Token</span> when submitting.</p>
           </div>
         </div>
         {% endif %}
 
         {% if vm.selected_program == 'parallax' %}
-        <div class="field">
-          <label class="label">Your assignment</label>
-          <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
-            <b style="font:600 13.5px/1.3 var(--f);color:var(--ink)">RAG prompt-injection trust-boundary investigation</b>
-            <span class="muted" style="font-size:12px;display:block;margin-top:3px">Determine whether attacker-controlled text in a low-trust retrieved document can make a genuine, locally hosted model violate its trust boundary. You control only the retrieved document.</span>
-          </div>
-        </div>
-        <div class="field">
-          <label class="label">Lab access</label>
-          <a href="{{ vm.parallax.workspace_url }}" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:14px 16px">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-              <div>
-                <b style="font:600 13.5px/1.2 var(--f);color:var(--ink,#160d42)">{{ ic('cpu','ic ic-sm') }} Open the research console</b>
-                <span class="muted" style="font-size:12px;display:block;margin-top:2px">Live model-backed experiments: benign controls, adversarial trials, deterministic evaluation.</span>
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your assignment</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+            <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
+              <b style="font:600 13.5px/1.3 var(--f);color:var(--ink)">RAG prompt-injection trust-boundary investigation</b>
+              <span class="muted" style="font-size:12px;display:block;margin-top:3px">Determine whether attacker-controlled text in a low-trust retrieved document can make a genuine, locally hosted model violate its trust boundary. You control only the retrieved document.</span>
+            </div>
+            <div>
+              <label class="label">Lab access</label>
+              <a href="{{ vm.parallax.workspace_url }}" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:14px 16px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                  <div><b style="font:600 13.5px/1.2 var(--f);color:var(--ink)">{{ ic('cpu','ic ic-sm') }} Open the research console</b>
+                    <span class="muted" style="font-size:12px;display:block;margin-top:2px">Live model-backed experiments: benign controls, adversarial trials, deterministic evaluation.</span></div>
+                  <span class="pill pill-violet"><span class="dot dot-violet"></span>assessment-only</span>
+                </div>
+              </a>
+            </div>
+            <div>
+              <label class="label">History, evidence &amp; submissions</label>
+              <div class="record">
+                <div class="rec-row" style="align-items:center">
+                  <span class="rec-pip"><span>{{ ic('inbox','ic ic-sm') }}</span></span>
+                  <div class="rec-id"><b>Signed research runs</b><span class="muted">Each trial is an Ed25519-signed, owner-scoped evidence record in the workspace History tab.</span></div>
+                </div>
+                <div class="rec-row" style="align-items:center">
+                  <span class="rec-pip"><span>{{ ic('shield','ic ic-sm') }}</span></span>
+                  <div class="rec-id"><b>Investigation submissions</b><span class="muted">Bind a reasoned security analysis to a trial's evidence id and submit it from the console.</span></div>
+                </div>
               </div>
-              <span class="pill pill-violet"><span class="dot dot-violet"></span>assessment-only</span>
-            </div>
-          </a>
-        </div>
-        <div class="field">
-          <label class="label">History, evidence &amp; submissions</label>
-          <div class="record">
-            <div class="rec-row" style="align-items:center">
-              <span class="rec-pip"><span>{{ ic('inbox','ic ic-sm') }}</span></span>
-              <div class="rec-id"><b>Signed research runs</b><span class="muted">Each trial is an Ed25519-signed, owner-scoped evidence record in the workspace History tab.</span></div>
-            </div>
-            <div class="rec-row" style="align-items:center">
-              <span class="rec-pip"><span>{{ ic('shield','ic ic-sm') }}</span></span>
-              <div class="rec-id"><b>Investigation submissions</b><span class="muted">Bind a reasoned security analysis to a trial's evidence id and submit it from the console.</span></div>
+              <p class="dim" style="font-size:11.5px;margin-top:6px">Assessment-only. No pathway qualification is issued and no credential is awarded.</p>
             </div>
           </div>
-          <p class="dim" style="font-size:11.5px;margin-top:6px">Assessment-only. No pathway qualification is issued and no credential is awarded.</p>
         </div>
         {% endif %}
 
         {% if vm.requestable and vm.status == 'active' and not vm.no_access %}
-        <p class="dim" style="font-size:11.5px">Need another program? Request it from your
-          <a href="/account">account</a>; an admin reviews each request.</p>
+        <p class="dim" style="font-size:11.5px">Need another program? Request it from your <a href="/account">account</a>; an admin reviews each request.</p>
         {% endif %}
-
-        <div style="display:flex;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:16px">
-          <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com/handbook">Handbook</a>
-          <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com">Ranger site</a>
-        </div>
       </div>
-    </div>
+    </section>
   </div>
-  <footer class="afoot"><span class="mono">Qwalora Ranger · Cohort {{ vm.cohort }} · signed, verifiable status</span></footer>
 </div>
+
+<style>
+  .cand-body{padding:20px 24px 28px;display:flex;flex-direction:column;gap:16px;max-width:820px}
+  .cand-body .card{max-width:none}
+  .cand-next{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px}
+  .cand-next b{font:600 13px/1.35 var(--f);color:var(--ink)}
+</style>
 {% endblock %}

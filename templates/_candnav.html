@@ -1,0 +1,47 @@
+{# Candidate chrome: the SAME app-shell sidebar the admin uses, with candidate-only links.
+   Never exposes administrative capabilities. `active` is one of:
+   dashboard | workspace | mission | research | account #}
+{%- from "_icons.html" import ic -%}
+{%- from "_brand.html" import qlogo -%}
+
+{%- macro candnav(active='', vm=None) -%}
+<aside class="nav">
+  <div class="nav-top">
+    <div class="nav-brand">
+      <span class="l">{{ qlogo('light',26) }}<b>QWALORA <span>Ranger</span></b></span>
+    </div>
+
+    {% if vm and vm.is_dual %}
+    <div class="nav-group" role="tablist" aria-label="Your programs">
+      <div class="gl">Program</div>
+      {% for p in vm.programs %}
+      <a class="nav-item {% if p == vm.selected_program %}on{% endif %}" role="tab" aria-selected="{{ 'true' if p == vm.selected_program else 'false' }}" href="/me?program={{ p }}"><span class="l">{{ ic('layers') }}</span><span class="lbl">{{ vm.program_brands[p] }}</span></a>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="nav-group">
+      <div class="gl">{% if vm and vm.selected_program %}{{ vm.program_brands[vm.selected_program] }}{% else %}Ranger{% endif %}</div>
+      <a class="nav-item {% if active=='dashboard' %}on{% endif %}" href="/me"><span class="l">{{ ic('grid') }}</span><span class="lbl">Dashboard</span></a>
+      {% if vm and vm.selected_program == 'strata' and vm.status == 'active' %}
+      {% if vm.board == 1 %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">SOC workspace</span></a>{% endif %}
+      <a class="nav-item {% if active=='mission' %}on{% endif %}" href="/me/mission"><span class="l">{{ ic('flag') }}</span><span class="lbl">Mission brief</span></a>
+      {% elif vm and vm.selected_program == 'parallax' and vm.status == 'active' %}
+      <a class="nav-item {% if active=='research' %}on{% endif %}" href="/parallax/workspace"><span class="l">{{ ic('cpu') }}</span><span class="lbl">Research console</span></a>
+      {% endif %}
+    </div>
+
+    <div class="nav-group">
+      <div class="gl">Account</div>
+      <a class="nav-item {% if active=='account' %}on{% endif %}" href="/account"><span class="l">{{ ic('user') }}</span><span class="lbl">Program access</span></a>
+      <a class="nav-item" href="https://ranger.qwalora.com/handbook"><span class="l">{{ ic('help') }}</span><span class="lbl">Handbook</span></a>
+    </div>
+  </div>
+
+  <div class="nav-user">
+    <span class="av av-32">{{ vm.ini if vm else '' }}</span>
+    <span class="nm"><b>{{ vm.name if vm else '' }}</b><span>@{{ vm.handle if vm else '' }}</span></span>
+    <a href="/auth/logout" class="iconbtn" title="Sign out">{{ ic('ext','ic ic-sm') }}</a>
+  </div>
+</aside>
+{%- endmacro -%}

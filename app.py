@@ -3651,7 +3651,13 @@ def create_app():
         # A single, explicit "next action" so the dashboard is immediately actionable.
         next_action = None
         if selected == pathways.PATHWAY_STRATA and c.is_active and c.status != "graduated":
-            if rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
+            obj_done = bool(br and br.objective_score is not None)
+            obj_passed = bool(br and br.objective_passed)
+            if n == 1 and not obj_passed:
+                next_action = ("Launch your SOC workspace and triage the alert queue"
+                               if not obj_done else
+                               "Refine your triage adjudication and resubmit to reach %g%%" % P.PASS_BAR)
+            elif n != 1 and rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
                 next_action = "Start your lab for board %d" % n
             elif rep_status in (None, "needs_changes", "rejected"):
                 next_action = "Submit your written report for board %d" % n
@@ -3661,6 +3667,7 @@ def create_app():
             next_action = "Open the research console: run a benign control, then an adversarial trial"
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
+            "ini": _initials(c.name),
             "next_action": next_action,
             "applied": c.status == "pending", "rejected": c.status == "rejected",
             # program entitlements (unified, program-aware dashboard)
@@ -3727,7 +3734,7 @@ def create_app():
         personas = [{"n": b["n"], "role_title": P.ROLE_TITLES.get(b["role"], b["role"]),
                      "badge": b["badge"], "tier": P.tier_of(b["n"])} for b in P.BOARD_PLAN]
         return {
-            "name": "Demo Ranger", "handle": "demo",
+            "name": "Demo Ranger", "handle": "demo", "ini": "DR",
             "status": ("graduated" if graduated else "active"),
             "programs": [pathways.PATHWAY_STRATA], "selected_program": pathways.PATHWAY_STRATA,
             "program_brands": _program_brands(), "is_dual": False, "no_access": False,
@@ -3873,6 +3880,124 @@ def create_app():
         return Response(rr.wireguard_config, mimetype="text/plain",
                         headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
 
+    # --- STRATA Board 1: SOC alert-triage investigation workspace (portal-served) -----------
+    # A real, authorized, candidate-scoped, browser-accessible investigation surface over the
+    # EXISTING answer-free seeded dataset. No OpenSearch, no fabricated URL, no direct cluster
+    # exposure. Session-authed and gated by STRATA entitlement + active status; ownership is
+    # structural (the dataset is derived from the SESSION candidate's own seed), and the answer
+    # key is never sent to the browser - grading stays server-side.
+    SOC_WORKSPACE_BOARD = 1
+
+    def _soc_mission_vm(n):
+        pkg = strata_missions.get(n) or {}
+        return {"title": pkg.get("title"), "role": pkg.get("assigned_role"),
+                "business_context": pkg.get("business_context"),
+                "objectives": pkg.get("objectives") or [], "scope": pkg.get("authorized_scope"),
+                "deliverables": pkg.get("deliverables") or [], "evidence": pkg.get("evidence"),
+                "submission": pkg.get("submission"), "evaluation": pkg.get("evaluation"),
+                "references": pkg.get("references") or []}
+
+    def _soc_status_vm(c, n):
+        br = _board_result(c, n, create=False)
+        return {"submitted": bool(br and br.objective_score is not None),
+                "score": (round(br.objective_score, 1) if br and br.objective_score is not None else None),
+                "passed": bool(br and br.objective_passed),
+                "pass_bar": P.PASS_BAR,
+                "report_status": (br.report_status if br else None),
+                "cleared": bool(br and br.cleared)}
+
+    @app.get("/me/workspace")
+    @require_program("strata")
+    def candidate_workspace():
+        """The Board-1 SOC alert-triage workspace page. Entitlement+active gated; the triage
+        surface is Board 1 (other boards use their own flow)."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return redirect(url_for("candidate_mission"))
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+            db.session.commit()
+        vm = {"handle": c.handle, "name": c.name, "cohort": c.cohort, "board": n,
+              "case_ref": _scenario_ref(c, n, seed or ""),
+              "severities": ["low", "medium", "high", "critical"],
+              "mission": _soc_mission_vm(n), "status": _soc_status_vm(c, n)}
+        return render_template("board1_workspace.html", vm=vm)
+
+    @app.get("/me/workspace/data")
+    @require_program("strata")
+    def candidate_workspace_data():
+        """The candidate's OWN answer-free Board-1 dataset (no key). Ownership is structural: the
+        dataset derives from the session candidate's seed; no handle/seed is accepted from the client."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no triage workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow; use the standard lab endpoints"), 409
+        if not scenarios.has_board(n):
+            return jsonify(error="dataset not available", board=n), 501
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+        _touch(c, n)
+        db.session.commit()
+        ds = scenarios.dataset(n, seed)   # answer-free (public_board1 strips the key)
+        return jsonify(ok=True, board=n, case_ref=_scenario_ref(c, n, seed),
+                       theme=ds.get("theme"), alerts=ds.get("alerts", []),
+                       status=_soc_status_vm(c, n)), 200
+
+    @app.post("/me/workspace/submit")
+    @require_program("strata")
+    def candidate_workspace_submit():
+        """Submit the triage adjudication. Session+CSRF authed; graded server-side against the
+        candidate's own seed (key re-derived server-side, never disclosed); records the objective
+        and evaluates the promotion gate exactly like the token API."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no triage workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow"), 409
+        body = request.get_json(silent=True) or {}
+        submission = body.get("submission")
+        if isinstance(submission, str):
+            import json as _json
+            try:
+                submission = _json.loads(submission)
+            except ValueError:
+                return jsonify(error="submission must be valid JSON"), 400
+        if not isinstance(submission, dict):
+            return jsonify(error="a submission object is required"), 400
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+        score, per_alert = scenarios.grade(n, seed, submission)   # per_alert = correctness flags only
+        br = _record_objective(c, n, score)
+        _touch(c, n)
+        promoted = _evaluate_gate(c)
+        db.session.commit()
+        return jsonify(ok=True, board=n, score=score, passed=bool(br.objective_passed),
+                       pass_bar=P.PASS_BAR, per_alert=per_alert, promoted=promoted,
+                       status=_soc_status_vm(c, n),
+                       note="Report approval is also required to clear the board."), 200
+
     def _account_vm(c):
         brands = _program_brands()
         requestable = _requestable_programs(c)
@@ -3887,7 +4012,11 @@ def create_app():
                         "granted_by": None, "can_request": False}
             return {"program": prog, "brand": brands[prog], "status": "not enrolled",
                     "granted_by": None, "can_request": (prog in requestable)}
+        progs = _effective_programs(c)
         return {"name": c.name, "handle": c.handle, "cohort": c.cohort, "status": c.status,
+                "ini": _initials(c.name), "board": c.current_board,
+                "programs": progs, "selected_program": (progs[0] if progs else None),
+                "program_brands": brands, "is_dual": len(progs) > 1,
                 "cells": [cell(p) for p in pathways.PATHWAYS],
                 "requested_ok": request.args.get("requested") == "1"}
 

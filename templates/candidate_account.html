@@ -1,62 +1,57 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_candnav.html" import candnav %}
 {% block title %}Account · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <div style="display:flex;gap:8px;align-items:center">
-      <a class="btn btn-ghost btn-pill" href="/me">{{ ic('grid','ic ic-sm') }} Dashboard</a>
-      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-    </div>
-  </div></header>
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('account', vm) }}
 
-  <div class="page-main">
-    <div class="card" style="max-width:620px">
-      <div class="card-head">
-        <span class="eyebrow"><span class="d"></span>Account · Cohort {{ vm.cohort }}</span>
-        <h1 class="t">{{ vm.name }} <span class="mono dim" style="font-size:15px;font-weight:400">@{{ vm.handle }}</span></h1>
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">{{ vm.name }} <span class="mono dim" style="font-weight:400;font-size:14px">@{{ vm.handle }}</span></div>
+          <div class="rg-sub">Account · Cohort {{ vm.cohort }} · {{ vm.status }}</div>
+        </div>
       </div>
-      <div class="card-body" style="display:flex;flex-direction:column;gap:18px">
 
+      <div class="cand-body">
         {% if vm.requested_ok %}
         <p class="note-ok">{{ ic('medal','ic ic-sm') }} Request submitted. An admin reviews each request; you will be notified when it is decided.</p>
         {% endif %}
 
-        <div class="field">
-          <label class="label">Program access</label>
-          <p class="dim" style="font-size:12px;margin:0 0 10px">One Ranger identity, independently authorized programs.
-            Each program is granted by an administrator; requesting a program does not grant it.</p>
-          <div class="record">
-            {% for cell in vm.cells %}
-            <div class="rec-row" style="align-items:center">
-              <div class="rec-id"><b>{{ cell.brand }}</b>
-                <span class="muted">{% if cell.status == 'active' %}Authorized{% elif cell.status in ('requested','pending') %}Awaiting admin review{% elif cell.status == 'suspended' %}Suspended by an admin{% elif cell.status in ('revoked','rejected') %}Not currently authorized{% else %}Not enrolled{% endif %}{% if cell.granted_by %} · granted by {{ cell.granted_by }}{% endif %}</span>
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Program access</span></div>
+          <div class="card-body">
+            <p class="dim" style="font-size:12px;margin:0 0 12px">One Ranger identity, independently authorized programs. Each program is granted by an administrator; requesting a program does not grant it.</p>
+            <div class="record">
+              {% for cell in vm.cells %}
+              <div class="rec-row" style="align-items:center">
+                <div class="rec-id"><b>{{ cell.brand }}</b>
+                  <span class="muted">{% if cell.status == 'active' %}Authorized{% elif cell.status in ('requested','pending') %}Awaiting admin review{% elif cell.status == 'suspended' %}Suspended by an admin{% elif cell.status in ('revoked','rejected') %}Not currently authorized{% else %}Not enrolled{% endif %}{% if cell.granted_by %} · granted by {{ cell.granted_by }}{% endif %}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pill {% if cell.status=='active' %}pill-ok{% elif cell.status in ('requested','pending') %}pill-amber{% elif cell.status in ('suspended','revoked','rejected') %}pill-orange{% else %}pill{% endif %}">
+                    <span class="dot {% if cell.status=='active' %}dot-ok{% elif cell.status in ('requested','pending','suspended','revoked','rejected') %}dot-amber{% endif %}"></span>{{ cell.status }}</span>
+                  {% if cell.can_request %}
+                  <form method="post" action="/me/request-program">
+                    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                    <input type="hidden" name="program" value="{{ cell.program }}">
+                    <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request access</button>
+                  </form>
+                  {% endif %}
+                </div>
               </div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <span class="pill {% if cell.status=='active' %}pill-ok{% elif cell.status in ('requested','pending') %}pill-amber{% elif cell.status in ('suspended','revoked','rejected') %}pill-orange{% else %}pill{% endif %}">
-                  <span class="dot {% if cell.status=='active' %}dot-ok{% elif cell.status in ('requested','pending','suspended','revoked','rejected') %}dot-amber{% endif %}"></span>{{ cell.status }}</span>
-                {% if cell.can_request %}
-                <form method="post" action="/me/request-program">
-                  <input type="hidden" name="csrf" value="{{ csrf_token }}">
-                  <input type="hidden" name="program" value="{{ cell.program }}">
-                  <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request access</button>
-                </form>
-                {% endif %}
-              </div>
+              {% endfor %}
             </div>
-            {% endfor %}
           </div>
         </div>
-
-        <div style="display:flex;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:16px">
-          <a class="btn btn-ghost btn-sm" href="/me">Back to dashboard</a>
-          <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com/handbook">Handbook</a>
-        </div>
       </div>
-    </div>
+    </section>
   </div>
-  <footer class="afoot"><span class="mono">Qwalora Ranger · Cohort {{ vm.cohort }} · signed, verifiable status</span></footer>
 </div>
+
+<style>
+  .cand-body{padding:20px 24px 28px;display:flex;flex-direction:column;gap:16px;max-width:820px}
+  .cand-body .card{max-width:none}
+</style>
 {% endblock %}

@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_brand.html" import qlogo %}
+{% block title %}SOC Triage · Board 1 · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="page">
+  <header class="anav"><div class="anav-in">
+    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
+    <div style="display:flex;gap:8px;align-items:center">
+      <a class="btn btn-ghost btn-pill" href="/me">{{ ic('grid','ic ic-sm') }} Dashboard</a>
+      <a class="btn btn-ghost btn-pill" href="/me/mission">{{ ic('flag','ic ic-sm') }} Mission brief</a>
+      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+    </div>
+  </div></header>
+
+  <main class="socw">
+    <div class="socw-head">
+      <div>
+        <span class="eyebrow"><span class="d"></span>STRATA · Board 1 · SOC Analyst (Tier 1)</span>
+        <h1 class="socw-h1">{{ vm.mission.title }}</h1>
+        <p class="socw-sub">{{ vm.mission.business_context }}</p>
+      </div>
+      <div class="socw-case card">
+        <div><span class="label" style="font-size:11px">Case reference</span>
+          <code class="mono" id="case-ref">{{ vm.case_ref }}</code></div>
+        <div id="status-pill-wrap">
+          {% if vm.status.submitted %}
+          <span class="pill {% if vm.status.passed %}pill-ok{% else %}pill-amber{% endif %}">
+            <span class="dot {% if vm.status.passed %}dot-ok{% else %}dot-amber{% endif %}"></span>
+            {{ vm.status.score }}% {% if vm.status.passed %}· cleared objective{% else %}· need {{ vm.status.pass_bar }}%{% endif %}</span>
+          {% else %}
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>awaiting submission</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="socw-split">
+      <!-- Assignment brief -->
+      <aside class="card socw-brief">
+        <div class="socw-card-h"><h2>{{ ic('shield','ic ic-sm') }} Your assignment</h2></div>
+        <div class="socw-card-b">
+          <p class="socw-role">{{ vm.mission.role }}</p>
+          <div class="socw-sec"><span class="label">Objectives</span>
+            <ul>{% for o in vm.mission.objectives %}<li>{{ o }}</li>{% endfor %}</ul></div>
+          <div class="socw-sec"><span class="label">Authorized scope</span><p>{{ vm.mission.scope }}</p></div>
+          <div class="socw-sec"><span class="label">Deliverables</span>
+            <ul>{% for d in vm.mission.deliverables %}<li>{{ d }}</li>{% endfor %}</ul></div>
+          <details class="socw-more">
+            <summary>Evidence, submission &amp; evaluation</summary>
+            <div class="socw-sec"><span class="label">Evidence</span><p>{{ vm.mission.evidence }}</p></div>
+            <div class="socw-sec"><span class="label">Submission</span><p>{{ vm.mission.submission }}</p></div>
+            <div class="socw-sec"><span class="label">Evaluation</span><p>{{ vm.mission.evaluation }}</p></div>
+          </details>
+          {% if vm.mission.references %}
+          <div class="socw-sec"><span class="label">Reference material</span>
+            <div class="socw-refs">
+              {% for r in vm.mission.references %}
+              <a href="{{ r.url if r.url else '/resources' }}" target="_blank" rel="noopener" class="socw-ref">{{ ic('ext','ic ic-sm') }} {{ r.title if r.title else r }}</a>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          <p class="dim" style="font-size:11px;margin-top:10px">The verdict an alert deserves is an investigation question, not supported here. Access faults only: contact candidate support.</p>
+        </div>
+      </aside>
+
+      <!-- Triage queue -->
+      <section class="card socw-queue">
+        <div class="socw-card-h">
+          <h2>{{ ic('activity','ic ic-sm') }} Alert queue</h2>
+          <span class="mono dim" id="queue-meta"></span>
+        </div>
+        <div class="socw-card-b">
+          <div id="ws-loading" class="empty"><span class="ring">{{ ic('server','ic') }}</span>
+            <p>Loading your seeded alert queue. The dataset is unique to you and to this attempt; the answer key stays on the server.</p></div>
+          <div id="ws-error" class="note-err" hidden></div>
+          <div id="alert-list" hidden></div>
+
+          <div id="submit-bar" class="socw-submit" hidden>
+            <div><b id="adj-count">0</b> <span class="dim">of</span> <b id="alert-total">0</b> <span class="dim">adjudicated</span></div>
+            <button class="btn btn-primary" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit adjudication</button>
+          </div>
+
+          <div id="result-panel" class="socw-result" hidden>
+            <div class="socw-result-h">
+              <span class="pill" id="result-pill"></span>
+              <span class="dim" id="result-note"></span>
+            </div>
+            <p class="dim" id="result-next" style="font-size:12.5px"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="afoot"><span class="mono">Qwalora Ranger · Board 1 SOC triage · answer-free, server-side grading</span></footer>
+</div>
+
+<style>
+  [hidden]{display:none!important}
+  .socw{max-width:1180px;margin:0 auto;padding:24px 22px 12px}
+  .socw-head{display:flex;gap:22px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}
+  .socw-h1{font:700 24px/1.1 var(--f);letter-spacing:-.6px;color:#fff;margin:9px 0 0}
+  .socw-sub{color:rgba(255,255,255,.72);margin:9px 0 0;max-width:680px;line-height:1.55;font-size:12.5px}
+  .socw-case{padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:none;min-width:220px}
+  .socw-case code{font-size:12px;display:block;margin-top:2px}
+  .socw-split{display:grid;grid-template-columns:minmax(300px,4fr) 7fr;gap:16px;align-items:start}
+  .socw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
+  .socw-card-h h2{font:600 13.5px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .socw-card-b{padding:16px}
+  .socw-role{font-size:12.5px;color:var(--ink);line-height:1.5;margin:0 0 14px}
+  .socw-sec{margin-bottom:14px}
+  .socw-sec .label{display:block;margin-bottom:5px}
+  .socw-sec ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+  .socw-sec li,.socw-sec p{font-size:12px;color:var(--mut);line-height:1.5;margin:0}
+  .socw-more summary{font:600 12px/1 var(--f);color:var(--violet);cursor:pointer;margin:4px 0 10px}
+  .socw-refs{display:flex;flex-direction:column;gap:6px}
+  .socw-ref{font-size:12px;color:var(--violet);text-decoration:none;display:flex;align-items:center;gap:6px}
+  .socw-alert{border:1px solid var(--line2);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+  .socw-alert.adj{border-color:var(--violet-100);background:var(--sub)}
+  .socw-alert-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .socw-alert-id{font:600 12.5px/1 var(--m);color:var(--ink)}
+  .socw-alert-sig{font:600 12.5px/1.2 var(--f);color:var(--ink)}
+  .socw-alert-meta{font-size:11px;color:var(--dim);margin-left:auto;font-family:var(--m)}
+  .socw-raw{font-family:var(--m);font-size:11.5px;color:var(--mut);background:var(--light);border-radius:7px;padding:8px 10px;margin:9px 0;white-space:pre-wrap;word-break:break-word}
+  .socw-ctrls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .socw-ctrl{display:flex;flex-direction:column;gap:4px}
+  .socw-ctrl .label{font-size:10.5px}
+  .socw-seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+  .socw-seg button{border:none;background:#fff;cursor:pointer;font:600 11.5px/1 var(--f);padding:8px 12px;color:var(--mut)}
+  .socw-seg button.on-tp{background:#fdecee;color:#b4232b}
+  .socw-seg button.on-fp{background:var(--ok-bg);color:var(--ok)}
+  .socw-input,.socw-select{height:34px;border:1px solid var(--line2);border-radius:8px;padding:0 10px;font:500 12px/1 var(--f);background:#fff;color:var(--ink)}
+  .socw-input{width:170px}
+  .socw-tp-only[hidden]{display:none!important}
+  .socw-flag{font-size:10.5px;font-family:var(--m);margin-left:6px}
+  .socw-flag.ok{color:var(--ok)}.socw-flag.bad{color:#b4232b}
+  .socw-submit{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:14px;border-top:1px solid var(--line);margin-top:4px}
+  .socw-result{margin-top:14px;border:1px solid var(--line2);border-radius:10px;padding:14px 16px}
+  .socw-result-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .socw-seg button:focus-visible,#btn-submit:focus-visible{outline:none;box-shadow:0 0 0 3px var(--violet-100)}
+  @media (max-width:860px){.socw-split{grid-template-columns:1fr}}
+</style>
+
+<script>
+(function(){
+  var CSRF = "{{ csrf_token }}";
+  var SEVERITIES = {{ vm.severities|tojson }};
+  var $ = function(id){return document.getElementById(id);};
+  var state = {};  // id -> {verdict, severity, technique, iocs}
+
+  function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+
+  async function getJSON(url){
+    var r = await fetch(url, {headers:{'Accept':'application/json'}, credentials:'same-origin'});
+    if(r.status!==200){ throw new Error('('+r.status+') '+(await r.text()).slice(0,180)); }
+    return r.json();
+  }
+  async function postJSON(url, body){
+    var r = await fetch(url, {method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},
+      body: JSON.stringify(body)});
+    var j = null; try{ j = await r.json(); }catch(e){}
+    return {status:r.status, body:j};
+  }
+
+  function updateCount(){
+    var done = Object.keys(state).filter(function(k){return state[k] && state[k].verdict;}).length;
+    $('adj-count').textContent = done;
+  }
+
+  function sevSelect(id){
+    var opts = ['<option value="">severity…</option>'].concat(
+      SEVERITIES.map(function(s){return '<option value="'+s+'">'+s+'</option>';})).join('');
+    return '<select class="socw-select" data-field="severity" data-id="'+id+'">'+opts+'</select>';
+  }
+
+  function alertRow(a){
+    return '<div class="socw-alert" id="al-'+esc(a.id)+'">'
+      + '<div class="socw-alert-top">'
+      +   '<span class="socw-alert-id">'+esc(a.id)+'</span>'
+      +   '<span class="socw-alert-sig">'+esc(a.signal)+'</span>'
+      +   '<span class="socw-alert-meta">'+esc(a.host)+' · '+esc(a.timestamp)+'</span>'
+      + '</div>'
+      + '<div class="socw-raw">'+esc(a.raw)+'</div>'
+      + '<div class="socw-ctrls">'
+      +   '<div class="socw-ctrl"><span class="label">Verdict</span>'
+      +     '<span class="socw-seg" data-id="'+esc(a.id)+'">'
+      +       '<button type="button" data-v="true_positive">True positive</button>'
+      +       '<button type="button" data-v="false_positive">False positive</button>'
+      +     '</span></div>'
+      +   '<div class="socw-ctrl"><span class="label">Severity</span>'+sevSelect(esc(a.id))+'</div>'
+      +   '<div class="socw-ctrl socw-tp-only" data-tp="'+esc(a.id)+'" hidden><span class="label">ATT&CK technique (TP)</span>'
+      +     '<input class="socw-input" data-field="technique" data-id="'+esc(a.id)+'" placeholder="e.g. T1059"></div>'
+      +   '<div class="socw-ctrl socw-tp-only" data-tp="'+esc(a.id)+'" hidden><span class="label">Indicators (comma-separated)</span>'
+      +     '<input class="socw-input" data-field="iocs" data-id="'+esc(a.id)+'" placeholder="host, user@host"></div>'
+      +   '<span class="socw-flag" data-flag="'+esc(a.id)+'"></span>'
+      + '</div></div>';
+  }
+
+  function wire(){
+    document.querySelectorAll('.socw-seg').forEach(function(seg){
+      seg.querySelectorAll('button').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var id = seg.dataset.id, v = btn.dataset.v;
+          state[id] = state[id] || {};
+          state[id].verdict = v;
+          seg.querySelectorAll('button').forEach(function(b){b.classList.remove('on-tp','on-fp');});
+          btn.classList.add(v==='true_positive'?'on-tp':'on-fp');
+          $('al-'+id).classList.add('adj');
+          document.querySelectorAll('.socw-tp-only[data-tp="'+id+'"]').forEach(function(el){ el.hidden = (v!=='true_positive'); });
+          updateCount();
+        });
+      });
+    });
+    document.querySelectorAll('[data-field]').forEach(function(el){
+      el.addEventListener('input', function(){
+        var id=el.dataset.id, f=el.dataset.field; state[id]=state[id]||{};
+        state[id][f]=el.value;
+      });
+    });
+  }
+
+  function buildSubmission(){
+    var alerts = Object.keys(state).map(function(id){
+      var s = state[id]||{};
+      var row = {id:id, verdict:s.verdict||'', severity:s.severity||''};
+      if(s.verdict==='true_positive'){
+        row.attack_technique = (s.technique||'').trim();
+        row.iocs = (s.iocs||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
+      }
+      return row;
+    });
+    return {alerts: alerts};
+  }
+
+  function renderResult(res){
+    var panel=$('result-panel'); panel.hidden=false;
+    var pill=$('result-pill');
+    pill.className='pill '+(res.passed?'pill-ok':'pill-amber');
+    pill.innerHTML='<span class="dot '+(res.passed?'dot-ok':'dot-amber')+'"></span>'+res.score+'% '+(res.passed?'· objective cleared':'· need '+res.pass_bar+'%');
+    $('result-note').textContent = res.note || '';
+    $('result-next').textContent = res.passed
+      ? (res.promoted ? 'Objective met and you have been promoted. Return to your dashboard for the next board.'
+                      : 'Objective met. A report approval is also required to clear the board — submit it from your dashboard.')
+      : 'Objective not yet met. Review your adjudications and resubmit; the dataset and your attempt are preserved.';
+    // per-alert correctness flags (no answer values)
+    (res.per_alert||[]).forEach(function(p){
+      var el=document.querySelector('[data-flag="'+p.id+'"]'); if(!el) return;
+      var bits=[]; bits.push('<span class="socw-flag '+(p.verdict_correct?'ok">verdict ok':'bad">verdict miss')+'</span>');
+      bits.push('<span class="socw-flag '+(p.severity_correct?'ok">sev ok':'bad">sev miss')+'</span>');
+      if(p.technique_correct!==null && p.technique_correct!==undefined){
+        bits.push('<span class="socw-flag '+(p.technique_correct?'ok">tech ok':'bad">tech miss')+'</span>');
+      }
+      el.innerHTML = bits.join(' ');
+    });
+    panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  async function submit(){
+    var btn=$('btn-submit'); btn.disabled=true; btn.textContent='Grading…';
+    var r = await postJSON('/me/workspace/submit', {submission: buildSubmission()});
+    btn.disabled=false; btn.innerHTML='Submit adjudication';
+    if(r.status!==200 || !r.body || !r.body.ok){
+      $('ws-error').hidden=false; $('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status)); return;
+    }
+    $('ws-error').hidden=true;
+    renderResult(r.body);
+    // reflect new status in the header pill
+    var sp=$('status-pill-wrap');
+    sp.innerHTML='<span class="pill '+(r.body.passed?'pill-ok':'pill-amber')+'"><span class="dot '+(r.body.passed?'dot-ok':'dot-amber')+'"></span>'+r.body.score+'% '+(r.body.passed?'· cleared objective':'· need '+r.body.pass_bar+'%')+'</span>';
+  }
+
+  async function load(){
+    try{
+      var d = await getJSON('/me/workspace/data');
+      $('ws-loading').hidden=true;
+      var list=$('alert-list'); list.hidden=false;
+      list.innerHTML = (d.alerts||[]).map(alertRow).join('');
+      (d.alerts||[]).forEach(function(a){ state[a.id]=state[a.id]||{}; });
+      $('alert-total').textContent = (d.alerts||[]).length;
+      $('queue-meta').textContent = (d.alerts||[]).length + ' alerts · ' + (d.theme||'');
+      $('submit-bar').hidden=false;
+      wire(); updateCount();
+    }catch(e){
+      $('ws-loading').hidden=true;
+      $('ws-error').hidden=false; $('ws-error').textContent='Could not load your dataset: '+e.message+'. Re-open your workspace to retry.';
+    }
+  }
+
+  $('btn-submit').addEventListener('click', submit);
+  load();
+})();
+</script>
+{% endblock %}
