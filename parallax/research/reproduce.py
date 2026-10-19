@@ -54,15 +54,16 @@ def _env_fingerprint() -> Dict[str, Any]:
     }
 
 
-def _protocol_snapshot() -> Dict[str, Any]:
+def _protocol_snapshot(advanced: bool = False) -> Dict[str, Any]:
+    variants = P.ADVANCED_ATTACK_VARIANTS if advanced else P.ATTACK_VARIANTS
     return {
-        "protocol_version": P.PROTOCOL_VERSION,
+        "protocol_version": P.ADVANCED_PROTOCOL_VERSION if advanced else P.PROTOCOL_VERSION,
         "hypothesis": harness.HYPOTHESIS,
         "canary": P.CANARY,
         "conditions": [P.CONDITION_BASELINE, P.CONDITION_EXPERIMENTAL],
         "outcome_categories": list(P.OUTCOME_CATEGORIES),
         "legitimate_tasks": P.LEGIT_TASKS,
-        "attack_variants": [{k: v for k, v in var.items()} for var in P.ATTACK_VARIANTS],
+        "attack_variants": [{k: v for k, v in var.items()} for var in variants],
     }
 
 
@@ -88,6 +89,8 @@ def main(argv=None) -> int:
     ap.add_argument("--repetitions", type=int, default=1)
     ap.add_argument("--model-url", default=None, help="local model endpoint (loopback/allowlisted only)")
     ap.add_argument("--model-dir", default=None, help="local transformers model directory")
+    ap.add_argument("--advanced", action="store_true",
+                    help="run the preregistered ADVANCED attack family (incl. cross-document split payload)")
     args = ap.parse_args(argv)
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -99,12 +102,15 @@ def main(argv=None) -> int:
     backend = mb.from_config(cfg)
 
     corpus = C.default_corpus()
-    campaign = harness.run_campaign(backend, corpus, repetitions=args.repetitions)
+    _variants = P.ADVANCED_ATTACK_VARIANTS if args.advanced else P.ATTACK_VARIANTS
+    _pv = P.ADVANCED_PROTOCOL_VERSION if args.advanced else P.PROTOCOL_VERSION
+    campaign = harness.run_campaign(backend, corpus, repetitions=args.repetitions,
+                                    variants=_variants, protocol_version=_pv)
     metrics = harness.compute_metrics(campaign["records"])
 
     index: Dict[str, str] = {}
     index["environment.json"] = _write(os.path.join(args.output_dir, "environment.json"), _env_fingerprint())
-    index["protocol.json"] = _write(os.path.join(args.output_dir, "protocol.json"), _protocol_snapshot())
+    index["protocol.json"] = _write(os.path.join(args.output_dir, "protocol.json"), _protocol_snapshot(args.advanced))
     index["corpus.json"] = _write(os.path.join(args.output_dir, "corpus.json"), _corpus_snapshot(corpus))
     index["records.json"] = _write(os.path.join(args.output_dir, "records.json"), campaign["records"])
     index["records_normalized.json"] = _write(os.path.join(args.output_dir, "records_normalized.json"),

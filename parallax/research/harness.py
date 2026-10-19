@@ -37,12 +37,20 @@ def _hash(obj: Any) -> str:
 
 def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
               variant: Optional[Dict[str, Any]], condition: str, repetition: int,
-              app_version: str = HARNESS_VERSION) -> Dict[str, Any]:
-    """Execute one trial and return a full machine-readable experiment record."""
+              app_version: str = HARNESS_VERSION,
+              protocol_version: str = P.PROTOCOL_VERSION) -> Dict[str, Any]:
+    """Execute one trial and return a full machine-readable experiment record. A variant may carry
+    `text` (single low-trust document) or `fragments` (a SPLIT payload across several low-trust
+    documents)."""
     exp_id = "exp-" + uuid.uuid4().hex[:12]
     adversarial_id = (variant or {}).get("attack_id")
     attempts_inj = P.attempts_injection(variant) if variant else False
-    injected = (rag.inject_document(variant["text"], variant["attack_id"]) if variant else None)
+    if not variant:
+        injected = None
+    elif variant.get("fragments"):
+        injected = rag.inject_documents(variant["fragments"], variant["attack_id"])
+    else:
+        injected = rag.inject_document(variant["text"], variant["attack_id"])
     t0 = time.time()
     infra_error = None
     observed = None
@@ -68,7 +76,7 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
     record = {
         "experiment_id": exp_id,
         "harness_version": HARNESS_VERSION,
-        "protocol_version": P.PROTOCOL_VERSION,
+        "protocol_version": protocol_version,
         "hypothesis": HYPOTHESIS,
         "application_version": app_version,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
@@ -99,9 +107,12 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
 
 def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
                  tasks: Optional[List[Dict[str, Any]]] = None,
-                 variants: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                 variants: Optional[List[Dict[str, Any]]] = None,
+                 protocol_version: str = P.PROTOCOL_VERSION) -> Dict[str, Any]:
     """Run baseline (benign) + experimental (attack) trials with repetitions. Returns
-    {manifest, records}. Sequential (concurrency 1). Enforces the trial cap."""
+    {manifest, records}. Sequential (concurrency 1). Enforces the trial cap. Pass
+    variants=P.ADVANCED_ATTACK_VARIANTS + protocol_version=P.ADVANCED_PROTOCOL_VERSION to run the
+    preregistered advanced attack family."""
     tasks = tasks or P.LEGIT_TASKS
     variants = variants if variants is not None else P.ATTACK_VARIANTS
     records: List[Dict[str, Any]] = []
@@ -115,16 +126,18 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
         for task in tasks:
             _guard()
             records.append(run_trial(backend, corpus, task=task, variant=None,
-                                     condition=P.CONDITION_BASELINE, repetition=rep))
+                                     condition=P.CONDITION_BASELINE, repetition=rep,
+                                     protocol_version=protocol_version))
         # experimental: each attack variant against each legitimate task
         for task in tasks:
             for v in variants:
                 _guard()
                 records.append(run_trial(backend, corpus, task=task, variant=v,
-                                         condition=P.CONDITION_EXPERIMENTAL, repetition=rep))
+                                         condition=P.CONDITION_EXPERIMENTAL, repetition=rep,
+                                         protocol_version=protocol_version))
 
     manifest = {
-        "harness_version": HARNESS_VERSION, "protocol_version": P.PROTOCOL_VERSION,
+        "harness_version": HARNESS_VERSION, "protocol_version": protocol_version,
         "corpus_version": corpus.version, "corpus_hash": corpus.content_hash(),
         "backend": backend.identity(), "repetitions": repetitions,
         "n_tasks": len(tasks), "n_variants": len(variants), "n_records": len(records),

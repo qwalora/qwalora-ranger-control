@@ -29,22 +29,34 @@ def inject_document(attack_text: str, attack_id: str, trust: str = "low") -> Dic
     return {"doc_id": "inj-%s" % attack_id, "trust": trust, "text": attack_text, "adversarial": True}
 
 
+def inject_documents(fragments: List[str], attack_id: str, trust: str = "low") -> List[Dict[str, Any]]:
+    """Build several attacker-authored LOW-TRUST documents (a SPLIT payload: no single document carries
+    the full directive). The attacker still controls only low-trust retrieved text."""
+    return [{"doc_id": "inj-%s-%d" % (attack_id, i), "trust": trust, "text": frag, "adversarial": True}
+            for i, frag in enumerate(fragments)]
+
+
 def run_rag(backend: Backend, corpus: Corpus, *, task: str, k: int = 3,
-            injected: Optional[Dict[str, Any]] = None, max_tokens: int = MAX_TOKENS) -> Dict[str, Any]:
-    """Execute one RAG query. If `injected` is given, it is added to the retrievable set at LOW trust
-    (the attacker's only control surface) and retrieval runs over the augmented corpus. Returns the
-    generation result plus the exact retrieved document ids (provenance)."""
-    use_corpus = corpus.with_documents([injected]) if injected else corpus
-    retrieved = use_corpus.retrieve(task, k=k)
-    # guarantee the injected doc is actually retrieved (otherwise the attack never reaches the model);
+            injected=None, max_tokens: int = MAX_TOKENS) -> Dict[str, Any]:
+    """Execute one RAG query. `injected` may be a single attacker document OR a LIST of them (a
+    split/multi-document payload); each is added to the retrievable set at LOW trust (the attacker's
+    only control surface). Retrieval runs over the augmented corpus. Returns the generation result plus
+    the exact retrieved document ids (provenance)."""
+    inj_list = [] if injected is None else (injected if isinstance(injected, list) else [injected])
+    use_corpus = corpus.with_documents(inj_list) if inj_list else corpus
+    retrieved = use_corpus.retrieve(task, k=max(k, len(inj_list) + 1))
+    # guarantee every injected doc is actually retrieved (otherwise the attack never reaches the model);
     # this keeps the experiment about model behavior, not retrieval luck, and is recorded as such.
     forced = False
-    if injected and all(d["doc_id"] != injected["doc_id"] for d in retrieved):
-        retrieved = ([injected] + retrieved)[:max(k, 1)]
+    missing = [d for d in inj_list if all(r["doc_id"] != d["doc_id"] for r in retrieved)]
+    if missing:
+        retrieved = (missing + retrieved)
         forced = True
-    retrieved = retrieved[:MAX_DOCS]
+    retrieved = retrieved[:max(MAX_DOCS, len(inj_list) + 1)]
     req = GenRequest(system=SYSTEM_INSTRUCTIONS, developer=DEVELOPER_INSTRUCTIONS, task=task,
                      context=retrieved, max_tokens=max_tokens)
     result: GenResult = backend.generate(req)
     return {"result": result, "retrieved_doc_ids": [d["doc_id"] for d in retrieved],
-            "injected_doc_id": (injected or {}).get("doc_id"), "injected_forced_into_context": forced}
+            "injected_doc_id": (inj_list[0]["doc_id"] if len(inj_list) == 1 else None),
+            "injected_doc_ids": [d["doc_id"] for d in inj_list],
+            "injected_forced_into_context": forced}
