@@ -65,9 +65,11 @@ cohort pathway; rollback removed all system rows.
 - `siem/tests/test_program_entitlements.py`: the A-I identity matrix (12 tests) - unauth, no-membership,
   STRATA-only, PARALLAX-only, dual, suspended-each, reviewer, unauthorized-admin - plus revocation
   freshness (no re-login), forged client-side selection, and cross-program research-API denial. All pass.
-- Full PG-on regression: 456 collected (444 prior baseline + 12 new), 17 skipped, 0 failed (exit 0).
-  The prior 427-pass baseline is preserved. STRATA route tests stay green via the legacy fallback;
-  PARALLAX route fixtures seed memberships (PARALLAX is now an explicit grant).
+- `siem/tests/test_entitlement_flagged_surfaces.py` (3 tests): /case and /workbench deny a PARALLAX-only
+  candidate (403) with the flag enabled in-test; /case 404s when off.
+- Full PG-on regression: 459 collected (444 prior baseline + 12 identity-matrix + 3 flagged-surface),
+  17 skipped, 0 failed (exit 0). The prior 427-pass baseline is preserved. STRATA route tests stay green
+  via the legacy fallback; PARALLAX route fixtures seed memberships (PARALLAX is now an explicit grant).
 
 ## 6. Screenshots
 
@@ -84,21 +86,45 @@ STRATA-only (board ladder + "Request PARALLAX", no research console), PARALLAX-o
   (deployment id recorded at verification). New tables created by `create_all` on boot.
 - Production, `main`, the deployment hold, and the staged nonprod patch `9853e4b4` were not touched.
 
-## 8. Outstanding limitations
+## 8. Flag-gated STRATA surfaces (/case, /soc, /workbench) - now gated + tested
 
-- Three STRATA surfaces behind feature flags that are OFF in parallax-nonprod were not modified:
-  `/case` (RANGER_CASE_UI), `/soc` (OpenSearch/JWT), `/workbench` (RANGER_WORKBENCH). They resolve the
-  shared candidate session but do not yet carry `require_program('strata')`; add it before enabling those
-  flags. These are same-program STRATA features; the cross-program exposure (the core finding) is fully
-  closed on the active surfaces.
-- The per-candidate research-run rate limiter is in-process (per worker); a shared store is the
-  documented multi-worker follow-up.
+The three flag-gated STRATA surfaces now carry server-side STRATA entitlement enforcement via a shared
+`_strata_ok(c)` gate (uses the app's `_program_active` when provided, else a legacy-aware membership query
+identical in effect), added at each module's candidate-resolution point:
+- `case_routes._candidate()` -> 403 for a non-STRATA candidate (before the board check).
+- `workbench_routes._cand()` -> the locked page (403) for a non-STRATA candidate.
+- `soc_gateway._authorize()` -> 403 for a non-STRATA candidate.
+`app.py` passes `program_active` into all three `register()` calls. The flags stay OFF in parallax-nonprod;
+this is enforcement-in-place, not activation. Tested (`test_entitlement_flagged_surfaces.py`): with the
+flags enabled IN-TEST, a PARALLAX-only candidate is denied `/case` and `/workbench` (403) while STRATA and
+legacy candidates pass; `/case` still 404s when the flag is off. `/soc` requires JWT+OpenSearch to register,
+so it is covered by the shared gate + code review rather than a route test.
+
+## 9. Real-browser verification (automated) vs human-required checks
+
+Automated real-browser verification (Chromium/Playwright against a live local gunicorn server with
+authenticated Flask session cookies, server-served CSS - not the test client): 15/15 authorization checks
+pass across direct routes AND APIs for STRATA-only, PARALLAX-only, dual, and unauthenticated identities
+(e.g. STRATA-only `/parallax/research/brief` -> 401, `/labs/start` -> 200; PARALLAX-only `/labs/start` ->
+403, `/parallax/workspace` -> 200; unauth everything denied). Screenshots were captured from this real
+server.
+
+Still requires a human (cannot be done headlessly because GitHub OAuth + 2FA is interactive): the live
+nonprod authenticated walkthrough - sign in with GitHub, confirm the dashboard, run a benign control and an
+adversarial trial against the real Qwen model, retrieve signed evidence, submit an investigation, and
+(as admin) grant/suspend a program in `/admin/program-access` and confirm the effect without re-login.
+
+## 10. Outstanding limitations
+
+- The per-candidate research-run rate limiter is in-process (per worker); a shared store is the documented
+  multi-worker follow-up.
 - Running the one-shot membership migration against the nonprod database requires executing
   `RANGER_PROGRAM_MIGRATE=1 python migrate_program_memberships.py` inside the portal service (it needs the
   private DATABASE_URL). Until then, existing candidates retain STRATA access via the legacy zero-row
   fallback and are never locked out; PARALLAX access is granted per candidate via `/admin/program-access`.
+- `/soc` has the STRATA gate in code but no automated route test (registration needs JWT+OpenSearch).
 
-## 9. Required action for the PARALLAX browser acceptance
+## 11. Required action for the PARALLAX browser acceptance
 
 Under the new model, PARALLAX access is an explicit grant. The existing nonprod candidate (GitHub sign-in)
 retains STRATA via the legacy fallback but must be granted PARALLAX to use the research workspace:

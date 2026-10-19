@@ -110,6 +110,20 @@ def register(app, candidate_model, db, helpers):
         if not _flag_on():
             abort(404)
 
+    def _strata_ok(c):
+        """Program entitlement: /case is a STRATA (Board 2) surface. Requires an active STRATA
+        membership. Uses the app's single entitlement check when provided; otherwise a
+        legacy-aware membership query (a candidate with no membership rows is a pre-entitlement
+        STRATA participant), identical in effect to app._program_active for STRATA."""
+        pa = (helpers or {}).get("program_active")
+        if pa is not None:
+            return pa(c.id, "strata")
+        from models import ProgramMembership
+        m = ProgramMembership.query.filter_by(candidate_id=c.id, program="strata").first()
+        if m is not None:
+            return m.status == "active"
+        return ProgramMembership.query.filter_by(candidate_id=c.id).first() is None
+
     def _candidate():
         cid = session.get("cand")
         if not cid:
@@ -119,6 +133,8 @@ def register(app, candidate_model, db, helpers):
             abort(401)
         if c.status != "active":
             abort(403)
+        if not _strata_ok(c):
+            abort(403)   # authenticated + active, but not entitled to the STRATA program
         if int(c.current_board or 0) != CASE_BOARD:
             abort(403)
         return c

@@ -3648,8 +3648,20 @@ def create_app():
                        .order_by(Report.id.desc()).first())
         rep_status = last_report.status if last_report else None
         rlab, rpc, rdt = _REPORT_UI.get(rep_status, (None, None, None))
+        # A single, explicit "next action" so the dashboard is immediately actionable.
+        next_action = None
+        if selected == pathways.PATHWAY_STRATA and c.is_active and c.status != "graduated":
+            if rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
+                next_action = "Start your lab for board %d" % n
+            elif rep_status in (None, "needs_changes", "rejected"):
+                next_action = "Submit your written report for board %d" % n
+            elif rep_status == "pending":
+                next_action = "Your report is in review; you'll be promoted once it's approved"
+        elif selected == pathways.PATHWAY_PARALLAX:
+            next_action = "Open the research console: run a benign control, then an adversarial trial"
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
+            "next_action": next_action,
             "applied": c.status == "pending", "rejected": c.status == "rejected",
             # program entitlements (unified, program-aware dashboard)
             "programs": programs,
@@ -3719,7 +3731,7 @@ def create_app():
             "status": ("graduated" if graduated else "active"),
             "programs": [pathways.PATHWAY_STRATA], "selected_program": pathways.PATHWAY_STRATA,
             "program_brands": _program_brands(), "is_dual": False, "no_access": False,
-            "pending_programs": [],
+            "pending_programs": [], "next_action": None,
             "requestable": [], "parallax": {"available": False, "workspace_url": "/parallax/workspace",
                                             "brand": _program_brands().get(pathways.PATHWAY_PARALLAX)},
             "board": n, "role_title": P.ROLE_TITLES.get(P.role_of(n), "-"),
@@ -3861,6 +3873,36 @@ def create_app():
         return Response(rr.wireguard_config, mimetype="text/plain",
                         headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
 
+    def _account_vm(c):
+        brands = _program_brands()
+        requestable = _requestable_programs(c)
+
+        def cell(prog):
+            m = _membership(c.id, prog)
+            if m is not None:
+                return {"program": prog, "brand": brands[prog], "status": m.status,
+                        "granted_by": m.granted_by, "can_request": False}
+            if _program_active(c.id, prog):   # legacy zero-row STRATA participant
+                return {"program": prog, "brand": brands[prog], "status": "active",
+                        "granted_by": None, "can_request": False}
+            return {"program": prog, "brand": brands[prog], "status": "not enrolled",
+                    "granted_by": None, "can_request": (prog in requestable)}
+        return {"name": c.name, "handle": c.handle, "cohort": c.cohort, "status": c.status,
+                "cells": [cell(p) for p in pathways.PATHWAYS],
+                "requested_ok": request.args.get("requested") == "1"}
+
+    @app.get("/account")
+    def candidate_account():
+        """Neutral Account -> Program Access area: a candidate's identity and their per-program
+        entitlement status, plus the explicit request affordance. Requesting a program creates a
+        'requested' row for admin review; it never grants access."""
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))
+            abort(401)
+        return render_template("candidate_account.html", vm=_account_vm(c))
+
     @app.post("/me/request-program")
     def candidate_request_program():
         """Self-service REQUEST for an additional program. Creates a 'requested' membership
@@ -3870,7 +3912,7 @@ def create_app():
             abort(401)
         prog = _norm_program(request.form.get("program") or "")
         if prog not in pathways.PATHWAYS or prog not in _requestable_programs(c):
-            return redirect(url_for("candidate_me"))
+            return redirect(url_for("candidate_account"))
         existing = _membership(c.id, prog)
         if existing is None:
             db.session.add(ProgramMembership(candidate_id=c.id, program=prog,
@@ -3878,7 +3920,7 @@ def create_app():
             _membership_event(c.id, prog, "request", None, "requested", c.handle,
                               "candidate self-service request")
             db.session.commit()
-        return redirect(url_for("candidate_me"))
+        return redirect(url_for("candidate_account", requested="1"))
 
     @app.get("/admin/preview/<int:cid>")
     @admin_required
@@ -3949,7 +3991,7 @@ def create_app():
     if os.environ.get("RANGER_JWT_PRIVATE_B64") and os.environ.get("OPENSEARCH_ADMIN_PASSWORD"):
         try:
             import soc_gateway
-            soc_gateway.register(app, Candidate, db)
+            soc_gateway.register(app, Candidate, db, {"program_active": _program_active})
             app.logger.info("SOC gateway registered at /soc")
         except Exception as e:  # noqa: BLE001
             app.logger.warning("SOC gateway not registered: %s", e)
@@ -3960,7 +4002,8 @@ def create_app():
     try:
         import case_routes
         case_routes.register(app, Candidate, db,
-                             {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
+                             {"ensure_seed": _ensure_seed, "current_seed": _current_seed,
+                              "program_active": _program_active})
     except Exception as e:  # noqa: BLE001
         app.logger.warning("case UI not registered: %s", e)
 
@@ -3970,7 +4013,8 @@ def create_app():
     try:
         import workbench_routes
         workbench_routes.register(app, Candidate, db,
-                                  {"ensure_seed": _ensure_seed, "current_seed": _current_seed})
+                                  {"ensure_seed": _ensure_seed, "current_seed": _current_seed,
+                                   "program_active": _program_active})
     except Exception as e:  # noqa: BLE001
         app.logger.warning("workbench not registered: %s", e)
 

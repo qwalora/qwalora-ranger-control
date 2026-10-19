@@ -37,8 +37,14 @@
   {% endif %}
   <header class="anav"><div class="anav-in">
     <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    {% if vm.preview %}<span class="btn btn-ghost btn-pill" style="opacity:.5;pointer-events:none">Sign out</span>
-    {% else %}<a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>{% endif %}
+    {% if vm.preview %}
+    <span class="btn btn-ghost btn-pill" style="opacity:.5;pointer-events:none">Sign out</span>
+    {% else %}
+    <div style="display:flex;gap:8px;align-items:center">
+      <a class="btn btn-ghost btn-pill" href="/account">{{ ic('user','ic ic-sm') }} Account</a>
+      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
+    </div>
+    {% endif %}
   </div></header>
 
   <div class="page-main">
@@ -91,7 +97,7 @@
             <span class="ring">{{ ic('lock','ic') }}</span>
             <b style="font:600 15px/1.2 var(--f)">No program access yet</b>
             <p class="muted" style="font-size:13px;max-width:420px">Your Ranger account is active, but you
-              are not currently authorized for a program. Request access below; an admin reviews each request.</p>
+              are not currently authorized for a program. Manage and request program access from your account.</p>
             {% if vm.pending_programs %}
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px">
               {% for p in vm.pending_programs %}
@@ -100,17 +106,18 @@
             </div>
             {% endif %}
           </div>
-          {% if vm.requestable %}
           <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
-            {% for p in vm.requestable %}
-            <form method="post" action="/me/request-program">
-              <input type="hidden" name="csrf" value="{{ csrf_token }}">
-              <input type="hidden" name="program" value="{{ p }}">
-              <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request {{ vm.program_brands[p] }}</button>
-            </form>
-            {% endfor %}
+            <a class="btn btn-primary btn-sm" href="/account">{{ ic('user','ic ic-sm') }} Go to Program access</a>
           </div>
-          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if vm.next_action and vm.status == 'active' and not vm.no_access %}
+        <div class="field">
+          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px">
+            <span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>Next</span>
+            <b style="font:600 13px/1.35 var(--f);color:var(--ink)">{{ vm.next_action }}</b>
+          </div>
         </div>
         {% endif %}
 
@@ -288,34 +295,43 @@
 
         {% if vm.selected_program == 'parallax' %}
         <div class="field">
-          <label class="label">{{ vm.parallax.brand }} research workspace</label>
+          <label class="label">Your assignment</label>
+          <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
+            <b style="font:600 13.5px/1.3 var(--f);color:var(--ink)">RAG prompt-injection trust-boundary investigation</b>
+            <span class="muted" style="font-size:12px;display:block;margin-top:3px">Determine whether attacker-controlled text in a low-trust retrieved document can make a genuine, locally hosted model violate its trust boundary. You control only the retrieved document.</span>
+          </div>
+        </div>
+        <div class="field">
+          <label class="label">Lab access</label>
           <a href="{{ vm.parallax.workspace_url }}" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:14px 16px">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
                 <b style="font:600 13.5px/1.2 var(--f);color:var(--ink,#160d42)">{{ ic('cpu','ic ic-sm') }} Open the research console</b>
-                <span class="muted" style="font-size:12px;display:block;margin-top:2px">Adversarial AI-security experiments: controlled RAG prompt-injection trials, deterministic evaluation, signed evidence.</span>
+                <span class="muted" style="font-size:12px;display:block;margin-top:2px">Live model-backed experiments: benign controls, adversarial trials, deterministic evaluation.</span>
               </div>
               <span class="pill pill-violet"><span class="dot dot-violet"></span>assessment-only</span>
             </div>
           </a>
-          <p class="dim" style="font-size:11.5px;margin-top:6px">Your signed research runs and investigation history live in the workspace. No pathway qualification is issued.</p>
+        </div>
+        <div class="field">
+          <label class="label">History, evidence &amp; submissions</label>
+          <div class="record">
+            <div class="rec-row" style="align-items:center">
+              <span class="rec-pip"><span>{{ ic('inbox','ic ic-sm') }}</span></span>
+              <div class="rec-id"><b>Signed research runs</b><span class="muted">Each trial is an Ed25519-signed, owner-scoped evidence record in the workspace History tab.</span></div>
+            </div>
+            <div class="rec-row" style="align-items:center">
+              <span class="rec-pip"><span>{{ ic('shield','ic ic-sm') }}</span></span>
+              <div class="rec-id"><b>Investigation submissions</b><span class="muted">Bind a reasoned security analysis to a trial's evidence id and submit it from the console.</span></div>
+            </div>
+          </div>
+          <p class="dim" style="font-size:11.5px;margin-top:6px">Assessment-only. No pathway qualification is issued and no credential is awarded.</p>
         </div>
         {% endif %}
 
         {% if vm.requestable and vm.status == 'active' and not vm.no_access %}
-        <div class="field">
-          <label class="label">Request another program</label>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            {% for p in vm.requestable %}
-            <form method="post" action="/me/request-program">
-              <input type="hidden" name="csrf" value="{{ csrf_token }}">
-              <input type="hidden" name="program" value="{{ p }}">
-              <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request {{ vm.program_brands[p] }}</button>
-            </form>
-            {% endfor %}
-          </div>
-          <p class="dim" style="font-size:11.5px;margin-top:6px">An admin reviews each request. Access is granted per program.</p>
-        </div>
+        <p class="dim" style="font-size:11.5px">Need another program? Request it from your
+          <a href="/account">account</a>; an admin reviews each request.</p>
         {% endif %}
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:16px">

@@ -170,7 +170,7 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     return created
 
 
-def register(app, candidate_model, db):
+def register(app, candidate_model, db, helpers=None):
     """Wire the /soc gateway onto the portal app. candidate_model is the Candidate
     ORM class; db is the SQLAlchemy handle."""
 
@@ -179,6 +179,19 @@ def register(app, candidate_model, db):
         if not cid:
             return None
         return candidate_model.query.get(cid)
+
+    def _strata_ok(c):
+        """Program entitlement: /soc (SOC Dashboards) is a STRATA surface. Requires an active
+        STRATA membership (app entitlement check when provided; else a legacy-aware membership
+        query identical in effect to app._program_active for STRATA)."""
+        pa = (helpers or {}).get("program_active") if helpers else None
+        if pa is not None:
+            return pa(c.id, "strata")
+        from models import ProgramMembership
+        m = ProgramMembership.query.filter_by(candidate_id=c.id, program="strata").first()
+        if m is not None:
+            return m.status == "active"
+        return ProgramMembership.query.filter_by(candidate_id=c.id).first() is None
 
     def _candidate_slug(c):
         return authz._slug(c.github_id or c.handle)
@@ -226,6 +239,9 @@ def register(app, candidate_model, db):
         if c.status != "active":
             _log("deny", reason="status", status=c.status, cand=c.id)
             abort(403)
+        if not _strata_ok(c):
+            _log("deny", reason="program", cand=c.id)
+            abort(403)   # authenticated + active, but not entitled to the STRATA program
         if int(c.current_board or 0) != SIEM_BOARD:
             _log("deny", reason="board", board=c.current_board, cand=c.id)
             abort(403)

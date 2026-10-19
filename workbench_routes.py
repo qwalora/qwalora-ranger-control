@@ -24,6 +24,19 @@ def register(app, candidate_model, db, helpers=None):
     def _wants_json():
         return request.path.endswith(".json") or "application/json" in (request.headers.get("Accept") or "")
 
+    def _strata_ok(c):
+        """Program entitlement: /workbench is a STRATA surface. Requires an active STRATA
+        membership (app entitlement check when provided; else a legacy-aware membership query
+        identical in effect to app._program_active for STRATA)."""
+        pa = (helpers or {}).get("program_active") if helpers else None
+        if pa is not None:
+            return pa(c.id, "strata")
+        from models import ProgramMembership
+        m = ProgramMembership.query.filter_by(candidate_id=c.id, program="strata").first()
+        if m is not None:
+            return m.status == "active"
+        return ProgramMembership.query.filter_by(candidate_id=c.id).first() is None
+
     def _cand():
         """Authenticated + ADMITTED candidate, or a redirect/401. A GitHub login alone is not
         admission: status must be 'active'."""
@@ -38,6 +51,9 @@ def register(app, candidate_model, db, helpers=None):
             return None, redirect(url_for("gh_login"))
         if c.status != "active":
             # authenticated applicant who is not admitted: no workbench access
+            return None, (_render_locked(c))
+        if not _strata_ok(c):
+            # authenticated + active, but not entitled to the STRATA program
             return None, (_render_locked(c))
         return c, None
 
