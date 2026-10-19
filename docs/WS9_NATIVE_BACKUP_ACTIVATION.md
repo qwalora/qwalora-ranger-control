@@ -1,5 +1,8 @@
 # WS9 - native PostgreSQL volume backup activation (parallax-nonprod)
 
+> STATUS: BACKUP ACTIVATION VERIFIED (operator-confirmed 2026-10-19). RESTORE VERIFICATION PENDING
+> (no restore drill completed).
+
 Active plan for WS9. The operator chose Railway's built-in volume backup for the parallax-postgres
 service as the single backup mechanism, to avoid added infrastructure. No external S3, no Railway
 storage bucket, no separate backup runner service, no PITR. The encrypted logical-backup tooling
@@ -77,11 +80,22 @@ backup present; a verified restore remains explicitly pending (drill deferred).
   exists immediately rather than waiting up to 24h for the first scheduled run. (A benign empty staged
   patch `a015b2cc` with zero changes may appear; it is harmless and can be left or discarded.)
 
+## Operator-confirmed evidence (2026-10-19 09:47 ET, Railway dashboard, parallax-postgres Backups tab)
+- Daily scheduled volume backups: ACTIVE.
+- Next scheduled backup: in approximately 7 hours.
+- First on-demand backup: visible, dated 2026-10-19 09:45.
+- Backup entry size: 868 MB (consistent with the measured database disk usage of ~0.867 GB).
+- PITR: remains DISABLED.
+- No external backup infrastructure provisioned.
+
 ## Readiness statement
-NOT yet operationally verified. Enabled + committed: the Daily schedule change (service redeployed
-SUCCESS). Pending, and required before claiming readiness: (1) dashboard confirmation that the Daily
-schedule is listed and at least one backup exists, and (2) the timed restore drill (deferred by the
-operator). Until both are done, this is "backup schedule enabled," not "verified recoverable."
+BACKUP ACTIVATION VERIFIED: the Daily native volume-backup schedule is active on parallax-postgres and
+a first backup (868 MB, 2026-10-19 09:45) exists, operator-confirmed in the dashboard.
+RESTORE VERIFICATION PENDING: no restore drill has been completed, so recoverability is not yet proven.
+A verified restore (restore a backup into a disposable PostgreSQL 18 target; confirm candidate +
+program-membership records and the Ed25519 signed-evidence chain; measure RTO) remains the outstanding
+step before full "verified recoverable" status. The restore procedure above is the operating
+instruction when that drill is run.
 
 ## Preserved
 Production and all existing Ranger services are untouched. STRATA/PARALLAX entitlements, assessment
