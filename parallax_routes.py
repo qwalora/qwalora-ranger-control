@@ -439,8 +439,22 @@ def register(app, candidate_model=None, db=None, helpers=None):
         from parallax.research import protocol as _P
         from parallax.research import model_backend as _mb
         ident = _mb.from_config().identity()
+        # Shared candidate app-shell navigation fields (presentation only; entitlement already enforced
+        # above). PARALLAX is the selected program here; dual-program candidates get the switcher.
+        import pathways as _pw
+        from models import ProgramMembership as _PM
+        _active = {m.program for m in _PM.query.filter_by(candidate_id=c.id, status="active").all()}
+        _progs = [p for p in _pw.PATHWAYS if p in _active]
+        if "parallax" not in _progs:
+            _progs.append("parallax")
+        _nm = (c.name or c.handle or "?")
+        _ini = "".join(w[0] for w in _nm.split()[:2]).upper() or _nm[:2].upper()
         vm = {
-            "handle": c.handle,
+            "name": c.name, "handle": c.handle, "ini": _ini, "status": c.status,
+            "board": getattr(c, "current_board", 1),
+            "programs": _progs, "selected_program": "parallax",
+            "program_brands": {p: (_pw.branding(p).get("name") or p.upper()) for p in _pw.PATHWAYS},
+            "is_dual": len(_progs) > 1,
             "model": ident,
             "backend_provenance": "infrastructure_backed" if ident["is_real"] else "simulated",
             "tasks": [{"id": t["task_id"], "task": t["task"]} for t in _P.LEGIT_TASKS],

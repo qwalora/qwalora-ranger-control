@@ -1,19 +1,13 @@
 {% extends "base.html" %}
-{% from "_brand.html" import qlogo %}
 {% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
 {% block title %}PARALLAX Research · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in" style="max-width:1200px">
-    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <div style="display:flex;align-items:center;gap:12px">
-      <span class="av av-26">{{ vm.handle[:2]|upper }}</span>
-      <span class="muted" style="font-size:13px">@{{ vm.handle }}</span>
-      <a class="btn btn-ghost btn-pill" href="/me">Dashboard</a>
-    </div>
-  </div></header>
-
-  <main class="pxw">
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('research', vm) }}
+    <section class="ranges-main">
+      <div class="pxw">
     <!-- header strip -->
     <div class="pxw-head">
       <div>
@@ -171,19 +165,21 @@
     </section>
 
     <footer class="afoot" style="text-align:left;padding:22px 0 10px">
-      <span class="mono" style="color:rgba(255,255,255,.6);font-size:12px">Qwalora Ranger · PARALLAX · nonproduction · Ed25519-signed evidence · assessment-only</span>
+      <span class="mono" style="color:var(--mut);font-size:12px">Qwalora Ranger · PARALLAX · nonproduction · Ed25519-signed evidence · assessment-only</span>
     </footer>
-  </main>
+      </div>
+    </section>
+  </div>
 </div>
 
 <style>
   /* PARALLAX workspace: full-width layout on the shared Ranger light-component system */
   /* [hidden] must win over component display rules (.empty/.pill set display, which beats UA [hidden]) */
   .pxw [hidden]{display:none!important}
-  .pxw{max-width:1200px;margin:0 auto;padding:26px 24px 10px}
+  .pxw{max-width:1180px;margin:0 auto;padding:22px 24px 10px}
   .pxw-head{display:flex;gap:24px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}
-  .pxw-h1{font:700 26px/1.1 var(--f);letter-spacing:-.8px;color:#fff;margin:10px 0 0}
-  .pxw-sub{color:rgba(255,255,255,.72);margin:10px 0 0;max-width:720px;line-height:1.6;font-size:13.5px}
+  .pxw-h1{font:700 24px/1.1 var(--f);letter-spacing:-.6px;color:var(--ink);margin:10px 0 0}
+  .pxw-sub{color:var(--mut);margin:10px 0 0;max-width:760px;line-height:1.55;font-size:12.5px}
   .pxw-target{background:#fff;border-radius:12px;box-shadow:var(--sh-card);padding:12px 14px;display:flex;align-items:center;gap:14px;flex:none}
   .pxw-target-row{display:flex;align-items:center;gap:10px}
   .pxw-dot{width:10px;height:10px;border-radius:50%;background:var(--dim);box-shadow:0 0 0 3px rgba(154,160,172,.2);flex:none}
@@ -198,7 +194,7 @@
   .pxw-split{display:grid;grid-template-columns:minmax(340px,5fr) 7fr;gap:18px;align-items:start}
 
   .pxw-stack{display:flex;flex-direction:column;gap:18px;min-width:0}
-  .pxw-card{background:#fff;overflow:hidden}
+  .pxw-card{background:#fff;overflow:hidden;max-width:none;border:1px solid var(--line);box-shadow:none}
   .pxw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line)}
   .pxw-card-h h2{display:flex;align-items:center;gap:8px;margin:0;font:600 14px/1 var(--f);letter-spacing:-.2px;color:var(--ink)}
   .pxw-card-h h2 .ic{color:var(--violet)}

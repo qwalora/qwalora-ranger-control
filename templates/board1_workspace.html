@@ -1,297 +1,208 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_candnav.html" import candnav %}
 {% block title %}SOC Triage · Board 1 · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <div style="display:flex;gap:8px;align-items:center">
-      <a class="btn btn-ghost btn-pill" href="/me">{{ ic('grid','ic ic-sm') }} Dashboard</a>
-      <a class="btn btn-ghost btn-pill" href="/me/mission">{{ ic('flag','ic ic-sm') }} Mission brief</a>
-      <a class="btn btn-ghost btn-pill" href="/me/workspace/incident">{{ ic('layers','ic ic-sm') }} Incident investigation</a>
-      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-    </div>
-  </div></header>
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('workspace', vm) }}
 
-  <main class="socw">
-    <div class="socw-head">
-      <div>
-        <span class="eyebrow"><span class="d"></span>STRATA · Board 1 · SOC Analyst (Tier 1)</span>
-        <h1 class="socw-h1">{{ vm.mission.title }}</h1>
-        <p class="socw-sub">{{ vm.mission.business_context }}</p>
-      </div>
-      <div class="socw-case card">
-        <div><span class="label" style="font-size:11px">Case reference</span>
-          <code class="mono" id="case-ref">{{ vm.case_ref }}</code></div>
-        <div id="status-pill-wrap">
-          {% if vm.status.submitted %}
-          <span class="pill {% if vm.status.passed %}pill-ok{% else %}pill-amber{% endif %}">
-            <span class="dot {% if vm.status.passed %}dot-ok{% else %}dot-amber{% endif %}"></span>
-            {{ vm.status.score }}% {% if vm.status.passed %}· cleared objective{% else %}· need {{ vm.status.pass_bar }}%{% endif %}</span>
-          {% else %}
-          <span class="pill pill-violet"><span class="dot dot-violet"></span>awaiting submission</span>
-          {% endif %}
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>STRATA · Board 1 · SOC Analyst (Tier 1)</div>
+          <div class="ttl" style="margin-top:6px">{{ vm.mission.title }}</div>
+          <div class="rg-sub">{{ vm.mission.business_context }}</div>
+        </div>
+        <div class="iw-head-side">
+          <div class="muted" style="font-size:11px">Case reference</div>
+          <code class="mono" id="case-ref" style="font-size:12px">{{ vm.case_ref }}</code>
+          <span id="status-pill-wrap">
+            {% if vm.soc.submitted %}
+            <span class="pill {% if vm.soc.passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot"></span>{{ vm.soc.score }}% {% if vm.soc.passed %}· cleared{% else %}· need {{ vm.soc.pass_bar }}%{% endif %}</span>
+            {% else %}<span class="pill pill-violet"><span class="dot"></span>awaiting submission</span>{% endif %}
+          </span>
         </div>
       </div>
-    </div>
 
-    <div class="socw-split">
-      <!-- Assignment brief -->
-      <aside class="card socw-brief">
-        <div class="socw-card-h"><h2>{{ ic('shield','ic ic-sm') }} Your assignment</h2></div>
-        <div class="socw-card-b">
-          <p class="socw-role">{{ vm.mission.role }}</p>
-          <div class="socw-sec"><span class="label">Objectives</span>
-            <ul>{% for o in vm.mission.objectives %}<li>{{ o }}</li>{% endfor %}</ul></div>
-          <div class="socw-sec"><span class="label">Authorized scope</span><p>{{ vm.mission.scope }}</p></div>
-          <div class="socw-sec"><span class="label">Deliverables</span>
-            <ul>{% for d in vm.mission.deliverables %}<li>{{ d }}</li>{% endfor %}</ul></div>
-          <details class="socw-more">
-            <summary>Evidence, submission &amp; evaluation</summary>
-            <div class="socw-sec"><span class="label">Evidence</span><p>{{ vm.mission.evidence }}</p></div>
-            <div class="socw-sec"><span class="label">Submission</span><p>{{ vm.mission.submission }}</p></div>
-            <div class="socw-sec"><span class="label">Evaluation</span><p>{{ vm.mission.evaluation }}</p></div>
+      <div class="iw">
+        <div id="ws-error" class="note-err" hidden style="margin-bottom:12px"></div>
+
+        <div class="card iw-card" style="margin-bottom:14px">
+          <details class="soc-brief" open>
+            <summary><span class="role">{{ vm.mission.role }}</span></summary>
+            <div class="soc-brief-grid">
+              <div><span class="label">Objectives</span><ul>{% for o in vm.mission.objectives %}<li>{{ o }}</li>{% endfor %}</ul></div>
+              <div><span class="label">Authorized scope</span><p>{{ vm.mission.scope }}</p>
+                <span class="label" style="margin-top:8px">Deliverables</span><ul>{% for d in vm.mission.deliverables %}<li>{{ d }}</li>{% endfor %}</ul></div>
+              <div><span class="label">Evidence &amp; evaluation</span><p>{{ vm.mission.evidence }}</p><p style="margin-top:6px">{{ vm.mission.evaluation }}</p>
+                {% if vm.mission.references %}<span class="label" style="margin-top:8px">Reference</span>
+                <div class="soc-refs">{% for r in vm.mission.references %}<a href="{{ r.url if r.url else '/resources' }}" target="_blank" rel="noopener">{{ ic('ext','ic ic-sm') }} {{ r.title if r.title else r }}</a>{% endfor %}</div>{% endif %}</div>
+            </div>
           </details>
-          {% if vm.mission.references %}
-          <div class="socw-sec"><span class="label">Reference material</span>
-            <div class="socw-refs">
-              {% for r in vm.mission.references %}
-              <a href="{{ r.url if r.url else '/resources' }}" target="_blank" rel="noopener" class="socw-ref">{{ ic('ext','ic ic-sm') }} {{ r.title if r.title else r }}</a>
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
-          <p class="dim" style="font-size:11px;margin-top:10px">The verdict an alert deserves is an investigation question, not supported here. Access faults only: contact candidate support.</p>
         </div>
-      </aside>
 
-      <!-- Triage queue -->
-      <section class="card socw-queue">
-        <div class="socw-card-h">
-          <h2>{{ ic('activity','ic ic-sm') }} Alert queue</h2>
-          <span class="mono dim" id="queue-meta"></span>
-        </div>
-        <div class="socw-card-b">
-          <div id="ws-loading" class="empty"><span class="ring">{{ ic('server','ic') }}</span>
-            <p>Loading your seeded alert queue. The dataset is unique to you and to this attempt; the answer key stays on the server.</p></div>
-          <div id="ws-error" class="note-err" hidden></div>
-          <div id="alert-list" hidden></div>
-
-          <div id="submit-bar" class="socw-submit" hidden>
-            <div><b id="adj-count">0</b> <span class="dim">of</span> <b id="alert-total">0</b> <span class="dim">adjudicated</span></div>
-            <button class="btn btn-primary" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit adjudication</button>
+        <div class="card iw-card">
+          <div class="iw-card-h">
+            <h2>{{ ic('activity','ic ic-sm') }} Alert queue</h2>
+            <span class="mono dim" id="queue-meta"></span>
           </div>
-
-          <div id="result-panel" class="socw-result" hidden>
-            <div class="socw-result-h">
-              <span class="pill" id="result-pill"></span>
-              <span class="dim" id="result-note"></span>
-            </div>
-            <p class="dim" id="result-next" style="font-size:12.5px"></p>
+          <div class="iw-toolbar">
+            <span class="iw-search">{{ ic('search','ic ic-sm') }}<input id="q" placeholder="Search id, signal, host, log text…" autocomplete="off"></span>
+            <label class="iw-chk"><input type="checkbox" id="only-open"> only un-adjudicated</label>
+            <span class="dim mono" id="shown-count" style="margin-left:auto;font-size:11px"></span>
+          </div>
+          <div id="ws-loading" class="iw-empty">Loading your seeded alert queue. The dataset is unique to you and to this attempt; the answer key stays on the server.</div>
+          <div class="iw-tbl-wrap" hidden id="tbl-wrap">
+            <table class="iw-tbl soc-tbl">
+              <thead><tr><th style="width:24px"></th><th>Alert</th><th>Signal</th><th>Host / time</th><th style="width:150px">Verdict</th><th style="width:118px">Severity</th><th>Technique / IOCs (TP)</th></tr></thead>
+              <tbody id="alert-rows"></tbody>
+            </table>
+          </div>
+          <div class="iw-submit" id="submit-bar" hidden>
+            <div class="muted" style="font-size:12px"><b id="adj-count">0</b> of <b id="alert-total">0</b> adjudicated</div>
+            <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit adjudication</button>
+          </div>
+          <div id="result-panel" class="iw-result" hidden>
+            <div class="iw-result-h"><span class="pill" id="result-pill"></span> <span class="dim" id="result-note" style="font-size:11.5px"></span></div>
+            <p class="dim" id="result-next" style="font-size:12px;margin:8px 0 0"></p>
           </div>
         </div>
-      </section>
-    </div>
-  </main>
-
-  <footer class="afoot"><span class="mono">Qwalora Ranger · Board 1 SOC triage · answer-free, server-side grading</span></footer>
+      </div>
+    </section>
+  </div>
 </div>
 
 <style>
   [hidden]{display:none!important}
-  .socw{max-width:1180px;margin:0 auto;padding:24px 22px 12px}
-  .socw-head{display:flex;gap:22px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}
-  .socw-h1{font:700 24px/1.1 var(--f);letter-spacing:-.6px;color:#fff;margin:9px 0 0}
-  .socw-sub{color:rgba(255,255,255,.72);margin:9px 0 0;max-width:680px;line-height:1.55;font-size:12.5px}
-  .socw-case{padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:none;min-width:220px}
-  .socw-case code{font-size:12px;display:block;margin-top:2px}
-  .socw-split{display:grid;grid-template-columns:minmax(300px,4fr) 7fr;gap:16px;align-items:start}
-  .socw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
-  .socw-card-h h2{font:600 13.5px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
-  .socw-card-b{padding:16px}
-  .socw-role{font-size:12.5px;color:var(--ink);line-height:1.5;margin:0 0 14px}
-  .socw-sec{margin-bottom:14px}
-  .socw-sec .label{display:block;margin-bottom:5px}
-  .socw-sec ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
-  .socw-sec li,.socw-sec p{font-size:12px;color:var(--mut);line-height:1.5;margin:0}
-  .socw-more summary{font:600 12px/1 var(--f);color:var(--violet);cursor:pointer;margin:4px 0 10px}
-  .socw-refs{display:flex;flex-direction:column;gap:6px}
-  .socw-ref{font-size:12px;color:var(--violet);text-decoration:none;display:flex;align-items:center;gap:6px}
-  .socw-alert{border:1px solid var(--line2);border-radius:10px;padding:12px 14px;margin-bottom:10px}
-  .socw-alert.adj{border-color:var(--violet-100);background:var(--sub)}
-  .socw-alert-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .socw-alert-id{font:600 12.5px/1 var(--m);color:var(--ink)}
-  .socw-alert-sig{font:600 12.5px/1.2 var(--f);color:var(--ink)}
-  .socw-alert-meta{font-size:11px;color:var(--dim);margin-left:auto;font-family:var(--m)}
-  .socw-raw{font-family:var(--m);font-size:11.5px;color:var(--mut);background:var(--light);border-radius:7px;padding:8px 10px;margin:9px 0;white-space:pre-wrap;word-break:break-word}
-  .socw-ctrls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
-  .socw-ctrl{display:flex;flex-direction:column;gap:4px}
-  .socw-ctrl .label{font-size:10.5px}
-  .socw-seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
-  .socw-seg button{border:none;background:#fff;cursor:pointer;font:600 11.5px/1 var(--f);padding:8px 12px;color:var(--mut)}
-  .socw-seg button.on-tp{background:#fdecee;color:#b4232b}
-  .socw-seg button.on-fp{background:var(--ok-bg);color:var(--ok)}
-  .socw-input,.socw-select{height:34px;border:1px solid var(--line2);border-radius:8px;padding:0 10px;font:500 12px/1 var(--f);background:#fff;color:var(--ink)}
-  .socw-input{width:170px}
-  .socw-tp-only[hidden]{display:none!important}
-  .socw-flag{font-size:10.5px;font-family:var(--m);margin-left:6px}
-  .socw-flag.ok{color:var(--ok)}.socw-flag.bad{color:#b4232b}
-  .socw-submit{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:14px;border-top:1px solid var(--line);margin-top:4px}
-  .socw-result{margin-top:14px;border:1px solid var(--line2);border-radius:10px;padding:14px 16px}
-  .socw-result-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .socw-seg button:focus-visible,#btn-submit:focus-visible{outline:none;box-shadow:0 0 0 3px var(--violet-100)}
-  @media (max-width:860px){.socw-split{grid-template-columns:1fr}}
+  .ranges-main .rg-head{display:flex;gap:20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+  .rg-head .ttl{font:700 20px/1.1 var(--f);letter-spacing:-.4px;color:var(--ink)}
+  .rg-head .rg-sub{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:6px;max-width:820px}
+  .iw-head-side{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+  .iw{padding:18px 24px 28px}
+  .iw-card{max-width:none;box-shadow:none;border:1px solid var(--line)}
+  .iw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .iw-card-h h2{font:600 13px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .soc-brief{padding:12px 15px}
+  .soc-brief summary{cursor:pointer;font:600 12.5px/1.4 var(--f);color:var(--ink)}
+  .soc-brief .role{color:var(--ink)}
+  .soc-brief-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:12px}
+  .soc-brief-grid ul{margin:4px 0 0;padding-left:16px;display:flex;flex-direction:column;gap:3px}
+  .soc-brief-grid li,.soc-brief-grid p{font-size:12px;color:var(--mut);line-height:1.5;margin:0}
+  .soc-refs{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+  .soc-refs a{font-size:12px;color:var(--violet);text-decoration:none;display:flex;align-items:center;gap:5px}
+  .iw-toolbar{display:flex;align-items:center;gap:12px;padding:10px 15px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .iw-search{display:flex;align-items:center;gap:7px;flex:1;min-width:180px;height:34px;padding:0 11px;border:1px solid var(--line2);border-radius:8px;color:var(--mut)}
+  .iw-search input{border:none;outline:none;background:transparent;flex:1;min-width:0;font:500 12.5px/1 var(--f);color:var(--ink)}
+  .iw-chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer}
+  .iw-empty{padding:26px 16px;color:var(--mut);font-size:12.5px;text-align:center}
+  .iw-tbl-wrap{max-height:64vh;overflow:auto}
+  .iw-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .iw-tbl th{position:sticky;top:0;background:var(--sub);text-align:left;font:600 10.5px/1 var(--f);letter-spacing:.6px;text-transform:uppercase;color:var(--dim);padding:9px 10px;border-bottom:1px solid var(--line);z-index:1}
+  .iw-tbl td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle;color:var(--ink)}
+  .iw-tbl tr.adj td{background:var(--violet-50)}
+  .iw-tbl .a-id{font-family:var(--m);font-weight:600;white-space:nowrap}
+  .iw-tbl .a-sig{font-weight:500}
+  .iw-tbl .a-ht{font-family:var(--m);font-size:10.5px;color:var(--mut);white-space:nowrap}
+  .iw-caret{cursor:pointer;color:var(--dim);user-select:none;font-family:var(--m)}
+  .iw-raw td{background:var(--light);font-family:var(--m);font-size:11px;color:var(--mut);white-space:pre-wrap;word-break:break-word;padding:8px 12px}
+  .soc-seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+  .soc-seg button{border:none;background:#fff;cursor:pointer;font:600 11px/1 var(--f);padding:7px 9px;color:var(--mut)}
+  .soc-seg button.on-tp{background:#fdecee;color:#b4232b}.soc-seg button.on-fp{background:var(--ok-bg);color:#0f7a48}
+  .soc-sel,.soc-in{height:30px;border:1px solid var(--line2);border-radius:7px;padding:0 8px;font:500 11.5px/1 var(--f);background:#fff;color:var(--ink)}
+  .soc-in{width:120px}
+  .soc-tp[hidden]{display:none!important}
+  .soc-tpwrap{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .iw-flag{font-size:10px;font-family:var(--m)}.iw-flag.ok{color:#0f7a48}.iw-flag.bad{color:#b4232b}
+  .iw-submit{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid var(--line)}
+  .iw-result{border-top:1px solid var(--line);padding:12px 15px}
+  .iw-result-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .note-err{background:#fdecee;border:1px solid #f3b9bf;color:#b4232b;border-radius:9px;padding:10px 13px;font-size:12.5px}
+  .label{font:600 10.5px/1 var(--f);letter-spacing:.3px;color:var(--dim);text-transform:uppercase}
+  @media (max-width:1080px){.soc-brief-grid{grid-template-columns:1fr}}
+  @media (max-width:860px){.app.app-2col{grid-template-columns:1fr}.nav{display:none}.iw-tbl-wrap{max-height:none}}
 </style>
 
 <script>
 (function(){
-  var CSRF = "{{ csrf_token }}";
-  var SEVERITIES = {{ vm.severities|tojson }};
-  var $ = function(id){return document.getElementById(id);};
-  var state = {};  // id -> {verdict, severity, technique, iocs}
-
+  var CSRF="{{ csrf_token }}", SEV={{ vm.severities|tojson }}, PASS={{ vm.soc.pass_bar|default(95) }};
+  var $=function(id){return document.getElementById(id);};
+  var alerts=[], state={}, openRaw={};
   function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+  async function getJSON(u){var r=await fetch(u,{headers:{'Accept':'application/json'},credentials:'same-origin'});
+    if(r.status!==200){throw new Error('('+r.status+') '+(await r.text()).slice(0,160));}return r.json();}
+  async function postJSON(u,b){var r=await fetch(u,{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(b)});
+    var j=null;try{j=await r.json();}catch(e){}return {status:r.status,body:j};}
 
-  async function getJSON(url){
-    var r = await fetch(url, {headers:{'Accept':'application/json'}, credentials:'same-origin'});
-    if(r.status!==200){ throw new Error('('+r.status+') '+(await r.text()).slice(0,180)); }
-    return r.json();
-  }
-  async function postJSON(url, body){
-    var r = await fetch(url, {method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},
-      body: JSON.stringify(body)});
-    var j = null; try{ j = await r.json(); }catch(e){}
-    return {status:r.status, body:j};
-  }
+  function sevSel(id){return '<select class="soc-sel" data-field="severity" data-id="'+id+'"><option value="">severity…</option>'
+    +SEV.map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('')+'</select>';}
 
-  function updateCount(){
-    var done = Object.keys(state).filter(function(k){return state[k] && state[k].verdict;}).length;
-    $('adj-count').textContent = done;
-  }
+  function filtered(){var q=($('q').value||'').toLowerCase(),only=$('only-open').checked;
+    return alerts.filter(function(a){if(only&&state[a.id]&&state[a.id].verdict)return false;
+      if(!q)return true;return (a.id+' '+a.signal+' '+a.host+' '+a.raw).toLowerCase().indexOf(q)>=0;});}
 
-  function sevSelect(id){
-    var opts = ['<option value="">severity…</option>'].concat(
-      SEVERITIES.map(function(s){return '<option value="'+s+'">'+s+'</option>';})).join('');
-    return '<select class="socw-select" data-field="severity" data-id="'+id+'">'+opts+'</select>';
-  }
+  function row(a){var s=state[a.id]||{},tp=s.verdict==='true_positive';
+    var h='<tr class="'+(s.verdict?'adj':'')+'" data-row="'+esc(a.id)+'">'
+      +'<td><span class="iw-caret" data-caret="'+esc(a.id)+'">'+(openRaw[a.id]?'&#9662;':'&#9656;')+'</span></td>'
+      +'<td class="a-id">'+esc(a.id)+'</td><td class="a-sig">'+esc(a.signal)+'</td>'
+      +'<td class="a-ht">'+esc(a.host)+'<br>'+esc(a.timestamp)+'</td>'
+      +'<td><span class="soc-seg" data-id="'+esc(a.id)+'"><button type="button" data-v="true_positive"'+(tp?' class="on-tp"':'')+'>TP</button>'
+      +'<button type="button" data-v="false_positive"'+(s.verdict==='false_positive'?' class="on-fp"':'')+'>FP</button></span></td>'
+      +'<td>'+sevSel(esc(a.id))+'</td>'
+      +'<td><div class="soc-tpwrap soc-tp" data-tp="'+esc(a.id)+'"'+(tp?'':' hidden')+'>'
+      +'<input class="soc-in" data-field="technique" data-id="'+esc(a.id)+'" placeholder="T1059">'
+      +'<input class="soc-in" data-field="iocs" data-id="'+esc(a.id)+'" placeholder="host, user@host" style="width:150px">'
+      +'<span class="iw-flag" data-flag="'+esc(a.id)+'"></span></div></td></tr>';
+    if(openRaw[a.id]) h+='<tr class="iw-raw"><td></td><td colspan="6">'+esc(a.raw)+'</td></tr>';
+    return h;}
 
-  function alertRow(a){
-    return '<div class="socw-alert" id="al-'+esc(a.id)+'">'
-      + '<div class="socw-alert-top">'
-      +   '<span class="socw-alert-id">'+esc(a.id)+'</span>'
-      +   '<span class="socw-alert-sig">'+esc(a.signal)+'</span>'
-      +   '<span class="socw-alert-meta">'+esc(a.host)+' · '+esc(a.timestamp)+'</span>'
-      + '</div>'
-      + '<div class="socw-raw">'+esc(a.raw)+'</div>'
-      + '<div class="socw-ctrls">'
-      +   '<div class="socw-ctrl"><span class="label">Verdict</span>'
-      +     '<span class="socw-seg" data-id="'+esc(a.id)+'">'
-      +       '<button type="button" data-v="true_positive">True positive</button>'
-      +       '<button type="button" data-v="false_positive">False positive</button>'
-      +     '</span></div>'
-      +   '<div class="socw-ctrl"><span class="label">Severity</span>'+sevSelect(esc(a.id))+'</div>'
-      +   '<div class="socw-ctrl socw-tp-only" data-tp="'+esc(a.id)+'" hidden><span class="label">ATT&CK technique (TP)</span>'
-      +     '<input class="socw-input" data-field="technique" data-id="'+esc(a.id)+'" placeholder="e.g. T1059"></div>'
-      +   '<div class="socw-ctrl socw-tp-only" data-tp="'+esc(a.id)+'" hidden><span class="label">Indicators (comma-separated)</span>'
-      +     '<input class="socw-input" data-field="iocs" data-id="'+esc(a.id)+'" placeholder="host, user@host"></div>'
-      +   '<span class="socw-flag" data-flag="'+esc(a.id)+'"></span>'
-      + '</div></div>';
+  function render(){
+    var rows=filtered();
+    $('alert-rows').innerHTML=rows.map(row).join('')||'<tr><td colspan="7" class="dim" style="padding:18px;text-align:center">No alerts match.</td></tr>';
+    $('shown-count').textContent=rows.length+' of '+alerts.length+' shown';
+    // restore control values
+    rows.forEach(function(a){var s=state[a.id]||{};
+      var sev=document.querySelector('.soc-sel[data-id="'+a.id+'"]'); if(sev&&s.severity)sev.value=s.severity;
+      var t=document.querySelector('.soc-in[data-field="technique"][data-id="'+a.id+'"]'); if(t&&s.technique)t.value=s.technique;
+      var io=document.querySelector('.soc-in[data-field="iocs"][data-id="'+a.id+'"]'); if(io&&s.iocs)io.value=s.iocs;});
+    document.querySelectorAll('[data-caret]').forEach(function(c){c.addEventListener('click',function(){openRaw[c.dataset.caret]=!openRaw[c.dataset.caret];render();});});
+    document.querySelectorAll('.soc-seg').forEach(function(seg){seg.querySelectorAll('button').forEach(function(btn){
+      btn.addEventListener('click',function(){var id=seg.dataset.id,v=btn.dataset.v;state[id]=state[id]||{};state[id].verdict=v;count();render();});});});
+    document.querySelectorAll('[data-field]').forEach(function(el){el.addEventListener('input',function(){
+      var id=el.dataset.id;state[id]=state[id]||{};state[id][el.dataset.field]=el.value;});});
   }
+  function count(){$('adj-count').textContent=Object.keys(state).filter(function(k){return state[k]&&state[k].verdict;}).length;}
 
-  function wire(){
-    document.querySelectorAll('.socw-seg').forEach(function(seg){
-      seg.querySelectorAll('button').forEach(function(btn){
-        btn.addEventListener('click', function(){
-          var id = seg.dataset.id, v = btn.dataset.v;
-          state[id] = state[id] || {};
-          state[id].verdict = v;
-          seg.querySelectorAll('button').forEach(function(b){b.classList.remove('on-tp','on-fp');});
-          btn.classList.add(v==='true_positive'?'on-tp':'on-fp');
-          $('al-'+id).classList.add('adj');
-          document.querySelectorAll('.socw-tp-only[data-tp="'+id+'"]').forEach(function(el){ el.hidden = (v!=='true_positive'); });
-          updateCount();
-        });
-      });
-    });
-    document.querySelectorAll('[data-field]').forEach(function(el){
-      el.addEventListener('input', function(){
-        var id=el.dataset.id, f=el.dataset.field; state[id]=state[id]||{};
-        state[id][f]=el.value;
-      });
-    });
-  }
+  function build(){return {alerts:Object.keys(state).map(function(id){var s=state[id]||{};
+    var r={id:id,verdict:s.verdict||'',severity:s.severity||''};
+    if(s.verdict==='true_positive'){r.attack_technique=(s.technique||'').trim();
+      r.iocs=(s.iocs||'').split(',').map(function(x){return x.trim();}).filter(Boolean);}return r;})};}
 
-  function buildSubmission(){
-    var alerts = Object.keys(state).map(function(id){
-      var s = state[id]||{};
-      var row = {id:id, verdict:s.verdict||'', severity:s.severity||''};
-      if(s.verdict==='true_positive'){
-        row.attack_technique = (s.technique||'').trim();
-        row.iocs = (s.iocs||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
-      }
-      return row;
-    });
-    return {alerts: alerts};
-  }
+  function result(res){var p=$('result-panel');p.hidden=false;
+    var pill=$('result-pill');pill.className='pill '+(res.passed?'pill-ok':'pill-amber');
+    pill.innerHTML='<span class="dot"></span>'+res.score+'% '+(res.passed?'· objective cleared':'· need '+res.pass_bar+'%');
+    $('result-note').textContent=res.note||'';
+    $('result-next').textContent=res.passed?(res.promoted?'Objective met and you have been promoted. Return to your dashboard for the next board.':'Objective met. A report approval is also required to clear the board — submit it from your dashboard.'):'Objective not yet met. Review your adjudications and resubmit; the dataset and your attempt are preserved.';
+    (res.per_alert||[]).forEach(function(pa){var el=document.querySelector('[data-flag="'+pa.id+'"]');if(!el)return;
+      var b=[];b.push('<span class="iw-flag '+(pa.verdict_correct?'ok">verdict ok':'bad">verdict miss')+'</span>');
+      b.push('<span class="iw-flag '+(pa.severity_correct?'ok">sev ok':'bad">sev miss')+'</span>');
+      if(pa.technique_correct!==null&&pa.technique_correct!==undefined)b.push('<span class="iw-flag '+(pa.technique_correct?'ok">tech ok':'bad">tech miss')+'</span>');
+      el.innerHTML=b.join(' ');});
+    var sp=$('status-pill-wrap');sp.innerHTML='<span class="pill '+(res.passed?'pill-ok':'pill-amber')+'"><span class="dot"></span>'+res.score+'% '+(res.passed?'· cleared':'· need '+res.pass_bar+'%')+'</span>';}
 
-  function renderResult(res){
-    var panel=$('result-panel'); panel.hidden=false;
-    var pill=$('result-pill');
-    pill.className='pill '+(res.passed?'pill-ok':'pill-amber');
-    pill.innerHTML='<span class="dot '+(res.passed?'dot-ok':'dot-amber')+'"></span>'+res.score+'% '+(res.passed?'· objective cleared':'· need '+res.pass_bar+'%');
-    $('result-note').textContent = res.note || '';
-    $('result-next').textContent = res.passed
-      ? (res.promoted ? 'Objective met and you have been promoted. Return to your dashboard for the next board.'
-                      : 'Objective met. A report approval is also required to clear the board — submit it from your dashboard.')
-      : 'Objective not yet met. Review your adjudications and resubmit; the dataset and your attempt are preserved.';
-    // per-alert correctness flags (no answer values)
-    (res.per_alert||[]).forEach(function(p){
-      var el=document.querySelector('[data-flag="'+p.id+'"]'); if(!el) return;
-      var bits=[]; bits.push('<span class="socw-flag '+(p.verdict_correct?'ok">verdict ok':'bad">verdict miss')+'</span>');
-      bits.push('<span class="socw-flag '+(p.severity_correct?'ok">sev ok':'bad">sev miss')+'</span>');
-      if(p.technique_correct!==null && p.technique_correct!==undefined){
-        bits.push('<span class="socw-flag '+(p.technique_correct?'ok">tech ok':'bad">tech miss')+'</span>');
-      }
-      el.innerHTML = bits.join(' ');
-    });
-    panel.scrollIntoView({behavior:'smooth', block:'nearest'});
-  }
+  async function submit(){var b=$('btn-submit');b.disabled=true;b.textContent='Grading…';
+    var r=await postJSON('/me/workspace/submit',{submission:build()});b.disabled=false;b.innerHTML='Submit adjudication';
+    if(r.status!==200||!r.body||!r.body.ok){$('ws-error').hidden=false;$('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status));return;}
+    $('ws-error').hidden=true;result(r.body);}
 
-  async function submit(){
-    var btn=$('btn-submit'); btn.disabled=true; btn.textContent='Grading…';
-    var r = await postJSON('/me/workspace/submit', {submission: buildSubmission()});
-    btn.disabled=false; btn.innerHTML='Submit adjudication';
-    if(r.status!==200 || !r.body || !r.body.ok){
-      $('ws-error').hidden=false; $('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status)); return;
-    }
-    $('ws-error').hidden=true;
-    renderResult(r.body);
-    // reflect new status in the header pill
-    var sp=$('status-pill-wrap');
-    sp.innerHTML='<span class="pill '+(r.body.passed?'pill-ok':'pill-amber')+'"><span class="dot '+(r.body.passed?'dot-ok':'dot-amber')+'"></span>'+r.body.score+'% '+(r.body.passed?'· cleared objective':'· need '+r.body.pass_bar+'%')+'</span>';
-  }
+  async function load(){try{var d=await getJSON('/me/workspace/data');alerts=d.alerts||[];
+    alerts.forEach(function(a){state[a.id]=state[a.id]||{};});$('ws-loading').hidden=true;$('tbl-wrap').hidden=false;$('submit-bar').hidden=false;
+    $('alert-total').textContent=alerts.length;$('queue-meta').textContent=alerts.length+' alerts · '+(d.theme||'');render();count();
+  }catch(e){$('ws-loading').textContent='Could not load your dataset: '+e.message+'. Re-open your workspace to retry.';}}
 
-  async function load(){
-    try{
-      var d = await getJSON('/me/workspace/data');
-      $('ws-loading').hidden=true;
-      var list=$('alert-list'); list.hidden=false;
-      list.innerHTML = (d.alerts||[]).map(alertRow).join('');
-      (d.alerts||[]).forEach(function(a){ state[a.id]=state[a.id]||{}; });
-      $('alert-total').textContent = (d.alerts||[]).length;
-      $('queue-meta').textContent = (d.alerts||[]).length + ' alerts · ' + (d.theme||'');
-      $('submit-bar').hidden=false;
-      wire(); updateCount();
-    }catch(e){
-      $('ws-loading').hidden=true;
-      $('ws-error').hidden=false; $('ws-error').textContent='Could not load your dataset: '+e.message+'. Re-open your workspace to retry.';
-    }
-  }
-
-  $('btn-submit').addEventListener('click', submit);
-  load();
+  $('q').addEventListener('input',render);$('only-open').addEventListener('change',render);
+  $('btn-submit').addEventListener('click',submit);load();
 })();
 </script>
 {% endblock %}

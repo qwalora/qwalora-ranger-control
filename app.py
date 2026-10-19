@@ -3743,6 +3743,18 @@ def create_app():
             })
         return rows
 
+    def _cand_nav_vm(c, program=None):
+        """The fields the shared candidate app-shell sidebar (_candnav.candnav) needs, so every
+        candidate page (dashboard, SOC triage, incident investigation, mission brief, research)
+        renders inside the SAME Ranger application shell with role-appropriate, entitlement-driven
+        navigation. Presentation only; each route still enforces entitlement server-side."""
+        progs = _effective_programs(c)
+        sel = program if (program in progs) else (progs[0] if progs else None)
+        return {"name": c.name, "handle": c.handle, "ini": _initials(c.name),
+                "status": c.status, "board": c.current_board,
+                "programs": progs, "selected_program": sel,
+                "program_brands": _program_brands(), "is_dual": len(progs) > 1}
+
     def _me_vm(c, selected=None):
         """The candidate dashboard view model. Shared by /me and the admin
         preview so both render exactly what the ranger sees. Program-aware: `programs`
@@ -3948,8 +3960,9 @@ def create_app():
         # approved business context; the full text is preserved in the Mission tab).
         bc = pkg.get("business_context") or ""
         summary = (bc.split(". ")[0].strip() + ".") if bc else None
-        vm = {"pkg": pkg, "avail": avail, "board": n, "handle": c.handle, "summary": summary,
-              "cohort": c.cohort, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-")}
+        vm = {**_cand_nav_vm(c, "strata"), "pkg": pkg, "avail": avail, "board": n, "handle": c.handle,
+              "summary": summary, "cohort": c.cohort,
+              "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-")}
         return render_template("mission_brief.html", vm=vm)
 
     @app.post("/me/start")
@@ -4036,10 +4049,10 @@ def create_app():
             _ensure_seed(c, n)
             seed = _current_seed(c)
             db.session.commit()
-        vm = {"handle": c.handle, "name": c.name, "cohort": c.cohort, "board": n,
+        vm = {**_cand_nav_vm(c, "strata"), "cohort": c.cohort, "board": n,
               "case_ref": _scenario_ref(c, n, seed or ""),
               "severities": ["low", "medium", "high", "critical"],
-              "mission": _soc_mission_vm(n), "status": _soc_status_vm(c, n)}
+              "mission": _soc_mission_vm(n), "soc": _soc_status_vm(c, n)}
         return render_template("board1_workspace.html", vm=vm)
 
     @app.get("/me/workspace/data")
@@ -4152,7 +4165,7 @@ def create_app():
         seed = _current_seed(c)
         if not seed:
             _ensure_seed(c, n); seed = _current_seed(c); db.session.commit()
-        vm = {"handle": c.handle, "name": c.name, "cohort": c.cohort, "board": n,
+        vm = {**_cand_nav_vm(c, "strata"), "cohort": c.cohort, "board": n,
               "case_ref": _scenario_ref(c, n, seed or ""),
               "severities": ["low", "medium", "high", "critical"]}
         return render_template("board1_incident.html", vm=vm)

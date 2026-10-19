@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
 {% block title %}Mission brief · Board {{ vm.board }} · Qwalora Ranger{% endblock %}
-{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='mission.css') }}?v={{ asset_ver }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='mission.css') }}?v={{ asset_ver }}">
+<style>.shell .mw{max-width:1040px;margin:0 auto;padding:22px 24px 40px} .shell .mw-back{color:var(--mut)} .shell .mw-back:hover{color:var(--ink)}</style>{% endblock %}
 {% block body %}
-<div class="page">
-  <div class="mw">
-    <a class="mw-back" href="/me">{{ ic('arrow','ic ic-sm') }} Back to your dashboard</a>
-
-    <div class="mw-shell">
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('mission', vm) }}
+    <section class="ranges-main">
+      <div class="mw">
+        <div class="mw-shell">
 
       {# ---- always-visible mission overview ---- #}
       <div class="mw-head">
@@ -131,6 +134,8 @@
 
     <p class="mw-foot">Mission instructions are candidate-safe: they describe the mission, not how to solve it. The STRATA objective standard is {{ vm.pkg.pass_bar }} percent. Protected answer keys and evaluator configuration remain server-side.</p>
 
+      </div>
+    </section>
   </div>
 </div>
 {% endblock %}

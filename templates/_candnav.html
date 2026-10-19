@@ -24,7 +24,8 @@
       <div class="gl">{% if vm and vm.selected_program %}{{ vm.program_brands[vm.selected_program] }}{% else %}Ranger{% endif %}</div>
       <a class="nav-item {% if active=='dashboard' %}on{% endif %}" href="/me"><span class="l">{{ ic('grid') }}</span><span class="lbl">Dashboard</span></a>
       {% if vm and vm.selected_program == 'strata' and vm.status == 'active' %}
-      {% if vm.board == 1 %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">SOC workspace</span></a>{% endif %}
+      {% if vm.board == 1 %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">SOC workspace</span></a>
+      <a class="nav-item {% if active=='incident' %}on{% endif %}" href="/me/workspace/incident"><span class="l">{{ ic('layers') }}</span><span class="lbl">Incident investigation</span></a>{% endif %}
       <a class="nav-item {% if active=='mission' %}on{% endif %}" href="/me/mission"><span class="l">{{ ic('flag') }}</span><span class="lbl">Mission brief</span></a>
       {% elif vm and vm.selected_program == 'parallax' and vm.status == 'active' %}
       <a class="nav-item {% if active=='research' %}on{% endif %}" href="/parallax/workspace"><span class="l">{{ ic('cpu') }}</span><span class="lbl">Research console</span></a>

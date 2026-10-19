@@ -1,263 +1,271 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
-{% from "_brand.html" import qlogo %}
+{% from "_candnav.html" import candnav %}
 {% block title %}Incident Investigation · Board 1 · Qwalora Ranger{% endblock %}
 {% block body %}
-<div class="page">
-  <header class="anav"><div class="anav-in">
-    <a class="snav-brand" href="https://ranger.qwalora.com">{{ qlogo('dark',28) }}<b>QWALORA <span>Ranger</span></b></a>
-    <div style="display:flex;gap:8px;align-items:center">
-      <a class="btn btn-ghost btn-pill" href="/me">{{ ic('grid','ic ic-sm') }} Dashboard</a>
-      <a class="btn btn-ghost btn-pill" href="/me/workspace">{{ ic('activity','ic ic-sm') }} SOC triage</a>
-      <a class="btn btn-ghost btn-pill" href="/auth/logout">Sign out</a>
-    </div>
-  </div></header>
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('incident', vm) }}
 
-  <main class="socw">
-    <div class="socw-head">
-      <div>
-        <span class="eyebrow"><span class="d"></span>STRATA · Board 1 · Incident Investigation (advanced)</span>
-        <h1 class="socw-h1">Reconstruct the intrusions</h1>
-        <p class="socw-sub">The same estate, a wider field of alerts. More than one true positive belongs to a single
-          coordinated intrusion; others are separate activity or noise. Correlate the alerts that belong to the same
-          campaign, establish how the attacker entered and moved, and defend each grouping with evidence that is
-          actually present in the telemetry. This is an additive assessment: it does not change Board-1 triage scoring
-          or your qualification.</p>
-      </div>
-      <div class="socw-case card">
-        <div><span class="label" style="font-size:11px">Case reference</span>
-          <code class="mono" id="case-ref">{{ vm.case_ref }}</code></div>
-        <div id="status-pill-wrap"><span class="pill pill-violet"><span class="dot dot-violet"></span><span id="attempts-lbl">no attempt yet</span></span></div>
-      </div>
-    </div>
-
-    <div class="socw-split">
-      <aside class="card socw-brief">
-        <div class="socw-card-h"><h2>{{ ic('shield','ic ic-sm') }} Your assignment</h2></div>
-        <div class="socw-card-b">
-          <p class="socw-role">Senior SOC analyst. Alerts have already been triaged for maliciousness; your task is the
-            next analytic step: scope the incidents.</p>
-          <div class="socw-sec"><span class="label">For each incident you identify</span>
-            <ul>
-              <li>Group the alerts that belong to it (and only those).</li>
-              <li>Mark the entry point: the alert where the attacker first gained access.</li>
-              <li>State the technique chain in the order it occurred (ATT&amp;CK IDs).</li>
-              <li>List the affected hosts and accounts.</li>
-              <li>Cite the evidence that links the alerts: a shared account, a shared origin, a host the attacker
-                pivoted through. Evidence only counts when it genuinely recurs across the grouped alerts.</li>
-            </ul></div>
-          <div class="socw-sec"><span class="label">How it is scored</span>
-            <p>Server-side against a key derived from your seed and never disclosed. Credit is for defensible
-              correlation: grouping accuracy, the entry point, the ordered chain, the affected entities, and evidence
-              that actually appears in the telemetry. Lumping unrelated alerts together, or guessing labels without
-              evidence, scores poorly. Separate campaigns must be kept separate.</p></div>
-          <p class="dim" style="font-size:11px;margin-top:8px">Not every true positive is part of a multi-step
-            campaign; some malicious activity stands alone and should not be forced into an incident.</p>
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>STRATA · Board 1 · Incident investigation</div>
+          <div class="ttl" style="margin-top:6px">Reconstruct the intrusions</div>
+          <div class="rg-sub">Correlate the alerts that belong to one coordinated intrusion, establish how the
+            attacker entered and moved, and defend each grouping with evidence present in the telemetry. Additive
+            assessment: it does not change Board-1 triage scoring or your qualification.</div>
         </div>
-      </aside>
-
-      <section class="card socw-queue">
-        <div class="socw-card-h">
-          <h2>{{ ic('activity','ic ic-sm') }} Alert field</h2>
-          <span class="mono dim" id="queue-meta"></span>
+        <div class="iw-head-side">
+          <div class="muted" style="font-size:11px">Case reference</div>
+          <code class="mono" id="case-ref" style="font-size:12px">{{ vm.case_ref }}</code>
+          <span class="pill pill-violet" id="attempts-pill"><span class="dot"></span><span id="attempts-lbl">no attempt yet</span></span>
         </div>
-        <div class="socw-card-b">
-          <div id="ws-loading" class="empty"><span class="ring">{{ ic('server','ic') }}</span>
-            <p>Loading your seeded alert field. The dataset is unique to you and to this attempt; the answer key stays on the server.</p></div>
-          <div id="ws-error" class="note-err" hidden></div>
+      </div>
 
-          <div id="builder" hidden>
-            <div class="inc-bar">
-              <button class="btn btn-outline btn-sm" id="btn-add-inc">{{ ic('plus','ic ic-sm') }} Add incident</button>
-              <span class="dim" id="assign-hint" style="font-size:11.5px">Create an incident, then assign alerts to it from the field below.</span>
+      <div class="iw">
+        <div id="ws-error" class="note-err" hidden style="margin-bottom:12px"></div>
+
+        <div class="iw-grid">
+          <!-- Alert field: searchable table -->
+          <div class="card iw-card">
+            <div class="iw-card-h">
+              <h2>{{ ic('activity','ic ic-sm') }} Alert field</h2>
+              <span class="mono dim" id="queue-meta"></span>
             </div>
-            <div id="incident-cards"></div>
-
-            <div id="alert-list"></div>
-
-            <div class="socw-submit">
-              <div><b id="grouped-count">0</b> <span class="dim">alerts assigned ·</span> <b id="inc-count">0</b> <span class="dim">incidents</span></div>
-              <button class="btn btn-primary" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit investigation</button>
+            <div class="iw-toolbar">
+              <span class="iw-search">{{ ic('search','ic ic-sm') }}<input id="q" placeholder="Search id, signal, host, log text…" autocomplete="off"></span>
+              <label class="iw-chk"><input type="checkbox" id="only-unassigned"> only unassigned</label>
+              <span class="dim mono" id="shown-count" style="margin-left:auto;font-size:11px"></span>
             </div>
-
-            <div id="result-panel" class="socw-result" hidden>
-              <div class="socw-result-h"><span class="pill" id="result-pill"></span><span class="dim" id="result-note"></span></div>
-              <div id="result-incidents" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+            <div id="ws-loading" class="iw-empty">Loading your seeded alert field. The dataset is unique to you and to this attempt; the answer key stays on the server.</div>
+            <div class="iw-tbl-wrap" hidden id="tbl-wrap">
+              <table class="iw-tbl">
+                <thead><tr><th style="width:26px"></th><th>Alert</th><th>Signal</th><th>Host</th><th>Time</th><th style="width:150px">Incident</th></tr></thead>
+                <tbody id="alert-rows"></tbody>
+              </table>
             </div>
           </div>
-        </div>
-      </section>
-    </div>
-  </main>
 
-  <footer class="afoot"><span class="mono">Qwalora Ranger · Board 1 incident investigation · answer-free, server-side grading</span></footer>
+          <!-- Incident workspace -->
+          <div class="iw-right">
+            <div class="card iw-card">
+              <div class="iw-card-h">
+                <h2>{{ ic('layers','ic ic-sm') }} Incidents</h2>
+                <button class="btn btn-outline btn-sm" id="btn-add-inc">{{ ic('plus','ic ic-sm') }} Add incident</button>
+              </div>
+              <div class="iw-card-b">
+                <div id="inc-list" class="iw-inc-list"><p class="dim" style="font-size:12px;margin:0">No incidents yet. Create one, then assign related alerts to it from the field.</p></div>
+              </div>
+            </div>
+
+            <div class="card iw-card" id="detail-card" hidden>
+              <div class="iw-card-h"><h2>{{ ic('shield','ic ic-sm') }} <span id="detail-title">Selected incident</span></h2>
+                <button class="btn btn-ghost btn-sm" id="btn-del-inc">remove</button></div>
+              <div class="iw-card-b">
+                <div class="iw-ids"><span class="label">Assigned alerts</span><div id="detail-ids" class="mono">none</div></div>
+                <div class="iw-fields">
+                  <div class="iw-f"><span class="label">Entry alert (first access)</span><select id="f-entry"></select></div>
+                  <div class="iw-f"><span class="label">Technique chain (ordered ATT&CK IDs, comma-sep)</span><input id="f-chain" placeholder="T1078, T1021.002, T1003.001"></div>
+                  <div class="iw-f"><span class="label">Affected hosts (comma-sep)</span><input id="f-hosts" placeholder="winterfell, meereen"></div>
+                  <div class="iw-f"><span class="label">Affected accounts (comma-sep)</span><input id="f-accts" placeholder="sevenkingdoms\jon"></div>
+                  <div class="iw-f full"><span class="label">Evidence linking these alerts (one per line)</span><textarea id="f-evidence" placeholder="sevenkingdoms\jon&#10;winterfell"></textarea></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card iw-card">
+              <div class="iw-card-b iw-submit">
+                <div class="muted" style="font-size:12px"><b id="grouped-count">0</b> alerts assigned · <b id="inc-count">0</b> incidents</div>
+                <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit investigation</button>
+              </div>
+              <div id="result-panel" class="iw-result" hidden>
+                <div class="iw-result-h"><span class="pill pill-violet" id="result-pill"></span></div>
+                <div id="result-incidents"></div>
+                <p class="dim" id="result-note" style="font-size:11.5px;margin:8px 0 0"></p>
+              </div>
+            </div>
+
+            <details class="iw-brief">
+              <summary>How this is scored</summary>
+              <p>Server-side against a key derived from your seed, never disclosed. Credit is for defensible
+                correlation: grouping accuracy, the entry point, the ordered technique chain, the affected
+                entities, and evidence that genuinely recurs across the grouped alerts. Lumping unrelated alerts
+                together, or guessing labels without evidence, scores poorly; separate campaigns must be kept
+                separate. Not every true positive is part of a multi-step campaign.</p>
+            </details>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <style>
   [hidden]{display:none!important}
-  .socw{max-width:1180px;margin:0 auto;padding:24px 22px 12px}
-  .socw-head{display:flex;gap:22px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px}
-  .socw-h1{font:700 24px/1.1 var(--f);letter-spacing:-.6px;color:#fff;margin:9px 0 0}
-  .socw-sub{color:rgba(255,255,255,.72);margin:9px 0 0;max-width:720px;line-height:1.55;font-size:12.5px}
-  .socw-case{padding:12px 14px;display:flex;flex-direction:column;gap:10px;flex:none;min-width:220px}
-  .socw-case code{font-size:12px;display:block;margin-top:2px}
-  .socw-split{display:grid;grid-template-columns:minmax(300px,4fr) 7fr;gap:16px;align-items:start}
-  .socw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
-  .socw-card-h h2{font:600 13.5px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
-  .socw-card-b{padding:16px}
-  .socw-role{font-size:12.5px;color:var(--ink);line-height:1.5;margin:0 0 14px}
-  .socw-sec{margin-bottom:14px}.socw-sec .label{display:block;margin-bottom:5px}
-  .socw-sec ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
-  .socw-sec li,.socw-sec p{font-size:12px;color:var(--mut);line-height:1.5;margin:0}
-  .inc-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
-  .inc-card{border:1px solid var(--violet-100);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--sub)}
-  .inc-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-  .inc-card-h b{font:600 13px/1 var(--f);color:var(--ink)}
-  .inc-ids{font-family:var(--m);font-size:11px;color:var(--mut);margin-bottom:8px;word-break:break-word}
-  .inc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
-  .inc-field{display:flex;flex-direction:column;gap:3px}
-  .inc-field .label{font-size:10.5px}
-  .inc-field input,.inc-field select,.inc-field textarea{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;font:500 12px/1.3 var(--f);background:#fff;color:var(--ink);width:100%}
-  .inc-field textarea{resize:vertical;min-height:46px;font-family:var(--m);font-size:11px}
-  .inc-field.full{grid-column:1 / -1}
-  .socw-alert{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;margin-bottom:9px}
-  .socw-alert.assigned{border-color:var(--violet-100);background:var(--light)}
-  .socw-alert-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .socw-alert-id{font:600 12.5px/1 var(--m);color:var(--ink)}
-  .socw-alert-sig{font:600 12.5px/1.2 var(--f);color:var(--ink)}
-  .socw-alert-meta{font-size:11px;color:var(--dim);margin-left:auto;font-family:var(--m)}
-  .socw-raw{font-family:var(--m);font-size:11.5px;color:var(--mut);background:var(--light);border-radius:7px;padding:8px 10px;margin:8px 0;white-space:pre-wrap;word-break:break-word}
-  .socw-assign{display:flex;align-items:center;gap:8px}
-  .socw-assign .label{font-size:10.5px}
-  .socw-assign select{height:30px;border:1px solid var(--line2);border-radius:8px;padding:0 8px;font:500 11.5px/1 var(--f);background:#fff;color:var(--ink)}
-  .socw-submit{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:14px;border-top:1px solid var(--line);margin-top:8px}
-  .socw-result{margin-top:14px;border:1px solid var(--line2);border-radius:10px;padding:14px 16px}
-  .socw-result-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .inc-flag{font-size:10.5px;font-family:var(--m)}.inc-flag.ok{color:var(--ok)}.inc-flag.bad{color:#b4232b}
-  .inc-res-row{font-size:12px;color:var(--mut);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  @media (max-width:860px){.socw-split{grid-template-columns:1fr}.inc-grid{grid-template-columns:1fr}}
+  .ranges-main .rg-head{display:flex;gap:20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+  .rg-head .ttl{font:700 20px/1.1 var(--f);letter-spacing:-.4px;color:var(--ink)}
+  .rg-head .rg-sub{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:6px;max-width:760px}
+  .iw-head-side{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+  .iw{padding:18px 24px 28px}
+  .iw-grid{display:grid;grid-template-columns:1.25fr .95fr;gap:16px;align-items:start}
+  .iw-card{max-width:none;box-shadow:none;border:1px solid var(--line)}
+  .iw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .iw-card-h h2{font:600 13px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .iw-card-b{padding:14px 15px}
+  .iw-toolbar{display:flex;align-items:center;gap:12px;padding:10px 15px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .iw-search{display:flex;align-items:center;gap:7px;flex:1;min-width:180px;height:34px;padding:0 11px;border:1px solid var(--line2);border-radius:8px;color:var(--mut)}
+  .iw-search input{border:none;outline:none;background:transparent;flex:1;min-width:0;font:500 12.5px/1 var(--f);color:var(--ink)}
+  .iw-chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer}
+  .iw-empty{padding:26px 16px;color:var(--mut);font-size:12.5px;text-align:center}
+  .iw-tbl-wrap{max-height:62vh;overflow:auto}
+  .iw-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .iw-tbl th{position:sticky;top:0;background:var(--sub);text-align:left;font:600 10.5px/1 var(--f);letter-spacing:.6px;text-transform:uppercase;color:var(--dim);padding:9px 10px;border-bottom:1px solid var(--line);z-index:1}
+  .iw-tbl td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;color:var(--ink)}
+  .iw-tbl tr.assigned td{background:var(--violet-50)}
+  .iw-tbl .a-id{font-family:var(--m);font-weight:600;white-space:nowrap}
+  .iw-tbl .a-sig{font-weight:500}
+  .iw-tbl .a-host,.iw-tbl .a-time{font-family:var(--m);font-size:11px;color:var(--mut);white-space:nowrap}
+  .iw-caret{cursor:pointer;color:var(--dim);user-select:none;font-family:var(--m)}
+  .iw-raw td{background:var(--light);font-family:var(--m);font-size:11px;color:var(--mut);white-space:pre-wrap;word-break:break-word;padding:8px 12px}
+  .iw-asg{width:100%;height:30px;border:1px solid var(--line2);border-radius:7px;background:#fff;font:500 11.5px/1 var(--f);color:var(--ink);padding:0 6px}
+  .iw-inc-list{display:flex;flex-direction:column;gap:7px}
+  .iw-inc{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line2);border-radius:9px;cursor:pointer}
+  .iw-inc.on{border-color:var(--violet);background:var(--violet-50)}
+  .iw-inc b{font:600 12.5px/1 var(--f);color:var(--ink)}
+  .iw-inc .n{margin-left:auto;font-family:var(--m);font-size:11px;color:var(--mut)}
+  .iw-ids{margin-bottom:12px}.iw-ids .label{display:block;margin-bottom:4px}
+  .iw-ids .mono{font-size:11px;color:var(--mut);word-break:break-word}
+  .iw-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+  .iw-f{display:flex;flex-direction:column;gap:3px}.iw-f.full{grid-column:1 / -1}
+  .label{font:600 10.5px/1 var(--f);letter-spacing:.3px;color:var(--dim);text-transform:uppercase}
+  .iw-f input,.iw-f select,.iw-f textarea{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;font:500 12px/1.3 var(--f);background:#fff;color:var(--ink);width:100%}
+  .iw-f textarea{resize:vertical;min-height:52px;font-family:var(--m);font-size:11px}
+  .iw-submit{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .iw-result{border-top:1px solid var(--line);padding:12px 15px}
+  .iw-result-h{margin-bottom:8px}
+  .iw-res-row{font-size:12px;color:var(--mut);display:flex;gap:9px;flex-wrap:wrap;align-items:center;padding:3px 0}
+  .iw-flag{font-size:10.5px;font-family:var(--m)}.iw-flag.ok{color:#0f7a48}.iw-flag.bad{color:#b4232b}
+  .iw-brief{margin-top:4px}
+  .iw-brief summary{font:600 12px/1 var(--f);color:var(--violet);cursor:pointer;padding:4px 2px}
+  .iw-brief p{font-size:12px;color:var(--mut);line-height:1.55;margin:8px 2px 0}
+  .note-err{background:#fdecee;border:1px solid #f3b9bf;color:#b4232b;border-radius:9px;padding:10px 13px;font-size:12.5px}
+  @media (max-width:1000px){.iw-grid{grid-template-columns:1fr}.iw-tbl-wrap{max-height:none}}
+  @media (max-width:860px){.app.app-2col{grid-template-columns:1fr}.nav{display:none}}
 </style>
 
 <script>
 (function(){
   var CSRF = "{{ csrf_token }}";
   var $ = function(id){return document.getElementById(id);};
-  var alerts = [];            // [{id,timestamp,host,signal,raw}]
-  var assign = {};            // alertId -> incidentKey ('' = unassigned)
-  var incidents = [];         // [{key, label}]
-  var nextInc = 1;
+  var alerts = [], assign = {}, incidents = [], nextInc = 1, selKey = null, openRaw = {};
 
   function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
   async function getJSON(u){var r=await fetch(u,{headers:{'Accept':'application/json'},credentials:'same-origin'});
-    if(r.status!==200){throw new Error('('+r.status+') '+(await r.text()).slice(0,180));} return r.json();}
+    if(r.status!==200){throw new Error('('+r.status+') '+(await r.text()).slice(0,160));} return r.json();}
   async function postJSON(u,b){var r=await fetch(u,{method:'POST',credentials:'same-origin',
     headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(b)});
     var j=null;try{j=await r.json();}catch(e){} return {status:r.status,body:j};}
 
-  function incIdsFor(key){return alerts.filter(function(a){return assign[a.id]===key;}).map(function(a){return a.id;});}
-
+  function incOf(key){return incidents.filter(function(i){return i.key===key;})[0];}
+  function idsFor(key){return alerts.filter(function(a){return assign[a.id]===key;}).map(function(a){return a.id;});}
   function assignOptions(sel){
-    var o = ['<option value="">unassigned</option>'];
-    incidents.forEach(function(i){ o.push('<option value="'+i.key+'"'+(sel===i.key?' selected':'')+'>'+esc(i.label)+'</option>'); });
-    return o.join('');
+    return ['<option value="">—</option>'].concat(incidents.map(function(i){
+      return '<option value="'+i.key+'"'+(sel===i.key?' selected':'')+'>'+esc(i.label)+'</option>';})).join('');
   }
 
-  function renderAlerts(){
-    $('alert-list').innerHTML = alerts.map(function(a){
-      var asg = assign[a.id]||'';
-      return '<div class="socw-alert'+(asg?' assigned':'')+'" id="al-'+esc(a.id)+'">'
-        + '<div class="socw-alert-top"><span class="socw-alert-id">'+esc(a.id)+'</span>'
-        +   '<span class="socw-alert-sig">'+esc(a.signal)+'</span>'
-        +   '<span class="socw-alert-meta">'+esc(a.host)+' · '+esc(a.timestamp)+'</span></div>'
-        + '<div class="socw-raw">'+esc(a.raw)+'</div>'
-        + '<div class="socw-assign"><span class="label">Assign to incident</span>'
-        +   '<select data-assign="'+esc(a.id)+'">'+assignOptions(asg)+'</select></div>'
-        + '</div>';
-    }).join('');
-    document.querySelectorAll('[data-assign]').forEach(function(sel){
-      sel.addEventListener('change', function(){ assign[sel.dataset.assign]=sel.value; renderAll(); });
+  function filtered(){
+    var q=($('q').value||'').toLowerCase(), only=$('only-unassigned').checked;
+    return alerts.filter(function(a){
+      if(only && assign[a.id]) return false;
+      if(!q) return true;
+      return (a.id+' '+a.signal+' '+a.host+' '+a.raw).toLowerCase().indexOf(q)>=0;
     });
+  }
+
+  function renderTable(){
+    var rows = filtered(), out = [];
+    rows.forEach(function(a){
+      var asg = assign[a.id]||'';
+      out.push('<tr class="'+(asg?'assigned':'')+'" data-row="'+esc(a.id)+'">'
+        + '<td><span class="iw-caret" data-caret="'+esc(a.id)+'">'+(openRaw[a.id]?'&#9662;':'&#9656;')+'</span></td>'
+        + '<td class="a-id">'+esc(a.id)+'</td><td class="a-sig">'+esc(a.signal)+'</td>'
+        + '<td class="a-host">'+esc(a.host)+'</td><td class="a-time">'+esc(a.timestamp)+'</td>'
+        + '<td><select class="iw-asg" data-assign="'+esc(a.id)+'">'+assignOptions(asg)+'</select></td></tr>');
+      if(openRaw[a.id]) out.push('<tr class="iw-raw"><td></td><td colspan="5">'+esc(a.raw)+'</td></tr>');
+    });
+    $('alert-rows').innerHTML = out.join('') || '<tr><td colspan="6" class="dim" style="padding:18px;text-align:center">No alerts match.</td></tr>';
+    $('shown-count').textContent = rows.length+' of '+alerts.length+' shown';
+    document.querySelectorAll('[data-caret]').forEach(function(c){c.addEventListener('click',function(){
+      openRaw[c.dataset.caret]=!openRaw[c.dataset.caret]; renderTable();});});
+    document.querySelectorAll('[data-assign]').forEach(function(s){s.addEventListener('change',function(){
+      assign[s.dataset.assign]=s.value; renderAll();});});
   }
 
   function renderIncidents(){
-    $('incident-cards').innerHTML = incidents.map(function(i){
-      var ids = incIdsFor(i.key);
-      var entryOpts = ['<option value="">entry alert…</option>'].concat(ids.map(function(id){
-        return '<option value="'+esc(id)+'">'+esc(id)+'</option>';})).join('');
-      return '<div class="inc-card" data-inc="'+i.key+'">'
-        + '<div class="inc-card-h"><b>'+esc(i.label)+'</b>'
-        +   '<button type="button" class="btn btn-ghost btn-sm" data-del="'+i.key+'">remove</button></div>'
-        + '<div class="inc-ids">'+(ids.length?ids.map(esc).join(', '):'no alerts assigned yet')+'</div>'
-        + '<div class="inc-grid">'
-        +   '<div class="inc-field"><span class="label">Entry alert</span><select data-f="entry" data-inc="'+i.key+'">'+entryOpts+'</select></div>'
-        +   '<div class="inc-field"><span class="label">Technique chain (ordered ATT&CK IDs, comma-sep)</span><input data-f="chain" data-inc="'+i.key+'" placeholder="T1078, T1021.002, T1003.001"></div>'
-        +   '<div class="inc-field"><span class="label">Affected hosts (comma-sep)</span><input data-f="hosts" data-inc="'+i.key+'" placeholder="winterfell, meereen"></div>'
-        +   '<div class="inc-field"><span class="label">Affected accounts (comma-sep)</span><input data-f="accts" data-inc="'+i.key+'" placeholder="sevenkingdoms\\jon"></div>'
-        +   '<div class="inc-field full"><span class="label">Evidence that links these alerts (one per line)</span><textarea data-f="evidence" data-inc="'+i.key+'" placeholder="sevenkingdoms\\jon&#10;winterfell"></textarea></div>'
-        + '</div></div>';
-    }).join('');
-    // restore field values
-    incidents.forEach(function(i){
-      ['entry','chain','hosts','accts','evidence'].forEach(function(f){
-        var el=document.querySelector('[data-f="'+f+'"][data-inc="'+i.key+'"]'); if(el && i[f]!=null) el.value=i[f];
-      });
-    });
-    document.querySelectorAll('[data-del]').forEach(function(b){
-      b.addEventListener('click', function(){
-        var k=b.dataset.del; incidents=incidents.filter(function(x){return x.key!==k;});
-        Object.keys(assign).forEach(function(id){ if(assign[id]===k) assign[id]=''; }); renderAll();
-      });
-    });
-    document.querySelectorAll('.inc-card [data-f]').forEach(function(el){
-      el.addEventListener('input', function(){
-        var inc=incidents.filter(function(x){return x.key===el.dataset.inc;})[0]; if(inc) inc[el.dataset.f]=el.value;
-      });
-    });
+    if(!incidents.length){ $('inc-list').innerHTML='<p class="dim" style="font-size:12px;margin:0">No incidents yet. Create one, then assign related alerts to it from the field.</p>'; }
+    else { $('inc-list').innerHTML = incidents.map(function(i){
+      return '<div class="iw-inc '+(i.key===selKey?'on':'')+'" data-sel="'+i.key+'"><b>'+esc(i.label)+'</b>'
+        + '<span class="n">'+idsFor(i.key).length+' alerts</span></div>';}).join('');
+      document.querySelectorAll('[data-sel]').forEach(function(el){el.addEventListener('click',function(){
+        selKey=el.dataset.sel; renderAll();});});
+    }
+    $('inc-count').textContent=incidents.length;
+    $('grouped-count').textContent=Object.keys(assign).filter(function(k){return assign[k];}).length;
   }
 
-  function renderCounts(){
-    $('grouped-count').textContent = Object.keys(assign).filter(function(k){return assign[k];}).length;
-    $('inc-count').textContent = incidents.length;
+  function renderDetail(){
+    var inc = selKey?incOf(selKey):null;
+    $('detail-card').hidden = !inc;
+    if(!inc) return;
+    $('detail-title').textContent = inc.label;
+    var ids = idsFor(inc.key);
+    $('detail-ids').textContent = ids.length?ids.join(', '):'none';
+    $('f-entry').innerHTML = ['<option value="">entry alert…</option>'].concat(ids.map(function(id){
+      return '<option value="'+esc(id)+'"'+((inc.entry===id)?' selected':'')+'>'+esc(id)+'</option>';})).join('');
+    $('f-chain').value=inc.chain||''; $('f-hosts').value=inc.hosts||'';
+    $('f-accts').value=inc.accts||''; $('f-evidence').value=inc.evidence||'';
   }
-  function renderAll(){ renderIncidents(); renderAlerts(); renderCounts(); }
+
+  function renderAll(){ renderIncidents(); renderDetail(); renderTable(); }
+
+  function bindDetail(){
+    [['f-entry','entry'],['f-chain','chain'],['f-hosts','hosts'],['f-accts','accts'],['f-evidence','evidence']].forEach(function(p){
+      $(p[0]).addEventListener('input',function(){ var inc=selKey&&incOf(selKey); if(inc) inc[p[1]]=$(p[0]).value; });
+    });
+    $('btn-del-inc').addEventListener('click',function(){
+      if(!selKey) return; incidents=incidents.filter(function(x){return x.key!==selKey;});
+      Object.keys(assign).forEach(function(id){if(assign[id]===selKey)assign[id]='';}); selKey=null; renderAll();});
+  }
 
   function buildSubmission(){
     return {incidents: incidents.map(function(i){
-      var ids = incIdsFor(i.key);
-      return {
-        alert_ids: ids,
-        entry_alert_id: (i.entry||'').trim(),
-        technique_chain: (i.chain||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
-        affected_hosts: (i.hosts||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
-        affected_accounts: (i.accts||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
-        evidence: (i.evidence||'').split(/\n+/).map(function(x){return x.trim();}).filter(Boolean)
-      };
-    })};
+      return {alert_ids: idsFor(i.key), entry_alert_id:(i.entry||'').trim(),
+        technique_chain:(i.chain||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
+        affected_hosts:(i.hosts||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
+        affected_accounts:(i.accts||'').split(',').map(function(x){return x.trim();}).filter(Boolean),
+        evidence:(i.evidence||'').split(/\n+/).map(function(x){return x.trim();}).filter(Boolean)};})};
   }
 
   function renderResult(res){
     var p=$('result-panel'); p.hidden=false;
-    var pill=$('result-pill'); pill.className='pill pill-violet';
-    pill.innerHTML='<span class="dot dot-violet"></span>'+res.score+'% · attempt '+res.attempt;
-    $('result-note').textContent = res.note||'';
-    $('result-incidents').innerHTML = (res.per_incident||[]).map(function(pi){
-      if(!pi.matched) return '<div class="inc-res-row"><b>'+esc(pi.incident)+'</b> <span class="inc-flag bad">not identified</span></div>';
-      function fl(ok,okl,badl){return '<span class="inc-flag '+(ok?'ok">'+okl:'bad">'+badl)+'</span>';}
-      return '<div class="inc-res-row"><b>'+esc(pi.incident)+'</b> '
-        + fl(pi.grouping_ok,'grouping ok','grouping off') + fl(pi.entry_ok,'entry ok','entry off')
-        + fl(pi.chain_ok,'chain ok','chain off') + fl(pi.evidence_ok,'evidence ok','evidence thin') + '</div>';
-    }).join('');
-    $('attempts-lbl').textContent = res.score+'% · attempt '+res.attempt;
-    $('status-pill-wrap').firstChild.className='pill pill-violet';
-    p.scrollIntoView({behavior:'smooth',block:'nearest'});
+    $('result-pill').innerHTML='<span class="dot"></span>'+res.score+'% · attempt '+res.attempt;
+    $('result-incidents').innerHTML=(res.per_incident||[]).map(function(pi){
+      if(!pi.matched) return '<div class="iw-res-row"><b>'+esc(pi.incident)+'</b> <span class="iw-flag bad">not identified</span></div>';
+      function f(ok,a,b){return '<span class="iw-flag '+(ok?'ok">'+a:'bad">'+b)+'</span>';}
+      return '<div class="iw-res-row"><b>'+esc(pi.incident)+'</b> '+f(pi.grouping_ok,'grouping ok','grouping off')
+        +f(pi.entry_ok,'entry ok','entry off')+f(pi.chain_ok,'chain ok','chain off')
+        +f(pi.evidence_ok,'evidence ok','evidence thin')+'</div>';}).join('');
+    $('result-note').textContent=res.note||'';
+    $('attempts-lbl').textContent=res.score+'% · attempt '+res.attempt;
   }
 
   async function submit(){
     var b=$('btn-submit'); b.disabled=true; b.textContent='Grading…';
     var r=await postJSON('/me/workspace/incident/submit',{submission:buildSubmission()});
     b.disabled=false; b.innerHTML='Submit investigation';
-    if(r.status!==200||!r.body||!r.body.ok){ $('ws-error').hidden=false;
-      $('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status)); return; }
+    if(r.status!==200||!r.body||!r.body.ok){$('ws-error').hidden=false;
+      $('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status));return;}
     $('ws-error').hidden=true; renderResult(r.body);
   }
 
@@ -265,19 +273,19 @@
     try{
       var d=await getJSON('/me/workspace/incident/data');
       alerts=d.alerts||[]; alerts.forEach(function(a){assign[a.id]='';});
-      $('ws-loading').hidden=true; $('builder').hidden=false;
+      $('ws-loading').hidden=true; $('tbl-wrap').hidden=false;
       $('queue-meta').textContent=alerts.length+' alerts · '+(d.theme||'');
-      if(d.attempts){ $('attempts-lbl').textContent=(d.last_score!=null?d.last_score+'% · ':'')+'attempt '+d.attempts; }
+      if(d.attempts){$('attempts-lbl').textContent=(d.last_score!=null?d.last_score+'% · ':'')+'attempt '+d.attempts;}
       renderAll();
-    }catch(e){ $('ws-loading').hidden=true; $('ws-error').hidden=false;
-      $('ws-error').textContent='Could not load your dataset: '+e.message+'. Re-open to retry.'; }
+    }catch(e){$('ws-loading').textContent='Could not load your dataset: '+e.message+'. Re-open to retry.';}
   }
 
-  $('btn-add-inc').addEventListener('click', function(){
-    var k='inc'+nextInc; incidents.push({key:k,label:'Incident '+nextInc}); nextInc++; renderAll();
-  });
-  $('btn-submit').addEventListener('click', submit);
-  load();
+  $('q').addEventListener('input',renderTable);
+  $('only-unassigned').addEventListener('change',renderTable);
+  $('btn-add-inc').addEventListener('click',function(){
+    var k='inc'+nextInc; incidents.push({key:k,label:'Incident '+nextInc}); selKey=k; nextInc++; renderAll();});
+  $('btn-submit').addEventListener('click',submit);
+  bindDetail(); load();
 })();
 </script>
 {% endblock %}
