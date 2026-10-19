@@ -592,6 +592,8 @@ def create_app():
         "candidate_workspace_draft": (300, 60),
         "candidate_incident_draft": (300, 60),
         "candidate_report_draft": (300, 60),
+        # admin-only, read-only PARALLAX evidence verifier (generous per-IP ceiling)
+        "admin_evidence_verify": (60, 60),
     }
 
     def _client_ip():
@@ -3231,6 +3233,48 @@ def create_app():
               "investigations": {"obj_submitted": obj_submitted, "obj_passed": obj_passed,
                                  "research_runs": research_runs, "reports_pending": reports_pending}}
         return render_template("admin_ops.html", vm=vm)
+
+    # --- PARALLAX evidence-integrity verifier (admin-only, read-only) --------------------------
+    # Independently verifies a persisted PARALLAX research-run signature against the trusted Ed25519
+    # registry, without reusing any candidate-facing endpoint and without bypassing researcher
+    # ownership for candidates (access is governed by admin_required). It performs no writes to the
+    # research evidence, runs no model, and returns only sanitized results. The admin action itself
+    # is recorded in the signed audit log (an additive governance log, not a research-record change).
+    @app.get("/admin/evidence")
+    @admin_required
+    def admin_evidence():
+        return render_template("admin_evidence.html", vm={"run_id": "", "result": None})
+
+    @app.post("/admin/evidence/verify")
+    @admin_required
+    def admin_evidence_verify():
+        run_id = (request.form.get("run_id") or (request.get_json(silent=True) or {}).get("run_id")
+                  or "").strip()
+        wants_json = (request.path.endswith(".json")
+                      or "application/json" in (request.headers.get("Accept") or "")
+                      or request.is_json)
+        if not run_id or len(run_id) > 64:
+            if wants_json:
+                return jsonify(ok=False, error="a run_id is required"), 400
+            return render_template("admin_evidence.html",
+                                   vm={"run_id": run_id, "result": None,
+                                       "error": "Enter a research run id."}), 400
+        from parallax.research import store as _rstore
+        result = _rstore.admin_verify_run(db, run_id=run_id)   # strictly read-only; no model, no write
+        # Record the admin verification in the signed audit log (does not touch the research record).
+        try:
+            from parallax import auditlog as _al
+            _al.append(db, action="research_evidence_verified", actor_id=_admin_actor(),
+                       subject_kind="research_run", subject_ref=run_id,
+                       detail={"exists": result.get("exists"),
+                               "signature_valid": result.get("signature_valid"),
+                               "all_checks_pass": result.get("all_checks_pass")})
+            db.session.commit()
+        except Exception:  # noqa: BLE001 - auditing is best-effort; never fail the read-only verify
+            db.session.rollback()
+        if wants_json:
+            return jsonify(ok=True, result=result), 200
+        return render_template("admin_evidence.html", vm={"run_id": run_id, "result": result})
 
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")

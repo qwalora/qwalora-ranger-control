@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Evidence verification · Qwalora Ranger{% endblock %}
+{% macro check(ok, label) -%}
+<div class="rec-row" style="align-items:center">
+  <div class="rec-id">{{ label }}</div>
+  <span class="pill {% if ok %}pill-ok{% else %}pill-orange{% endif %}"><span class="dot {% if ok %}dot-ok{% else %}dot-amber{% endif %}"></span>{{ 'PASS' if ok else 'FAIL' }}</span>
+</div>
+{%- endmacro %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('evidence', '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Evidence verification</div>
+          <div class="rg-sub">Independently verify a persisted PARALLAX research-run signature against the trusted Ed25519 key registry. Read-only: this never modifies the record, runs a model, or submits anything. Results are sanitized (no keys, signatures, credentials, or full payloads).</div>
+        </div>
+      </div>
+
+      <div class="cand-body">
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Verify a research run</span></div>
+          <div class="card-body">
+            <form method="post" action="/admin/evidence/verify" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input class="input mono" name="run_id" value="{{ vm.run_id or '' }}" placeholder="run-xxxxxxxxxxxx" style="max-width:320px" required>
+              <button class="btn btn-primary btn-sm">{{ ic('shield','ic ic-sm') }} Verify signature</button>
+            </form>
+            {% if vm.error %}<p class="dim" style="color:#b4690e;font-size:12px;margin-top:10px">{{ vm.error }}</p>{% endif %}
+          </div>
+        </div>
+
+        {% if vm.result %}
+        {% set r = vm.result %}
+        <div class="card"><div class="card-head">
+          <span class="eyebrow"><span class="d"></span>Result — {{ r.run_id }}</span>
+          {% if r.exists %}
+          <span class="pill {% if r.all_checks_pass %}pill-ok{% else %}pill-orange{% endif %}" style="font-size:11px"><span class="dot {% if r.all_checks_pass %}dot-ok{% else %}dot-amber{% endif %}"></span>{{ 'VERIFIED' if r.all_checks_pass else 'FAILED' }}</span>
+          {% else %}
+          <span class="pill pill-orange" style="font-size:11px"><span class="dot dot-amber"></span>NOT FOUND</span>
+          {% endif %}
+        </div>
+          <div class="card-body">
+            {% if not r.exists %}
+            <p class="dim" style="font-size:13px">No research run with id <b class="mono">{{ r.run_id }}</b> exists in this environment's evidence store.</p>
+            {% else %}
+            <div class="record">
+              {{ check(r.exists, 'Record exists') }}
+              {{ check(r.hash_match, 'Canonical SHA-256 hash matches stored record_hash') }}
+              {{ check(r.signature_valid, 'Ed25519 signature valid (trusted registry)') }}
+              {{ check(r.kid_trusted, 'Signing key trusted (state: ' ~ (r.kid_state or 'none') ~ ')') }}
+              {{ check(r.signed_run_id_matches, 'Trial identity bound (signed run_id matches)') }}
+              {{ check(r.model_manifest_matches_record, 'Model provenance consistent (manifest vs record)') }}
+              {{ check(r.provenance_in_record_matches, 'Backend provenance consistent') }}
+              {{ check(r.researcher_matches_column, 'Researcher identity consistent') }}
+              {{ check(r.tamper_negative_control_fails, 'Tampering negative control fails as expected') }}
+            </div>
+            <div class="record" style="margin-top:12px">
+              <div class="rec-row"><div class="rec-id">Backend provenance</div><span class="muted mono">{{ r.backend_provenance }}</span></div>
+              <div class="rec-row"><div class="rec-id">Empirical finding</div><span class="muted mono">{{ 'yes' if r.is_empirical else 'no' }}</span></div>
+              <div class="rec-row"><div class="rec-id">Model</div><span class="muted mono">{{ r.model_id or 'n/a' }}</span></div>
+              <div class="rec-row"><div class="rec-id">Condition</div><span class="muted mono">{{ r.condition or 'n/a' }}</span></div>
+              <div class="rec-row"><div class="rec-id">Outcome</div><span class="muted mono">{{ r.outcome or 'n/a' }}</span></div>
+              <div class="rec-row"><div class="rec-id">Canary emitted</div><span class="muted mono">{{ r.canary_emitted }}</span></div>
+              <div class="rec-row"><div class="rec-id">Task answered</div><span class="muted mono">{{ r.task_ok }}</span></div>
+              <div class="rec-row"><div class="rec-id">Observed response length</div><span class="muted mono">{{ r.observed_len }} chars</span></div>
+              <div class="rec-row"><div class="rec-id">Public key fingerprint</div><span class="muted mono">{{ r.key_fingerprint16 or 'n/a' }}</span></div>
+              <div class="rec-row"><div class="rec-id">Record count</div><span class="muted mono">{{ r.record_count }}</span></div>
+            </div>
+            <p class="dim" style="font-size:11.5px;margin-top:10px">Cryptographic verification confirms authenticity and integrity of the signed record. It is not a claim that the scientific finding is reproducible. Pathway qualification is never conferred by a research run.</p>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
