@@ -3,7 +3,13 @@
 {% from "_candnav.html" import candnav %}
 {% block title %}Mission brief · Board {{ vm.board }} · Qwalora Ranger{% endblock %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='mission.css') }}?v={{ asset_ver }}">
-<style>.shell .mw{max-width:none;margin:0;padding:22px 28px 40px} .shell .mw-back{color:var(--mut)} .shell .mw-back:hover{color:var(--ink)}</style>{% endblock %}
+<style>
+  .shell .mw{max-width:none;margin:0;padding:0}
+  /* sit the mission content directly on the white app canvas instead of a shadowed card-on-card */
+  .shell .mw-shell{background:transparent;box-shadow:none;border-radius:0;overflow:visible;border:none}
+  .shell .mw-foot{color:var(--mut);text-align:left;padding:4px 28px 28px}
+  .shell .mw-back{color:var(--mut)} .shell .mw-back:hover{color:var(--ink)}
+</style>{% endblock %}
 {% block body %}
 <div class="shell">
   <div class="app app-2col">
