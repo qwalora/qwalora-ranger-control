@@ -6,9 +6,19 @@ researcher complete a genuine browser investigation. No second login system is i
 workspace uses the existing `githuboauth.py` + `/auth/github/callback` + `session['cand']` candidate
 identity mapping, unchanged.
 
-Status: the human browser acceptance test is **BLOCKED** on two steps only an operator/human can do:
-creating the nonprod OAuth App (your GitHub account) and signing in at a browser. Everything the
-application must provide is deployed and verified.
+Status: the human browser acceptance test is **BLOCKED** on one step only a human can do: signing in at
+a browser (the nonprod OAuth App is now configured). Everything the application must provide is deployed
+and verified.
+
+### Deploy-branch fix (VERIFIED)
+
+The nonprod portal had no branch set on its source, so it fell back to `main` (commit `431a183`, no
+workspace) and `/parallax/workspace` returned 404. Fixed: the service source now persists
+`branch = feature/parallax-p1-architecture-foundations`, so variable-triggered redeploys build the
+feature branch, not `main`. Live deployment `a3df393a-3bc4-4030-988c-a3121eb68793` is SUCCESS from commit
+`cb5f0d9`. Verified by GET against the live app (curl, redirects not followed):
+`/healthz` -> `HTTP 200`; `/parallax/workspace` -> `HTTP 302` with `location: /auth/github/login` (not a
+404). OAuth client id/secret are set on the nonprod portal only; the self-check is disabled.
 
 ## A. Why a separate nonproduction OAuth App (do not touch production)
 
