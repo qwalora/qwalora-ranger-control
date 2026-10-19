@@ -84,8 +84,16 @@
   </div>
 </div>
 <style>
-  .cand-body{padding:20px 24px 28px;display:flex;flex-direction:column;gap:16px;max-width:900px}
+  /* Use the available admin content width with a reasonable readable maximum, and lay the cards out
+     in a responsive two-column grid instead of a narrow 900px single column. */
+  .cand-body{padding:20px 24px 28px;margin:0 auto;max-width:1240px;display:grid;
+             grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   .cand-body .card{max-width:none}
-  .rowline{display:flex;gap:16px;flex-wrap:wrap}
+  .cand-body > .rowline, .cand-body > p{grid-column:1 / -1}
+  .rowline{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:860px){
+    .cand-body{grid-template-columns:1fr}
+    .rowline{grid-template-columns:1fr}
+  }
 </style>
 {% endblock %}

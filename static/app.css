@@ -254,6 +254,10 @@ h1.t{font:700 26px/1.08 var(--f);letter-spacing:-.8px;margin-top:12px;color:var(
 .rail .rb:hover{background:#f3f2f8}
 .rail .rb.on{background:var(--violet-50);color:var(--violet)}
 .rail .sp{flex:1}
+/* The compact rail only duplicates the full sidebar nav and is not part of the two-column admin
+   shell; hide it so it never renders as a stray column (it was dropping under the nav on Ranges,
+   Cohort and the reports list). The full sidebar is the single nav at every breakpoint. */
+.app .rail{display:none}
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--mut);padding:40px;text-align:center}
 .empty .ring{width:52px;height:52px;border-radius:14px;background:var(--violet-50);color:var(--violet);display:flex;align-items:center;justify-content:center}
 
@@ -440,3 +444,41 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
   .co-board,.chain{grid-column:1 / -1}
   .co-actions{grid-column:1 / -1;justify-content:flex-start}
 }
+
+/* ===== PARALLAX admin Evidence Integrity Console (scoped; never touches the global .card) ===== */
+.ev-wrap{padding:20px 24px;max-width:1120px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.ev-card{width:100%;max-width:none;background:#fff;border:1px solid var(--line2);border-radius:14px;overflow:hidden}
+.ev-card>.card-head{padding:18px 22px 0}
+.ev-card>.card-body{padding:16px 22px 22px}
+.ev-form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ev-form .input{max-width:380px;min-width:220px;flex:1 1 280px}
+.ev-verdict{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 22px;border-radius:14px;border:1px solid var(--line2);background:#fafafe}
+.ev-verdict[data-v="pass"]{background:rgba(15,122,72,.08);border-color:rgba(15,122,72,.35)}
+.ev-verdict[data-v="fail"]{background:rgba(192,57,43,.07);border-color:rgba(192,57,43,.35)}
+.ev-verdict[data-v="absent"]{background:rgba(180,105,14,.07);border-color:rgba(180,105,14,.35)}
+.ev-verdict-badge{font:700 13px/1 var(--f);letter-spacing:.6px;padding:9px 15px;border-radius:999px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap;color:#fff;background:var(--mut)}
+.ev-verdict[data-v="pass"] .ev-verdict-badge{background:#0f7a48}
+.ev-verdict[data-v="fail"] .ev-verdict-badge{background:#c0392b}
+.ev-verdict[data-v="absent"] .ev-verdict-badge{background:#b4690e}
+.ev-verdict-badge .g{width:9px;height:9px;border-radius:50%;background:#fff;flex:none}
+.ev-verdict[data-v="fail"] .ev-verdict-badge .g{border-radius:2px}
+.ev-verdict .rid{font-family:var(--m);font-size:13px;color:var(--ink);word-break:break-all}
+.ev-verdict .sub{font-size:12px;color:var(--mut);margin-top:3px}
+.ev-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.ev-col{min-width:0}
+.ev-col h3{font:600 11px/1 var(--f);letter-spacing:1.5px;text-transform:uppercase;color:var(--mut);margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.ev-check{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 0;border-bottom:1px solid var(--line)}
+.ev-check:last-child{border-bottom:none}
+.ev-check .lbl{font-size:13px;color:var(--ink);line-height:1.4}
+.ev-stat{display:inline-flex;align-items:center;gap:7px;font:600 11px/1 var(--f);white-space:nowrap}
+.ev-stat .g{width:9px;height:9px;border-radius:50%;flex:none;background:var(--mut)}
+.ev-stat[data-s="pass"]{color:#0f7a48}.ev-stat[data-s="pass"] .g{background:#0f7a48;border-radius:50%}
+.ev-stat[data-s="fail"]{color:#c0392b}.ev-stat[data-s="fail"] .g{background:#c0392b;border-radius:2px}
+.ev-meta{display:grid;grid-template-columns:minmax(140px,auto) 1fr;gap:9px 16px;font-size:13px;margin:0}
+.ev-meta dt{color:var(--mut);white-space:nowrap}
+.ev-meta dd{margin:0;font-family:var(--m);color:var(--ink);word-break:break-all;text-align:right}
+.ev-note{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:4px}
+@media(max-width:860px){.ev-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.ev-meta{grid-template-columns:1fr;gap:2px 0}.ev-meta dd{text-align:left;margin:0 0 9px}.ev-verdict{gap:10px}}
+
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

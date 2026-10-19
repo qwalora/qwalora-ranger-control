@@ -133,7 +133,39 @@ def test_admin_allowed_and_verifies(ctx):
 def test_get_page_renders_for_admin(ctx):
     application, _db, _rid = ctx
     r = _admin(application).get("/admin/evidence")
-    assert r.status_code == 200 and b"Evidence verification" in r.data
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "Evidence integrity console" in body
+    # uses the scoped full-width console wrapper, not the 460px global .card column
+    assert "ev-wrap" in body and 'class="input mono"' in body
+
+
+def test_result_page_has_responsive_console_layout(ctx):
+    application, _db, rid = ctx
+    # render the HTML result (not JSON) and confirm the console structure is present
+    r = _admin(application).post("/admin/evidence/verify",
+                                 headers={"X-CSRF-Token": "t"}, data={"run_id": rid, "csrf": "t"})
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "ev-verdict" in body and "ev-grid" in body          # verdict banner + two-column grid
+    assert "Cryptographic integrity" in body and "Research provenance" in body
+    assert "ev-stat" in body                                   # per-check status chips
+    assert "Public key fingerprint" in body and "Tampering negative control" in body
+    # accessible status: text label present, not color alone
+    assert ("PASS" in body or "FAIL" in body) and "VERIFIED" in body
+
+
+def test_css_has_responsive_breakpoints_and_no_global_card_change():
+    import io
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    css = io.open(os.path.join(root, "static", "app.css"), encoding="utf-8").read()
+    # desktop two-column grid collapses on tablet/mobile
+    assert ".ev-grid{" in css and "grid-template-columns:1fr 1fr" in css
+    assert "@media(max-width:860px){.ev-grid{grid-template-columns:1fr}" in css
+    assert "@media(max-width:560px)" in css
+    # the scoped console card removes the narrow cap; the global login card stays 460px
+    assert ".ev-card{" in css and "max-width:none" in css
+    assert ".card{width:100%;max-width:460px;" in css
 
 
 # ------------------------------- cryptographic -------------------------------
