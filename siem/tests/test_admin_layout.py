@@ -29,6 +29,16 @@ def test_operations_uses_available_width_responsively():
     assert "max-width:900px" not in html
 
 
+def test_research_review_is_responsive():
+    css = _read("static", "app.css")
+    html = _read("templates", "admin_research_review.html")
+    nav = _read("templates", "_adminnav.html")
+    assert ".rr-wrap{" in css and "grid-template-columns:minmax(320px,1.1fr) minmax(360px,1.4fr)" in css
+    assert "@media(max-width:900px){.rr-wrap{grid-template-columns:1fr}" in css
+    assert "Investigation queue" in html and "Investigation detail" in html
+    assert "/admin/research-review" in nav and "Research review" in nav
+
+
 def test_evidence_console_is_responsive():
     html = _read("templates", "admin_evidence.html")
     css = _read("static", "app.css")

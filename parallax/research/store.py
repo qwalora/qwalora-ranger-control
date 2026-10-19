@@ -158,3 +158,232 @@ def runs_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]]:
     return [{"run_id": r.run_id, "backend_provenance": r.backend_provenance, "model_id": r.model_id,
              "record_count": r.record_count,
              "is_empirical_finding": r.backend_provenance == "infrastructure_backed"} for r in rows]
+
+
+# =============================================================================================
+# PARALLAX research reviewer workflow (adjudication integrity, review queue, candidate visibility)
+# All functions here are read-only EXCEPT adjudicate_investigation, which persists ONE signed
+# adjudication after full integrity checks. None run a model; none touch historical trial evidence.
+# =============================================================================================
+
+INVESTIGATION_DECISIONS = ("met", "not_met", "inconclusive")
+
+
+def _err(msg: str, http: int) -> "ResearchStoreError":
+    e = ResearchStoreError(msg)
+    e.http = http  # type: ignore[attr-defined]
+    return e
+
+
+def _rec_of(row) -> Dict[str, Any]:
+    try:
+        return json.loads(row.run_record)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _kind_of(rec: Dict[str, Any]) -> Optional[str]:
+    return ((rec.get("manifest") or {}).get("kind")) or ((rec.get("metrics") or {}).get("kind"))
+
+
+def _parent_of(rec: Dict[str, Any]) -> Optional[str]:
+    return ((rec.get("manifest") or {}).get("parent_run")
+            or (rec.get("metrics") or {}).get("parent_run"))
+
+
+def _decisions_for(db, investigation_id: str) -> List[Dict[str, Any]]:
+    """All adjudications targeting this investigation, oldest first, with signature-verify status.
+    Sanitized (no signatures/keys)."""
+    from models import ParallaxResearchRun
+    rows = (ParallaxResearchRun.query
+            .filter(ParallaxResearchRun.run_record.contains('"kind":"adjudication"'))
+            .filter(ParallaxResearchRun.run_record.contains(investigation_id)).all())
+    out = []
+    for r in rows:
+        rec = _rec_of(r)
+        m = rec.get("metrics") or {}
+        if m.get("kind") == "adjudication" and m.get("target") == investigation_id:
+            out.append({"adjudication_id": r.run_id, "decision": m.get("decision"),
+                        "reviewer_id": m.get("reviewer_id"), "comment": m.get("comment"),
+                        "at": r.created_at.isoformat() if r.created_at else None,
+                        "signature_verifies": bool(signing.verify(rec, r.signature, kid=r.signing_kid))})
+    out.sort(key=lambda d: d["at"] or "")
+    return out
+
+
+def _evidence_summary(db, parent_id: str, inv_researcher_id: str) -> Dict[str, Any]:
+    """Sanitized summary + verification of the investigation's linked evidence (never raw signatures
+    or keys). observed_behavior is the reviewable model output and is included for authorized reviewers,
+    bounded in length."""
+    from models import ParallaxResearchRun
+    prow = ParallaxResearchRun.query.filter_by(run_id=parent_id).first()
+    if prow is None:
+        return {"evidence_run_id": parent_id, "exists": False, "signature_verifies": False,
+                "owner_matches": False}
+    prec = _rec_of(prow)
+    ptr = (prec.get("metrics") or {}).get("record", {}) or {}
+    ev_verifies = bool(signing.verify(prec, prow.signature, kid=prow.signing_kid))
+    obs = ptr.get("observed_behavior")
+    return {
+        "evidence_run_id": parent_id, "exists": True,
+        "backend_provenance": prow.backend_provenance,
+        "is_empirical": (prow.backend_provenance == "infrastructure_backed" and ev_verifies),
+        "model_id": ((prec.get("manifest") or {}).get("backend") or {}).get("model_id")
+                    or (ptr.get("model") or {}).get("id"),
+        "condition": ptr.get("condition"), "outcome": ptr.get("outcome"),
+        "canary_emitted": (ptr.get("evaluation") or {}).get("canary"),
+        "observed_behavior": (obs[:2000] if isinstance(obs, str) else obs),
+        "protocol_version": ptr.get("protocol_version") or prec.get("protocol_version"),
+        "corpus_version": ptr.get("corpus_version"),
+        "signature_verifies": ev_verifies,
+        "owner_matches": (prow.researcher_id == inv_researcher_id),
+    }
+
+
+def list_investigations_for_review(db, *, status: str = "all", q: str = "",
+                                   limit: int = 200) -> List[Dict[str, Any]]:
+    """Reviewer/admin READ-ONLY queue of research investigations. `status` in {all,pending,reviewed}.
+    `q` filters on investigation id / researcher / evidence id / analysis (case-insensitive). Returns
+    a sanitized list (no signatures/keys/full raw records)."""
+    from models import ParallaxResearchRun
+    rows = (ParallaxResearchRun.query
+            .filter(ParallaxResearchRun.run_record.contains('"kind":"investigation"'))
+            .order_by(ParallaxResearchRun.created_at.desc()).limit(2000).all())
+    items: List[Dict[str, Any]] = []
+    ql = (q or "").strip().lower()
+    for r in rows:
+        rec = _rec_of(r)
+        if _kind_of(rec) != "investigation":
+            continue
+        decisions = _decisions_for(db, r.run_id)
+        st = "reviewed" if decisions else "pending"
+        if status in ("pending", "reviewed") and st != status:
+            continue
+        parent_id = _parent_of(rec)
+        analysis = (rec.get("metrics") or {}).get("analysis") or ""
+        if ql:
+            hay = " ".join([r.run_id, r.researcher_id or "", parent_id or "", analysis]).lower()
+            if ql not in hay:
+                continue
+        items.append({
+            "investigation_id": r.run_id, "researcher_id": r.researcher_id,
+            "evidence_run_id": parent_id, "status": st,
+            "signature_verifies": bool(signing.verify(rec, r.signature, kid=r.signing_kid)),
+            "latest_decision": (decisions[-1]["decision"] if decisions else None),
+            "decision_count": len(decisions),
+            "analysis_excerpt": analysis[:160],
+            "submitted_at": r.created_at.isoformat() if r.created_at else None,
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+def get_investigation_detail(db, *, run_id: str) -> Optional[Dict[str, Any]]:
+    """Reviewer/admin READ-ONLY detail for ONE investigation: researcher ref, full analysis, linked
+    evidence summary + verification, cryptographic verify status, decision history. Not owner-scoped
+    (admin/reviewer authority governs access at the route). Sanitized: no signatures/keys/raw bytes.
+    Returns None if the id is not an investigation."""
+    from models import ParallaxResearchRun
+    row = ParallaxResearchRun.query.filter_by(run_id=run_id).first()
+    if row is None:
+        return None
+    rec = _rec_of(row)
+    if _kind_of(rec) != "investigation":
+        return None
+    parent_id = _parent_of(rec)
+    decisions = _decisions_for(db, run_id)
+    ev = _evidence_summary(db, parent_id, row.researcher_id) if parent_id else None
+    return {
+        "investigation_id": run_id, "researcher_id": row.researcher_id,
+        "analysis": (rec.get("metrics") or {}).get("analysis"),
+        "submitted_at": row.created_at.isoformat() if row.created_at else None,
+        "signature_verifies": bool(signing.verify(rec, row.signature, kid=row.signing_kid)),
+        "evidence": ev,
+        "status": "reviewed" if decisions else "pending",
+        "decisions": decisions,
+        "assessment_only": True, "pathway_qualified": False,
+    }
+
+
+def review_status_for(db, *, run_id: str, authenticated_researcher_id: str) -> Optional[Dict[str, Any]]:
+    """Candidate OWNER-SCOPED view of their OWN investigation's review status + authorized feedback.
+    Raises if the investigation belongs to someone else (never reveals another researcher's work)."""
+    from models import ParallaxResearchRun
+    row = ParallaxResearchRun.query.filter_by(run_id=run_id).first()
+    if row is None:
+        return None
+    if row.researcher_id != authenticated_researcher_id:
+        raise ResearchStoreError("a researcher may only read their own investigations")
+    rec = _rec_of(row)
+    if _kind_of(rec) != "investigation":
+        return None
+    decisions = _decisions_for(db, run_id)
+    latest = decisions[-1] if decisions else None
+    return {
+        "investigation_id": run_id,
+        "status": "reviewed" if decisions else "pending_review",
+        "decision": (latest["decision"] if latest else None),
+        "feedback": (latest["comment"] if latest else None),
+        "reviewed_at": (latest["at"] if latest else None),
+        "bound_to": _parent_of(rec),
+        "assessment_only": True, "pathway_qualified": False,
+    }
+
+
+def find_identical_investigation(db, *, researcher_id: str, parent_run: str, analysis: str):
+    """Return an EXISTING investigation by this researcher with the same evidence + identical analysis
+    (for idempotent handling of accidental resubmits), or None. Does not match a different analysis."""
+    from models import ParallaxResearchRun
+    rows = (ParallaxResearchRun.query.filter_by(researcher_id=researcher_id)
+            .filter(ParallaxResearchRun.run_record.contains('"kind":"investigation"')).all())
+    for r in rows:
+        rec = _rec_of(r)
+        m = rec.get("metrics") or {}
+        if (_kind_of(rec) == "investigation" and m.get("parent_run") == parent_run
+                and (m.get("analysis") or "") == analysis):
+            return r
+    return None
+
+
+def adjudicate_investigation(db, *, investigation_id: str, reviewer_id: str, decision: str,
+                             comment: str = ""):
+    """HARDENED adjudication core: before creating any signed decision it REQUIRES the target to be an
+    existing, signature-verified PARALLAX investigation whose linked evidence exists, verifies, and is
+    owned by the same researcher; it prohibits self-review; and it rejects invalid decisions. Persists
+    ONE signed adjudication (assessment-only; no qualification). Raises ResearchStoreError (with .http)
+    on any failure, BEFORE signing anything."""
+    from models import ParallaxResearchRun
+    if decision not in INVESTIGATION_DECISIONS:
+        raise _err("decision must be met|not_met|inconclusive", 400)
+    if not reviewer_id:
+        raise _err("reviewer identity required", 401)
+    if not investigation_id:
+        raise _err("investigation_id required", 400)
+    row = ParallaxResearchRun.query.filter_by(run_id=investigation_id).first()
+    if row is None:
+        raise _err("investigation not found", 404)
+    rec = _rec_of(row)
+    if _kind_of(rec) != "investigation":
+        raise _err("target is not a research investigation", 404)
+    if row.researcher_id == reviewer_id:
+        raise _err("a reviewer may not adjudicate their own investigation", 403)
+    if not signing.verify(rec, row.signature, kid=row.signing_kid):
+        raise _err("investigation signature does not verify", 409)
+    parent_id = _parent_of(rec)
+    if not parent_id:
+        raise _err("investigation has no linked evidence", 409)
+    prow = ParallaxResearchRun.query.filter_by(run_id=parent_id).first()
+    if prow is None:
+        raise _err("linked evidence not found", 409)
+    prec = _rec_of(prow)
+    if not signing.verify(prec, prow.signature, kid=prow.signing_kid):
+        raise _err("linked evidence signature does not verify", 409)
+    if prow.researcher_id != row.researcher_id:
+        raise _err("linked evidence ownership mismatch", 409)
+    campaign = {"manifest": {"kind": "adjudication", "backend": {"is_real": False, "model_id": "n/a",
+                "runtime": "n/a", "backend": "n/a"}, "n_records": 0, "target": investigation_id,
+                "parent_run": parent_id},
+                "metrics": {"kind": "adjudication", "target": investigation_id, "decision": decision,
+                "reviewer_id": reviewer_id, "comment": str(comment or "")[:4000]}}
+    return persist_run(db, researcher_id=reviewer_id, campaign=campaign)

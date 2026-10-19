@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Research review · Qwalora Ranger{% endblock %}
+{% macro verify(ok, label) -%}
+<span class="rr-verify" data-ok="{{ 'yes' if ok else 'no' }}"><span class="g" aria-hidden="true"></span>{{ label }}: {{ 'VERIFIED' if ok else 'FAILED' }}</span>
+{%- endmacro %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('research_review', '') }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">{{ ic('inbox','ic ic-sm') }} Research review</div>
+          <div class="rg-sub">Review submitted PARALLAX research investigations. Reading is admin-gated; recording a decision requires authorized reviewer identity. Assessment-only — no model runs during review, evidence is never modified, and no qualification is issued.</div>
+        </div>
+      </div>
+
+      <div class="rr-wrap">
+        <!-- QUEUE -->
+        <div class="rr-card">
+          <div class="card-head"><span class="eyebrow"><span class="d"></span>Investigation queue</span></div>
+          <div class="card-body">
+            <form class="rr-tools" method="get" action="/admin/research-review">
+              <span class="rr-tabs">
+                <a class="rr-tab {% if vm.status=='pending' %}on{% endif %}" href="/admin/research-review?status=pending{% if vm.q %}&q={{ vm.q }}{% endif %}">Pending</a>
+                <a class="rr-tab {% if vm.status=='reviewed' %}on{% endif %}" href="/admin/research-review?status=reviewed{% if vm.q %}&q={{ vm.q }}{% endif %}">Reviewed</a>
+                <a class="rr-tab {% if vm.status=='all' %}on{% endif %}" href="/admin/research-review?status=all{% if vm.q %}&q={{ vm.q }}{% endif %}">All</a>
+              </span>
+              <span class="rr-search">
+                <input type="hidden" name="status" value="{{ vm.status }}">
+                <input class="input mono" name="q" value="{{ vm.q or '' }}" placeholder="search id / researcher / evidence / text" autocomplete="off">
+              </span>
+            </form>
+
+            {% if vm.queue %}
+            <div class="rr-list">
+              {% for it in vm.queue %}
+              <a class="rr-row {% if it.investigation_id==vm.selected %}on{% endif %}"
+                 href="/admin/research-review?status={{ vm.status }}{% if vm.q %}&q={{ vm.q }}{% endif %}&id={{ it.investigation_id }}">
+                <span class="who">
+                  <b>{{ it.investigation_id }}</b>
+                  <span>{{ it.researcher_id }} · evidence {{ it.evidence_run_id or '—' }}</span>
+                </span>
+                <span class="rr-badge" data-s="{{ it.status }}"><span class="g" aria-hidden="true"></span>{{ it.status }}{% if it.latest_decision %} · {{ it.latest_decision }}{% endif %}</span>
+              </a>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="rr-empty">{{ ic('inbox','ic') }}<p>No {{ vm.status if vm.status!='all' else '' }} investigations{% if vm.q %} match “{{ vm.q }}”{% endif %}.</p></div>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- DETAIL -->
+        <div class="rr-card">
+          <div class="card-head"><span class="eyebrow"><span class="d"></span>Investigation detail</span></div>
+          <div class="card-body">
+            {% if vm.ok %}<div class="rr-banner ok">Decision recorded.</div>{% endif %}
+            {% if vm.err %}<div class="rr-banner err">{{ vm.err }}</div>{% endif %}
+
+            {% if not vm.detail %}
+            <div class="rr-empty">{{ ic('shield','ic') }}<p>Select an investigation from the queue to review its evidence, analysis, and record a decision.</p></div>
+            {% else %}
+            {% set d = vm.detail %}
+            <dl class="rr-meta">
+              <dt>Investigation</dt><dd>{{ d.investigation_id }}</dd>
+              <dt>Researcher</dt><dd>{{ d.researcher_id }}</dd>
+              <dt>Submitted</dt><dd>{{ d.submitted_at or 'n/a' }}</dd>
+              <dt>Status</dt><dd>{{ d.status }}</dd>
+            </dl>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">
+              {{ verify(d.signature_verifies, 'Investigation signature') }}
+              {% if d.evidence %}{{ verify(d.evidence.signature_verifies, 'Evidence signature') }}
+              {{ verify(d.evidence.owner_matches, 'Evidence ownership') }}{% endif %}
+            </div>
+
+            {% if d.evidence %}
+            <div class="rr-sec">Linked experiment evidence</div>
+            <dl class="rr-meta">
+              <dt>Evidence id</dt><dd>{{ d.evidence.evidence_run_id }}</dd>
+              <dt>Model</dt><dd>{{ d.evidence.model_id or 'n/a' }}</dd>
+              <dt>Provenance</dt><dd>{{ d.evidence.backend_provenance }}{{ ' · empirical' if d.evidence.is_empirical else '' }}</dd>
+              <dt>Condition</dt><dd>{{ d.evidence.condition or 'n/a' }}</dd>
+              <dt>Outcome</dt><dd>{{ d.evidence.outcome or 'n/a' }}</dd>
+              <dt>Canary emitted</dt><dd>{{ d.evidence.canary_emitted }}</dd>
+              <dt>Protocol</dt><dd>{{ d.evidence.protocol_version or 'n/a' }}</dd>
+            </dl>
+            {% if d.evidence.observed_behavior is not none %}
+            <div class="rr-sec">Observed model output</div>
+            <pre class="rr-obs">{{ d.evidence.observed_behavior }}</pre>
+            {% endif %}
+            {% endif %}
+
+            <div class="rr-sec">Research analysis</div>
+            <div class="rr-analysis">{{ d.analysis or '(empty)' }}</div>
+
+            <div class="rr-sec">Decision</div>
+            {% if vm.can_review %}
+            <form method="post" action="/admin/research-review/adjudicate" class="rr-decide">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="investigation_id" value="{{ d.investigation_id }}">
+              <div class="field">
+                <label for="rr-dec">Decision</label>
+                <select class="input" id="rr-dec" name="decision" required>
+                  <option value="">Choose…</option>
+                  {% for dv in vm.decisions %}<option value="{{ dv }}">{{ dv }}</option>{% endfor %}
+                </select>
+              </div>
+              <div class="field" style="flex:1;min-width:220px">
+                <label for="rr-cmt">Feedback (optional)</label>
+                <textarea class="input" id="rr-cmt" name="comment" rows="2" style="height:auto;padding:9px 11px" placeholder="Authorized reviewer feedback to the researcher…"></textarea>
+              </div>
+              <button class="btn btn-primary btn-sm">{{ ic('shield','ic ic-sm') }} Record decision</button>
+            </form>
+            <p class="rr-hint">A decision requires an existing, signature-verified investigation with verified, owner-matched evidence. A reviewer cannot adjudicate their own investigation. Recording a decision never runs a model, modifies evidence, or issues a qualification.</p>
+            {% else %}
+            <p class="rr-hint">You are signed in as an administrator but not an authorized reviewer, so decision controls are disabled. Reviewer identities are configured in the reviewer allow-list.</p>
+            {% endif %}
+
+            {% if d.decisions %}
+            <div class="rr-sec">Decision history</div>
+            <div class="rr-hist">
+              {% for a in d.decisions %}
+              <div class="h">
+                <span><b>{{ a.decision }}</b> · {{ a.reviewer_id }}{% if a.comment %} — {{ a.comment }}{% endif %}</span>
+                <span class="muted mono">{{ a.at }}{% if a.signature_verifies %} · signed{% endif %}</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

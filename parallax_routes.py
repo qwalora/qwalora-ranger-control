@@ -592,13 +592,26 @@ def register(app, candidate_model=None, db=None, helpers=None):
             return jsonify(error="evidence not found"), 404
         if ev is None:
             return jsonify(error="evidence not found"), 404
+        # Lifecycle idempotency: a byte-identical resubmission (same evidence + same analysis by this
+        # researcher) is treated as an accidental retry and returns the EXISTING investigation rather
+        # than creating a duplicate signed record. A DIFFERENT analysis is a legitimate new
+        # investigation and is created. (Policy note in the report: this dedupes only identical retries.)
+        dup = _rstore.find_identical_investigation(db, researcher_id=rid, parent_run=parent,
+                                                   analysis=analysis)
+        if dup is not None:
+            _supersede_investigation_draft()
+            return jsonify(ok=True, investigation_id=dup.run_id, bound_to=parent, duplicate=True,
+                           status="pending_review", assessment_only=True, pathway_qualified=False), 200
         campaign = {"manifest": {"kind": "investigation", "backend": {"is_real": False,
                     "model_id": "n/a", "runtime": "n/a", "backend": "n/a"}, "n_records": 0,
                     "parent_run": parent},
                     "metrics": {"kind": "investigation", "parent_run": parent, "analysis": analysis}}
         row = _rstore.persist_run(db, researcher_id=rid, campaign=campaign)
-        return jsonify(ok=True, investigation_id=row.run_id, bound_to=parent,
-                       assessment_only=True, pathway_qualified=False), 201
+        # Server-side supersede of the corresponding investigation draft (not just client-side) so a
+        # submitted analysis never resurfaces as unsubmitted work.
+        _supersede_investigation_draft()
+        return jsonify(ok=True, investigation_id=row.run_id, bound_to=parent, duplicate=False,
+                       status="pending_review", assessment_only=True, pathway_qualified=False), 201
     app.add_url_rule("/parallax/research/investigation", "parallax_research_investigation",
                      parallax_research_investigation, methods=["POST"])
 
@@ -645,6 +658,19 @@ def register(app, candidate_model=None, db=None, helpers=None):
         h = _hl.sha256(proto.encode()).hexdigest()
         prefix = {"parallax_experiment": "px-exp", "parallax_investigation": "px-inv"}[kind]
         return 1, "%s:%s" % (prefix, h[:40]), h[:16]
+
+    def _supersede_investigation_draft():
+        """Server-side supersede: delete this candidate's investigation draft after a successful
+        submission, so submitted analysis never resurfaces as unsubmitted work. Best-effort."""
+        try:
+            cid = session.get("cand")
+            if not cid:
+                return
+            import drafts as _drafts
+            _, case_key, _ = _research_scope("parallax_investigation")
+            _drafts.delete(int(cid), "parallax", 1, "parallax_investigation", case_key)
+        except Exception:  # noqa: BLE001 - supersede is best-effort; never fail the submit
+            pass
 
     def _draft_rate_limited(kind, cid):
         try:
@@ -736,17 +762,36 @@ def register(app, candidate_model=None, db=None, helpers=None):
         body = request.get_json(silent=True) or {}
         target = str(body.get("investigation_id") or "").strip()
         decision = str(body.get("decision") or "").strip().lower()
-        if decision not in ("met", "not_met", "inconclusive"):
-            return jsonify(error="decision must be met|not_met|inconclusive"), 400
-        if not target:
-            return jsonify(error="investigation_id required"), 400
-        campaign = {"manifest": {"kind": "adjudication", "backend": {"is_real": False,
-                    "model_id": "n/a", "runtime": "n/a", "backend": "n/a"}, "n_records": 0,
-                    "target": target},
-                    "metrics": {"kind": "adjudication", "target": target, "decision": decision,
-                                "reviewer_id": reviewer_id, "comment": str(body.get("comment") or "")[:4000]}}
-        row = _rstore.persist_run(db, researcher_id=reviewer_id, campaign=campaign)
+        comment = str(body.get("comment") or "")
+        # Hardened core: resolves the target to an existing, signature-verified investigation whose
+        # linked evidence verifies and is owned by the same researcher; prohibits self-review; rejects
+        # invalid references BEFORE signing any decision.
+        try:
+            row = _rstore.adjudicate_investigation(db, investigation_id=target, reviewer_id=reviewer_id,
+                                                   decision=decision, comment=comment)
+        except _rstore.ResearchStoreError as e:
+            return jsonify(ok=False, error=str(e)), getattr(e, "http", 400)
         return jsonify(ok=True, adjudication_id=row.run_id, target=target, decision=decision,
                        assessment_only=True, pathway_qualified=False), 201
     app.add_url_rule("/parallax/research/adjudicate", "parallax_research_adjudicate",
                      parallax_research_adjudicate, methods=["POST"])
+
+    def parallax_research_review_status(run_id):
+        """Candidate OWNER-SCOPED view of their OWN investigation's review status + authorized
+        feedback. Never reveals another researcher's work (404 on cross-owner)."""
+        if not _nonprod():
+            return ("not found", 404)
+        rid = _resolve_candidate_key()
+        if not rid:
+            return jsonify(error="active authenticated researcher session required"), 401
+        from parallax.research import store as _rstore
+        try:
+            st = _rstore.review_status_for(db, run_id=run_id, authenticated_researcher_id=rid)
+        except _rstore.ResearchStoreError:
+            return jsonify(error="not found"), 404     # never reveal another researcher's investigation
+        if st is None:
+            return jsonify(error="not found"), 404
+        return jsonify(ok=True, **st), 200
+    app.add_url_rule("/parallax/research/investigation/<run_id>/status",
+                     "parallax_research_review_status", parallax_research_review_status,
+                     methods=["GET"])

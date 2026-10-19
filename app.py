@@ -594,6 +594,8 @@ def create_app():
         "candidate_report_draft": (300, 60),
         # admin-only, read-only PARALLAX evidence verifier (generous per-IP ceiling)
         "admin_evidence_verify": (60, 60),
+        # admin-only PARALLAX research reviewer adjudication
+        "admin_research_adjudicate": (60, 60),
     }
 
     def _client_ip():
@@ -3275,6 +3277,66 @@ def create_app():
         if wants_json:
             return jsonify(ok=True, result=result), 200
         return render_template("admin_evidence.html", vm={"run_id": run_id, "result": result})
+
+    # --- PARALLAX Research Review (admin-only reviewer workflow) --------------------------------
+    # A reviewer queue over PARALLAX research investigations. Reading is admin-gated; recording a
+    # decision additionally requires the admin to be an authorized reviewer (admin_gid in the reviewer
+    # allow-list). The decision goes through the hardened store.adjudicate_investigation core (which
+    # resolves + verifies the investigation and its linked evidence, prohibits self-review, and rejects
+    # invalid references before signing). No model runs; historical evidence is never modified; no
+    # qualification is issued. The action is audited.
+    @app.get("/admin/research-review")
+    @admin_required
+    def admin_research_review():
+        from parallax.research import store as _rstore
+        status = (request.args.get("status") or "pending").strip().lower()
+        if status not in ("pending", "reviewed", "all"):
+            status = "pending"
+        q = (request.args.get("q") or "").strip()
+        sel = (request.args.get("id") or "").strip()
+        items = _rstore.list_investigations_for_review(db, status=status, q=q)
+        detail = _rstore.get_investigation_detail(db, run_id=sel) if sel else None
+        gid = str(session.get("admin_gid") or "")
+        can_review = bool(gid) and gid in _reviewer_ids()
+        return render_template("admin_research_review.html",
+                               vm={"queue": items, "detail": detail, "status": status, "q": q,
+                                   "selected": sel, "can_review": can_review, "reviewer_gid": gid,
+                                   "ok": request.args.get("ok"), "err": request.args.get("err"),
+                                   "decisions": ["met", "not_met", "inconclusive"]})
+
+    @app.post("/admin/research-review/adjudicate")
+    @admin_required
+    def admin_research_adjudicate():
+        from parallax.research import store as _rstore
+        gid = str(session.get("admin_gid") or "").strip()
+        if not gid or gid not in _reviewer_ids():
+            return jsonify(ok=False, error="authorized reviewer identity required"), 403
+        j = request.get_json(silent=True) or {}
+        target = (request.form.get("investigation_id") or j.get("investigation_id") or "").strip()
+        decision = (request.form.get("decision") or j.get("decision") or "").strip().lower()
+        comment = (request.form.get("comment") or j.get("comment") or "")
+        wants_json = (request.path.endswith(".json")
+                      or "application/json" in (request.headers.get("Accept") or "") or request.is_json)
+        try:
+            row = _rstore.adjudicate_investigation(db, investigation_id=target, reviewer_id=gid,
+                                                   decision=decision, comment=comment)
+        except _rstore.ResearchStoreError as e:
+            code = getattr(e, "http", 400)
+            if wants_json:
+                return jsonify(ok=False, error=str(e)), code
+            return redirect(url_for("admin_research_review", id=target, err=str(e)))
+        try:
+            from parallax import auditlog as _al
+            _al.append(db, action="research_investigation_adjudicated", actor_id=_admin_actor(),
+                       subject_kind="research_investigation", subject_ref=target,
+                       detail={"decision": decision, "adjudication_id": row.run_id})
+            db.session.commit()
+        except Exception:  # noqa: BLE001 - audit is best-effort; the signed decision already persisted
+            db.session.rollback()
+        if wants_json:
+            return jsonify(ok=True, adjudication_id=row.run_id, target=target, decision=decision,
+                           assessment_only=True, pathway_qualified=False), 201
+        return redirect(url_for("admin_research_review", id=target, ok="1"))
 
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")
