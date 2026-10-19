@@ -1135,3 +1135,18 @@ def dataset(n, seed):
 def grade(n, seed, submission):
     gen, _, scorer = _GENERATORS[n]
     return scorer(gen(seed), submission)
+
+
+# --- board 1 ADVANCED: multi-step incident investigation --------------------
+# Additive layer over Board-1 triage. Same answer-free contract: the key is derived from the seed
+# on the server (generate_incident) and never leaves it; the public view is alerts only. Does NOT
+# alter generate_board1/score_board1 or the 95% gate.
+def incident_dataset(seed, variant=None):
+    from siem import incident_investigation as _ii
+    return _ii.public_incident(_ii.generate_incident(seed, variant))
+
+
+def incident_grade(seed, submission, variant=None):
+    from siem import incident_investigation as _ii
+    sc = _ii.generate_incident(seed, variant)
+    return _ii.score_incident(sc, submission)

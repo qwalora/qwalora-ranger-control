@@ -1305,3 +1305,27 @@ class ProgramMembershipEvent(db.Model):
     actor = db.Column(db.String(120), nullable=True)    # admin github id / handle, or system:migration
     reason = db.Column(db.String(400), nullable=True)
     at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
+
+
+class IncidentAssessment(db.Model):
+    """STRATA Board-1 ADVANCED layer: a signed record of one incident-investigation attempt.
+
+    Additive and NON-GATING by design: it records the candidate's multi-step correlation score and
+    per-incident correctness FLAGS (never the answer key), with an Ed25519 signature for auditability.
+    It deliberately does NOT touch BoardResult, objective scoring, or the 95% qualification gate -
+    wiring incident performance into qualification is a separate policy decision. Created additively;
+    db.create_all() provisions the table on existing databases (no column migration needed)."""
+    __tablename__ = "incident_assessments"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    board = db.Column(db.Integer, nullable=False, default=1)
+    seed = db.Column(db.String(120), nullable=True)
+    score = db.Column(db.Float, nullable=False, default=0.0)
+    passed = db.Column(db.Boolean, nullable=False, default=False)  # informational only; not the gate
+    details_json = db.Column(db.Text, nullable=True)   # per-incident correctness flags (no answer key)
+    record_hash = db.Column(db.String(64), nullable=True)
+    signature = db.Column(db.Text, nullable=True)       # Ed25519 over the attestation
+    signing_kid = db.Column(db.String(80), nullable=True)
+    attempts = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)

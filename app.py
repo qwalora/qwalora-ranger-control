@@ -4110,6 +4110,120 @@ def create_app():
                        status=_soc_status_vm(c, n),
                        note="Report approval is also required to clear the board."), 200
 
+    # --- Board-1 ADVANCED: multi-step incident investigation ----------------
+    # Additive assessment. Shares the triage entitlement (STRATA active, Board 1) and the answer-free
+    # contract (key re-derived server-side, never disclosed). It records a SIGNED IncidentAssessment
+    # and deliberately does NOT call _record_objective or _evaluate_gate: the 95% qualification gate
+    # and Board-1 scoring are untouched.
+    def _record_incident(c, seed, score, details):
+        from models import IncidentAssessment
+        import json as _json
+        row = (IncidentAssessment.query.filter_by(candidate_id=c.id, board=SOC_WORKSPACE_BOARD)
+               .order_by(IncidentAssessment.id.desc()).first())
+        if row is None:
+            row = IncidentAssessment(candidate_id=c.id, board=SOC_WORKSPACE_BOARD, attempts=0)
+            db.session.add(row)
+        row.seed = seed
+        row.score = float(score)
+        row.passed = float(score) >= P.PASS_BAR   # informational reference only; NOT the gate
+        row.attempts = (row.attempts or 0) + 1
+        row.details_json = _json.dumps(details)[:8000]
+        attest = {"kind": "incident_investigation", "handle": c.handle, "board": SOC_WORKSPACE_BOARD,
+                  "score": float(score), "attempt": row.attempts,
+                  "at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+        import hashlib as _hl
+        row.record_hash = _hl.sha256(signing.canonical(attest)).hexdigest()
+        row.signature = signing.sign(attest)
+        row.signing_kid = signing.active_kid()
+        return row
+
+    @app.get("/me/workspace/incident")
+    @require_program("strata")
+    def candidate_incident_workspace():
+        """The Board-1 advanced incident-investigation page. Entitlement+active gated, Board 1 only."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return redirect(url_for("candidate_mission"))
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n); seed = _current_seed(c); db.session.commit()
+        vm = {"handle": c.handle, "name": c.name, "cohort": c.cohort, "board": n,
+              "case_ref": _scenario_ref(c, n, seed or ""),
+              "severities": ["low", "medium", "high", "critical"]}
+        return render_template("board1_incident.html", vm=vm)
+
+    @app.get("/me/workspace/incident/data")
+    @require_program("strata")
+    def candidate_incident_data():
+        """The candidate's OWN answer-free incident dataset (alerts only; no grouping, no key).
+        Ownership is structural: the dataset derives from the session candidate's seed; no handle or
+        seed is accepted from the client."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no incident workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow"), 409
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n); seed = _current_seed(c)
+        _touch(c, n); db.session.commit()
+        ds = scenarios.incident_dataset(seed)   # answer-free (public_incident strips key + grouping)
+        from models import IncidentAssessment
+        prev = (IncidentAssessment.query.filter_by(candidate_id=c.id, board=n)
+                .order_by(IncidentAssessment.id.desc()).first())
+        return jsonify(ok=True, board=n, case_ref=_scenario_ref(c, n, seed),
+                       theme=ds.get("theme"), alerts=ds.get("alerts", []),
+                       last_score=(prev.score if prev else None),
+                       attempts=(prev.attempts if prev else 0)), 200
+
+    @app.post("/me/workspace/incident/submit")
+    @require_program("strata")
+    def candidate_incident_submit():
+        """Submit the incident-investigation analysis. Session+CSRF authed; graded server-side against
+        the candidate's own seed (key re-derived server-side, never disclosed). Records a SIGNED
+        IncidentAssessment. Does NOT affect Board-1 objective scoring or the 95% qualification gate."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no incident workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow"), 409
+        body = request.get_json(silent=True) or {}
+        submission = body.get("submission")
+        if isinstance(submission, str):
+            import json as _json
+            try:
+                submission = _json.loads(submission)
+            except ValueError:
+                return jsonify(error="submission must be valid JSON"), 400
+        if not isinstance(submission, dict):
+            return jsonify(error="a submission object is required"), 400
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n); seed = _current_seed(c)
+        score, per_incident = scenarios.incident_grade(seed, submission)  # flags only, never the key
+        row = _record_incident(c, seed, score, {"per_incident": per_incident})
+        _touch(c, n)
+        db.session.commit()
+        return jsonify(ok=True, board=n, score=score, attempt=row.attempts,
+                       per_incident=per_incident, reference_bar=P.PASS_BAR,
+                       note="Incident investigation is an additive assessment; it does not change "
+                            "Board-1 scoring or qualification."), 200
+
     def _account_vm(c):
         brands = _program_brands()
         requestable = _requestable_programs(c)
