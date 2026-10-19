@@ -59,6 +59,30 @@ immediately to confirm without waiting 24h), and this document's restore procedu
 operating instruction. Operational readiness is limited to: scheduled native backups enabled + a
 backup present; a verified restore remains explicitly pending (drill deferred).
 
+## Activation outcome (2026-10-19, Daily approved)
+- Change applied: the Daily volume-backup schedule was staged as a single non-destructive change on
+  the parallax-postgres volume (`backupSchedules` added as `["DAILY"]`, confirmed via get-staged-changes:
+  changeCount 1, destructive false) and committed. parallax-postgres then redeployed (deployment
+  `b142be00-d4a2-4b28-805e-7fe789dc4d14`, SUCCESS, 13:18:31 UTC); staging cleared (staged: null); the
+  service is online, 1/1 replicas, 0 failures. The volume is the same one re-mounted (id unchanged,
+  50 GB), so candidate/entitlement/evidence data is intact; no data was replaced.
+- Weekly, Monthly, and PITR were NOT enabled. No other service and no production resource was changed.
+- API-visibility limitation (honest): the Railway MCP/agent tooling available here does not expose the
+  `backupSchedules` value in any read projection (get-service-config / describe-environment omit it),
+  and has NO tool to list or create volume backups. So the commit + SUCCESS redeploy are strong
+  evidence the Daily schedule is enabled, but the schedule VALUE and the existence of an actual backup
+  artifact cannot be confirmed programmatically from here.
+- Remaining manual confirmation (dashboard, ~1 minute): parallax-postgres -> Backups tab -> confirm the
+  Daily schedule shows enabled; optionally click "Backup now" to create an on-demand backup so one
+  exists immediately rather than waiting up to 24h for the first scheduled run. (A benign empty staged
+  patch `a015b2cc` with zero changes may appear; it is harmless and can be left or discarded.)
+
+## Readiness statement
+NOT yet operationally verified. Enabled + committed: the Daily schedule change (service redeployed
+SUCCESS). Pending, and required before claiming readiness: (1) dashboard confirmation that the Daily
+schedule is listed and at least one backup exists, and (2) the timed restore drill (deferred by the
+operator). Until both are done, this is "backup schedule enabled," not "verified recoverable."
+
 ## Preserved
 Production and all existing Ranger services are untouched. STRATA/PARALLAX entitlements, assessment
 rules, candidate records, and signed evidence are unaffected by enabling volume backups (snapshots
