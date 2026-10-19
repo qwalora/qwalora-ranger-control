@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_adminnav.html" import adminnav %}
+{% block title %}Program access · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ adminnav('program', vm.cohort) }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="ttl">Program access</div>
+          <div class="rg-sub">One Ranger identity, independently authorized programs. Grant, suspend or
+            revoke STRATA and PARALLAX separately. Granting STRATA opens the shared SOC board 1; a change
+            takes effect immediately, with no sign-out. Every change is audited.</div>
+        </div>
+        <span class="pill {% if vm.pending_requests %}pill-amber{% else %}pill-ok{% endif %}">
+          <span class="dot {% if vm.pending_requests %}dot-amber{% else %}dot-ok{% endif %}"></span>{{ vm.pending_requests }} awaiting review</span>
+      </div>
+
+      <div class="co-list" style="padding-top:16px">
+        <div class="co-row" style="grid-template-columns:1.7fr {% for p in vm.programs %}1.4fr {% endfor %};opacity:.7">
+          <span class="mono dim">Candidate</span>
+          {% for p in vm.programs %}<span class="mono dim">{{ vm.program_brands[p] }}</span>{% endfor %}
+        </div>
+        {% for r in vm.rows %}
+        <div class="co-row" style="grid-template-columns:1.7fr {% for p in vm.programs %}1.4fr {% endfor %}">
+          <div class="co-who">
+            <span class="av av-32">{{ r.ini }}</span>
+            <div class="co-id"><b>{{ r.name }}</b><span class="mono dim">@{{ r.handle }} · {{ r.cohort }} · {{ r.pstatus }}</span></div>
+          </div>
+          {% for cell in r.cells %}
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <span class="pill {% if cell.status=='active' %}pill-ok{% elif cell.status in ('requested','pending') %}pill-amber{% elif cell.status in ('suspended','revoked','rejected') %}pill-orange{% else %}pill{% endif %}">
+              <span class="dot {% if cell.status=='active' %}dot-ok{% elif cell.status in ('requested','pending','suspended','revoked','rejected') %}dot-amber{% endif %}"></span>{{ cell.effective }}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              {% for a in cell.actions %}
+              <form method="post" action="/admin/program-access/{{ r.cid }}/{{ cell.program }}/{{ a }}">
+                <input type="hidden" name="csrf" value="{{ csrf_token }}">
+                <input type="hidden" name="cohort" value="{{ vm.cohort }}">
+                <button class="btn {% if a in ('grant','approve','reinstate') %}btn-primary{% elif a in ('revoke','reject') %}btn-ghost{% else %}btn-outline{% endif %} btn-sm">{{ a }}</button>
+              </form>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty"><div class="ring">{{ ic('key') }}</div><div>No candidates yet.</div></div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

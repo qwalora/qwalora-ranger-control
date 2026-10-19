@@ -47,8 +47,10 @@ import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
 from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
-                    CohortScenarioPlan, Notification, RangeRequest, Report,
+                    CohortScenarioPlan, Notification, ProgramMembership,
+                    ProgramMembershipEvent, RangeRequest, Report,
                     Resource, ScenarioAssignment, db, ensure_schema)
+import pathways
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
 # Per-host isolated-range concurrency cap (RAM budget). 64GB host ~2 full GOAD.
@@ -681,6 +683,172 @@ def create_app():
                 abort(403)
             return fn(*a, **k)
         return wrapper
+
+    # --- program entitlements (STRATA / PARALLAX), server-side ---------------
+    # One Ranger identity, independently authorized programs. Access is granted ONLY
+    # by an ACTIVE program_memberships row, read fresh on every request so a
+    # suspension/revocation takes effect immediately with no re-login.
+    def _norm_program(p):
+        return pathways.normalize_pathway(p)
+
+    def _cohort_pathway(cohort_name):
+        try:
+            co = Cohort.query.filter_by(name=cohort_name).first()
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+            co = None
+        return pathways.normalize_pathway(co.pathway if co else None)
+
+    def _membership(cid, program):
+        return ProgramMembership.query.filter_by(
+            candidate_id=cid, program=_norm_program(program)).first()
+
+    def _no_membership_rows(cid):
+        return ProgramMembership.query.filter_by(candidate_id=cid).first() is None
+
+    def _program_active(cid, program):
+        """The single server-side entitlement check: True iff the candidate is authorized
+        for this program. Never trusts client state or session flags; read fresh each call.
+
+        Rule: an explicit membership row governs strictly (only status=='active' grants).
+        Backward-compatibility fallback, STRATA ONLY: a candidate with NO membership rows
+        at all who is platform-active is treated as a pre-entitlement STRATA participant
+        (the historical default, so legacy/un-migrated rows and existing tests are not
+        locked out). The fallback NEVER applies to PARALLAX (always an explicit grant) and
+        NEVER applies once the candidate has any membership row (then deny-by-default)."""
+        if not cid:
+            return False
+        program = _norm_program(program)
+        m = _membership(cid, program)
+        if m is not None:
+            return m.status == ProgramMembership.GRANTS_ACCESS
+        if program == pathways.PATHWAY_STRATA and _no_membership_rows(cid):
+            c = Candidate.query.get(cid)
+            return bool(c and c.status == "active")
+        return False
+
+    def _active_programs(c):
+        """Programs with an explicit ACTIVE membership row (what an admin granted)."""
+        if c is None:
+            return []
+        rows = ProgramMembership.query.filter_by(
+            candidate_id=c.id, status=ProgramMembership.GRANTS_ACCESS).all()
+        order = {p: i for i, p in enumerate(pathways.PATHWAYS)}
+        return sorted({r.program for r in rows}, key=lambda p: order.get(p, 99))
+
+    def _effective_programs(c):
+        """Programs the candidate can actually access right now (authorization-consistent
+        with _program_active, including the legacy zero-row STRATA fallback). Drives the
+        program-aware dashboard so a legacy STRATA candidate still sees their dashboard."""
+        if c is None:
+            return []
+        progs = set(_active_programs(c))
+        if _program_active(c.id, pathways.PATHWAY_STRATA) and pathways.PATHWAY_STRATA not in progs:
+            progs.add(pathways.PATHWAY_STRATA)
+        order = {p: i for i, p in enumerate(pathways.PATHWAYS)}
+        return sorted(progs, key=lambda p: order.get(p, 99))
+
+    def _candidate_memberships(c):
+        if c is None:
+            return []
+        return (ProgramMembership.query.filter_by(candidate_id=c.id)
+                .order_by(ProgramMembership.program).all())
+
+    def _membership_event(cid, program, action, from_status, to_status, actor, reason=None):
+        db.session.add(ProgramMembershipEvent(
+            candidate_id=cid, program=_norm_program(program), action=action,
+            from_status=from_status, to_status=to_status, actor=actor,
+            reason=((reason or "")[:400] or None)))
+
+    def _ensure_pending_membership(c, program=None, actor="system:enroll"):
+        """Record the program a candidate is applying to as a PENDING membership (no
+        access yet). Idempotent. Defaults to the candidate's cohort pathway."""
+        program = _norm_program(program or _cohort_pathway(c.cohort))
+        m = _membership(c.id, program)
+        if m is None:
+            m = ProgramMembership(candidate_id=c.id, program=program, status="pending",
+                                  cohort=c.cohort)
+            db.session.add(m)
+            _membership_event(c.id, program, "request", None, "pending", actor,
+                              "application (cohort pathway)")
+        return m
+
+    def _set_membership(c, program, new_status, actor, reason=None, action=None):
+        """Create-or-update a candidate's membership for `program` to new_status, audited."""
+        program = _norm_program(program)
+        m = _membership(c.id, program)
+        prev = m.status if m else None
+        if m is None:
+            m = ProgramMembership(candidate_id=c.id, program=program,
+                                  status=new_status, cohort=c.cohort)
+            db.session.add(m)
+        else:
+            m.status = new_status
+        now = _dt.datetime.now(_dt.timezone.utc)
+        if new_status == "active":
+            m.decided_at = now
+            if actor:
+                m.granted_by = actor
+        elif new_status == "rejected":
+            m.decided_at = now
+        elif new_status in ("suspended", "revoked"):
+            m.revoked_at = now
+        _membership_event(c.id, program, (action or new_status), prev, new_status, actor, reason)
+        return m
+
+    def _admin_actor():
+        return (str(session.get("admin_gid") or "").strip()
+                or ("token-admin" if session.get("admin") else "admin"))
+
+    def _program_brands():
+        return {p: pathways.branding(p).get("name") or p.upper() for p in pathways.PATHWAYS}
+
+    def _select_program(c, programs):
+        """Resolve the program the dashboard should show. Honors ?program= then the
+        remembered session choice, but ONLY among programs the candidate is actually
+        entitled to (a forged/unentitled value is ignored). Never an authorization
+        decision - each route still checks entitlement server-side."""
+        if not programs:
+            return None
+        want = _norm_program(request.args.get("program") or "")
+        if want in programs:
+            session["program_sel"] = want
+            return want
+        remembered = _norm_program(session.get("program_sel") or "")
+        if remembered in programs:
+            return remembered
+        return programs[0]
+
+    def _requestable_programs(c):
+        """Programs the candidate may REQUEST (not already held and not already pending/
+        requested). Self-service request creates a 'requested' row for admin review; it
+        never grants access."""
+        if c is None or c.status != "active":
+            return []
+        existing = {m.program for m in _candidate_memberships(c)}
+        return [p for p in pathways.PATHWAYS if p not in existing]
+
+    def require_program(program):
+        """Decorator for session (cookie) routes: require an ACTIVE membership in
+        `program`. 401 unauthenticated; 403 authenticated-but-not-entitled (browsers are
+        sent to their own dashboard, which never leaks the other program)."""
+        prog = _norm_program(program)
+
+        def deco(fn):
+            @functools.wraps(fn)
+            def wrapper(*a, **k):
+                c = _current_candidate()
+                if not c:
+                    if githuboauth.enabled():
+                        return redirect(url_for("gh_login", next=request.path))
+                    abort(401)
+                if not _program_active(c.id, prog):
+                    if _wants_json() or request.path.endswith(".json"):
+                        abort(403)
+                    return redirect(url_for("candidate_me"))
+                return fn(*a, **k)
+            return wrapper
+        return deco
 
     # --- range helpers -------------------------------------------------------
     def _candidate_key(c):
@@ -1797,6 +1965,8 @@ def create_app():
                       github_id=github_id, status="pending",
                       current_board=1, current_role=P.role_of(1))
         db.session.add(c)
+        db.session.flush()
+        _ensure_pending_membership(c)   # program entitlement application (cohort pathway); no access yet
         db.session.commit()
         return render_template("enroll_done.html", candidate=c,
                                broker_mode=broker.mode())
@@ -1810,6 +1980,10 @@ def create_app():
         c = Candidate.query.filter_by(handle=handle).first()
         if not c or not token or token != c.token:
             return None, (jsonify(error="invalid candidate token"), 401)
+        # Program entitlement: the STRATA token API requires an active STRATA membership
+        # (legacy zero-row active candidates retain access; see _program_active).
+        if not _program_active(c.id, pathways.PATHWAY_STRATA):
+            return None, (jsonify(error="not authorized for the STRATA program"), 403)
         return c, None
 
     @app.post("/labs/start")
@@ -1914,6 +2088,8 @@ def create_app():
         c = Candidate.query.filter_by(handle=handle).first()
         if not c:
             return jsonify(error="unknown candidate"), 404
+        if not _program_active(c.id, pathways.PATHWAY_STRATA):
+            return jsonify(error="candidate not authorized for the STRATA program"), 403
         if board is None or not P.board_meta(board):
             return jsonify(error="unknown board"), 400
         if int(board) == ENTERPRISE_CASE_BOARD:
@@ -2783,21 +2959,35 @@ def create_app():
                         url_for("admin_cohort", status=request.form.get("return_status", "active")))
 
     # --- enrollment approval gate -------------------------------------------
-    def _approve_candidate(c):
-        """pending -> active: unlock board 1 (shared SOC, instant, no VM) and
-        notify. Isolated GOAD identity/ranges are still created lazily, only when
-        the ranger explicitly starts a red-team board. Idempotent."""
+    def _approve_candidate(c, program=None):
+        """pending -> active (platform), AND activates the candidate's program
+        entitlement. The program defaults to the one they applied to (their pending
+        membership, else the cohort pathway). STRATA board 1 (shared SOC, instant, no
+        VM) is provisioned ONLY when the activated program is STRATA; a PARALLAX
+        approval provisions no STRATA range. Idempotent."""
         if c.status != "pending":
             return False
         c.status = "active"
-        _provision_for_board(c, 1)  # board 1 is shared -> marked ready, no VM, no slot
-        _notify(c, "approved", "Your Qwalora Ranger application is approved",
-                "You're in. Board 1 (SOC Analyst) is open. Sign in to begin.")
+        # The program this approval authorizes: an existing pending membership, else cohort pathway.
+        if program is None:
+            pend = (ProgramMembership.query.filter_by(candidate_id=c.id, status="pending")
+                    .order_by(ProgramMembership.id.asc()).first())
+            program = pend.program if pend else _cohort_pathway(c.cohort)
+        program = _norm_program(program)
+        _set_membership(c, program, "active", _admin_actor(),
+                        reason="platform approval", action="approve")
+        if program == pathways.PATHWAY_STRATA:
+            _provision_for_board(c, 1)  # board 1 is shared -> marked ready, no VM, no slot
+            _notify(c, "approved", "Your Qwalora Ranger (STRATA) application is approved",
+                    "You're in. Board 1 (SOC Analyst) is open. Sign in to begin.")
+        else:
+            _notify(c, "approved", "Your Qwalora Ranger (PARALLAX) application is approved",
+                    "You're in. Your PARALLAX research workspace is open. Sign in to begin.")
         return True
 
     def _reject_candidate(c, reason=""):
-        """pending -> rejected (terminal). Revokes the submission token; earned
-        nothing, provisioned nothing. Idempotent."""
+        """pending -> rejected (terminal). Rejects the pending program membership too.
+        Revokes the submission token; earned nothing, provisioned nothing. Idempotent."""
         if c.status != "pending":
             return False
         c.status = "rejected"
@@ -2805,6 +2995,9 @@ def create_app():
         c.exited_at = _dt.datetime.now(_dt.timezone.utc)
         if c.token and not c.token.startswith("revoked-"):
             c.token = "revoked-" + c.token[:8]
+        for m in ProgramMembership.query.filter_by(candidate_id=c.id, status="pending").all():
+            _set_membership(c, m.program, "rejected", _admin_actor(),
+                            reason=(reason or "application not accepted"), action="reject")
         _notify(c, "rejected", "Your Qwalora Ranger application status",
                 "Thank you for applying. Your application was not accepted for this cohort.")
         _advance_cohorts(c.cohort)  # a rejection can be the last in-flight exit
@@ -2845,6 +3038,83 @@ def create_app():
         if _wants_json():
             return jsonify(ok=ok, handle=c.handle, status=c.status)
         return redirect(request.form.get("return") or url_for("admin_pending"))
+
+    # --- program access (independent STRATA / PARALLAX entitlements) ---------
+    _MEMBERSHIP_ACTIONS = {
+        # action -> (new_status, allowed-from-statuses incl. None=absent)
+        "grant": ("active", (None, "rejected", "revoked", "suspended", "requested", "pending")),
+        "approve": ("active", ("requested", "pending")),
+        "reject": ("rejected", ("requested", "pending")),
+        "suspend": ("suspended", ("active",)),
+        "revoke": ("revoked", ("active", "suspended")),
+        "reinstate": ("active", ("suspended", "revoked")),
+    }
+
+    def _program_cell(c, program):
+        m = _membership(c.id, program)
+        st = m.status if m else None
+        # Reflect the legacy zero-row STRATA fallback honestly in the admin view.
+        effective = st
+        if st is None and program == pathways.PATHWAY_STRATA and _program_active(c.id, program):
+            effective = "active (legacy)"
+        actions = [a for a, (_ns, froms) in _MEMBERSHIP_ACTIONS.items() if st in froms]
+        return {"program": program, "status": st, "effective": effective or "none",
+                "granted_by": (m.granted_by if m else None), "actions": actions}
+
+    @app.get("/admin/program-access")
+    @admin_required
+    def admin_program_access():
+        """Per-candidate, per-program entitlement administration. STRATA and PARALLAX are
+        granted, suspended and revoked independently; every change is audited."""
+        cohort = (request.args.get("cohort") or "").strip()
+        q = Candidate.query
+        if cohort:
+            q = q.filter_by(cohort=cohort)
+        cands = q.order_by(Candidate.created_at.desc()).limit(500).all()
+        rows = []
+        for c in cands:
+            rows.append({
+                "cid": c.id, "ini": _initials(c.name), "name": c.name, "handle": c.handle,
+                "cohort": c.cohort, "pstatus": c.status,
+                "cells": [_program_cell(c, p) for p in pathways.PATHWAYS],
+            })
+        pending_requests = (ProgramMembership.query
+                            .filter(ProgramMembership.status.in_(("requested", "pending")))
+                            .count())
+        return render_template("admin_program_access.html",
+                               vm={"rows": rows, "cohort": cohort,
+                                   "programs": list(pathways.PATHWAYS),
+                                   "program_brands": _program_brands(),
+                                   "pending_requests": pending_requests,
+                                   "count": len(rows)})
+
+    @app.post("/admin/program-access/<int:cid>/<program>/<action>")
+    @admin_required
+    def admin_program_action(cid, program, action):
+        c = Candidate.query.get_or_404(cid)
+        program = _norm_program(program)
+        if program not in pathways.PATHWAYS or action not in _MEMBERSHIP_ACTIONS:
+            abort(400)
+        new_status, froms = _MEMBERSHIP_ACTIONS[action]
+        m = _membership(c.id, program)
+        if (m.status if m else None) not in froms:
+            if _wants_json():
+                return jsonify(ok=False, error="action not valid from current state"), 409
+            return redirect(url_for("admin_program_access", cohort=request.form.get("cohort", "")))
+        _set_membership(c, program, new_status, _admin_actor(),
+                        reason="admin %s" % action, action=action)
+        if new_status == "active":
+            # Granting a program is an authorization: a pending applicant becomes platform-active,
+            # and a STRATA grant provisions the shared SOC board 1 (idempotent, no VM).
+            if c.status == "pending":
+                c.status = "active"
+            if program == pathways.PATHWAY_STRATA and c.status == "active":
+                _provision_for_board(c, 1)
+        db.session.commit()
+        if _wants_json():
+            return jsonify(ok=True, candidate=c.handle, program=program,
+                           action=action, status=new_status)
+        return redirect(url_for("admin_program_access", cohort=request.form.get("cohort", "")))
 
     # --- public verification -------------------------------------------------
     @app.get("/pubkey")
@@ -3292,6 +3562,7 @@ def create_app():
                               current_board=1, current_role=P.role_of(1))
                 db.session.add(c)
                 db.session.flush()
+                _ensure_pending_membership(c)   # program application (cohort pathway); no access yet
         db.session.commit()
         session["cand"] = c.id
         return redirect(url_for("candidate_me"))
@@ -3360,9 +3631,13 @@ def create_app():
             })
         return rows
 
-    def _me_vm(c):
+    def _me_vm(c, selected=None):
         """The candidate dashboard view model. Shared by /me and the admin
-        preview so both render exactly what the ranger sees."""
+        preview so both render exactly what the ranger sees. Program-aware: `programs`
+        are the candidate's entitled programs and `selected` is the one being viewed."""
+        programs = _effective_programs(c)
+        if selected not in programs:
+            selected = (programs[0] if programs else None)
         n = c.current_board
         rr = _board_range(c, n)
         bc = _badge_chain(c)
@@ -3376,6 +3651,18 @@ def create_app():
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
             "applied": c.status == "pending", "rejected": c.status == "rejected",
+            # program entitlements (unified, program-aware dashboard)
+            "programs": programs,
+            "selected_program": selected,
+            "program_brands": _program_brands(),
+            "is_dual": len(programs) > 1,
+            "no_access": (c.status == "active" and not programs),
+            "pending_programs": [m.program for m in _candidate_memberships(c)
+                                 if m.status in ("requested", "pending")],
+            "requestable": _requestable_programs(c),
+            "parallax": {"available": (pathways.PATHWAY_PARALLAX in programs),
+                         "workspace_url": "/parallax/workspace",
+                         "brand": _program_brands().get(pathways.PATHWAY_PARALLAX)},
             "siem_live": SIEM_LIVE,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
@@ -3430,6 +3717,11 @@ def create_app():
         return {
             "name": "Demo Ranger", "handle": "demo",
             "status": ("graduated" if graduated else "active"),
+            "programs": [pathways.PATHWAY_STRATA], "selected_program": pathways.PATHWAY_STRATA,
+            "program_brands": _program_brands(), "is_dual": False, "no_access": False,
+            "pending_programs": [],
+            "requestable": [], "parallax": {"available": False, "workspace_url": "/parallax/workspace",
+                                            "brand": _program_brands().get(pathways.PATHWAY_PARALLAX)},
             "board": n, "role_title": P.ROLE_TITLES.get(P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": "DEMO",
             "badges": chain, "certified": graduated,
@@ -3479,7 +3771,8 @@ def create_app():
         if c.is_active:
             _touch(c)
             db.session.commit()
-        vm = _me_vm(c)
+        selected = _select_program(c, _effective_programs(c))
+        vm = _me_vm(c, selected=selected)
         vm["report_ok"] = request.args.get("report_ok") == "1"
         vm["report_error"] = request.args.get("report_error")
         resp = render_template("candidate_me.html", vm=vm)
@@ -3490,6 +3783,7 @@ def create_app():
         return resp
 
     @app.get("/me/mission")
+    @require_program("strata")
     def candidate_mission():
         """The candidate-safe mission package for the ranger's OWN current board. Shows only their
         authorized assignment; the environment-availability state is computed from real signals, so
@@ -3528,6 +3822,7 @@ def create_app():
         return render_template("mission_brief.html", vm=vm)
 
     @app.post("/me/start")
+    @require_program("strata")
     def candidate_start():
         c = _current_candidate()
         if not c:
@@ -3539,6 +3834,7 @@ def create_app():
         return redirect(url_for("candidate_me"))
 
     @app.post("/me/report")
+    @require_program("strata")
     def candidate_report():
         """Submit the written report for the current board from the dashboard.
         Session-authed (the ranger is signed in), CSRF-protected."""
@@ -3551,6 +3847,7 @@ def create_app():
         return redirect(url_for("candidate_me", report_ok="1"))
 
     @app.get("/me/wireguard")
+    @require_program("strata")
     def candidate_wireguard():
         c = _current_candidate()
         if not c:
@@ -3563,6 +3860,25 @@ def create_app():
         from flask import Response
         return Response(rr.wireguard_config, mimetype="text/plain",
                         headers={"Content-Disposition": "attachment; filename=qwalora-ranger.conf"})
+
+    @app.post("/me/request-program")
+    def candidate_request_program():
+        """Self-service REQUEST for an additional program. Creates a 'requested' membership
+        for admin review; it NEVER grants access (no self-service approval shortcut)."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        prog = _norm_program(request.form.get("program") or "")
+        if prog not in pathways.PATHWAYS or prog not in _requestable_programs(c):
+            return redirect(url_for("candidate_me"))
+        existing = _membership(c.id, prog)
+        if existing is None:
+            db.session.add(ProgramMembership(candidate_id=c.id, program=prog,
+                                             status="requested", cohort=c.cohort))
+            _membership_event(c.id, prog, "request", None, "requested", c.handle,
+                              "candidate self-service request")
+            db.session.commit()
+        return redirect(url_for("candidate_me"))
 
     @app.get("/admin/preview/<int:cid>")
     @admin_required

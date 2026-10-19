@@ -168,7 +168,7 @@ def test_reproduce_is_deterministic_and_index_verifies(tmp_path):
 @pytest.fixture()
 def ctx():
     import app as appmod
-    from models import db, Candidate
+    from models import db, Candidate, ProgramMembership
     application = appmod.create_app()
     c = application.app_context(); c.push()
     db.drop_all(); db.create_all()
@@ -177,6 +177,13 @@ def ctx():
                   status="active", current_board=1),
         Candidate(handle="gh-bob", name="B", email="b@e", cohort="2026-A", github_id="gh-bob",
                   status="active", current_board=1)])
+    db.session.commit()
+    # PARALLAX access is an explicit program entitlement: grant both researchers an active
+    # PARALLAX membership (the research routes now require it).
+    for h in ("gh-alice", "gh-bob"):
+        cid = Candidate.query.filter_by(handle=h).first().id
+        db.session.add(ProgramMembership(candidate_id=cid, program="parallax",
+                                         status="active", cohort="2026-A"))
     db.session.commit()
     yield application, db, application.test_client()
     c.pop()

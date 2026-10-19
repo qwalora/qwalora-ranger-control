@@ -38,12 +38,17 @@ def _fresh_app():
 
 
 def _seed(db):
-    from models import AdminUser, Candidate
+    from models import AdminUser, Candidate, ProgramMembership
     db.session.add_all([
         AdminUser(github_id="admin-1", login="admin-1", role="reviewer"),
         AdminUser(github_id="rev-1", login="rev-1", role="reviewer"),
         Candidate(handle="gh-alice", name="A", email="a@e", cohort=COHORT, github_id="gh-alice",
                   status="active", current_board=1)])
+    db.session.commit()
+    # PARALLAX access is an explicit program entitlement (research routes now require it).
+    _aid = Candidate.query.filter_by(handle="gh-alice").first().id
+    db.session.add(ProgramMembership(candidate_id=_aid, program="parallax",
+                                     status="active", cohort=COHORT))
     db.session.commit()
     from models import AdminUser
     registry.store_spec_approval(db, BP.LABA_SPEC, BP.blueprint(),

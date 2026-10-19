@@ -20,6 +20,7 @@
     <div class="nav-group">
       <div class="gl">Queue</div>
       <a class="nav-item {% if active=='pending_q' %}on{% endif %}" href="/admin/pending"><span class="l">{{ ic('users') }}</span><span class="lbl">Approvals</span>{% if pending_count %}<span class="unread-dot">{{ pending_count }}</span>{% endif %}</a>
+      <a class="nav-item {% if active=='program' %}on{% endif %}" href="/admin/program-access"><span class="l">{{ ic('key') }}</span><span class="lbl">Program access</span></a>
       <a class="nav-item {% if active=='all' %}on{% endif %}" href="/admin?status=all"><span class="l">{{ ic('inbox') }}</span><span class="lbl">All reports</span></a>
       <a class="nav-item {% if active=='pending' %}on{% endif %}" href="/admin?status=pending"><span class="l">{{ ic('clock') }}</span><span class="lbl">Pending</span></a>
       <a class="nav-item {% if active=='approved' %}on{% endif %}" href="/admin?status=approved"><span class="l">{{ ic('medal') }}</span><span class="lbl">Approved</span></a>

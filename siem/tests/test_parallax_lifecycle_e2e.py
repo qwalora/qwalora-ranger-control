@@ -33,7 +33,7 @@ COHORT = "2026-A"
 @pytest.fixture()
 def ctx():
     import app as appmod
-    from models import db, AdminUser, Candidate
+    from models import db, AdminUser, Candidate, ProgramMembership
     application = appmod.create_app()
     app_ctx = application.app_context(); app_ctx.push()
     db.drop_all(); db.create_all()
@@ -45,6 +45,12 @@ def ctx():
                   status="active", current_board=1),
         Candidate(handle="gh-bob", name="B", email="b@e", cohort=COHORT, github_id="gh-bob",
                   status="active", current_board=1)])
+    db.session.commit()
+    # PARALLAX access is an explicit program entitlement (research routes now require it).
+    for h in ("gh-alice", "gh-bob"):
+        cid = Candidate.query.filter_by(handle=h).first().id
+        db.session.add(ProgramMembership(candidate_id=cid, program="parallax",
+                                         status="active", cohort=COHORT))
     db.session.commit()
     # authorized-admin test fixture: persist the governance approval (NOT minted in any route)
     admin = AdminUser.query.filter_by(github_id="admin-1").first()

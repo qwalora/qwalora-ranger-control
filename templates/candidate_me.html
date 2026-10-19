@@ -70,7 +70,51 @@
         </div>
         {% endif %}
 
-        {% if not vm.applied and not vm.rejected %}
+        {% if vm.is_dual %}
+        <div class="field">
+          <label class="label">Program</label>
+          <div class="seg" role="tablist" aria-label="Your programs">
+            {% for p in vm.programs %}
+            <a class="seg-i {% if p == vm.selected_program %}on{% endif %}" role="tab"
+               aria-selected="{{ 'true' if p == vm.selected_program else 'false' }}"
+               href="/me?program={{ p }}">{{ vm.program_brands[p] }}</a>
+            {% endfor %}
+          </div>
+          <p class="dim" style="font-size:11.5px;margin-top:6px">You are authorized for both programs.
+            Each keeps its own assignments, progress, and records.</p>
+        </div>
+        {% endif %}
+
+        {% if vm.no_access %}
+        <div class="field">
+          <div class="empty" style="padding:28px 16px">
+            <span class="ring">{{ ic('lock','ic') }}</span>
+            <b style="font:600 15px/1.2 var(--f)">No program access yet</b>
+            <p class="muted" style="font-size:13px;max-width:420px">Your Ranger account is active, but you
+              are not currently authorized for a program. Request access below; an admin reviews each request.</p>
+            {% if vm.pending_programs %}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:4px">
+              {% for p in vm.pending_programs %}
+              <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ vm.program_brands[p] }} · in review</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          {% if vm.requestable %}
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+            {% for p in vm.requestable %}
+            <form method="post" action="/me/request-program">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="program" value="{{ p }}">
+              <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request {{ vm.program_brands[p] }}</button>
+            </form>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if not vm.applied and not vm.rejected and vm.selected_program == 'strata' %}
         <div class="field">
           <label class="label">Your progress</label>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -107,7 +151,7 @@
         </div>
         {% endif %}
 
-        {% if vm.status == 'active' %}
+        {% if vm.status == 'active' and vm.selected_program == 'strata' %}
         {% if vm.mission %}
         <div class="field">
           <label class="label">Mission brief</label>
@@ -192,7 +236,7 @@
         </div>
         {% endif %}
 
-        {% if vm.resources %}
+        {% if vm.resources and vm.selected_program == 'strata' %}
         <div class="field">
           <label class="label">Resources for this board</label>
           <div class="record">
@@ -208,6 +252,7 @@
         </div>
         {% endif %}
 
+        {% if vm.selected_program == 'strata' %}
         <div class="field">
           <label class="label">Your record</label>
           <div class="record">
@@ -239,6 +284,39 @@
             <p class="dim" style="font-size:11.5px">Send as <span class="mono">X-Candidate-Token</span> when submitting.</p>
           </div>
         </div>
+        {% endif %}
+
+        {% if vm.selected_program == 'parallax' %}
+        <div class="field">
+          <label class="label">{{ vm.parallax.brand }} research workspace</label>
+          <a href="{{ vm.parallax.workspace_url }}" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:14px 16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div>
+                <b style="font:600 13.5px/1.2 var(--f);color:var(--ink,#160d42)">{{ ic('cpu','ic ic-sm') }} Open the research console</b>
+                <span class="muted" style="font-size:12px;display:block;margin-top:2px">Adversarial AI-security experiments: controlled RAG prompt-injection trials, deterministic evaluation, signed evidence.</span>
+              </div>
+              <span class="pill pill-violet"><span class="dot dot-violet"></span>assessment-only</span>
+            </div>
+          </a>
+          <p class="dim" style="font-size:11.5px;margin-top:6px">Your signed research runs and investigation history live in the workspace. No pathway qualification is issued.</p>
+        </div>
+        {% endif %}
+
+        {% if vm.requestable and vm.status == 'active' and not vm.no_access %}
+        <div class="field">
+          <label class="label">Request another program</label>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            {% for p in vm.requestable %}
+            <form method="post" action="/me/request-program">
+              <input type="hidden" name="csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="program" value="{{ p }}">
+              <button class="btn btn-outline btn-sm">{{ ic('arrow','ic ic-sm') }} Request {{ vm.program_brands[p] }}</button>
+            </form>
+            {% endfor %}
+          </div>
+          <p class="dim" style="font-size:11.5px;margin-top:6px">An admin reviews each request. Access is granted per program.</p>
+        </div>
+        {% endif %}
 
         <div style="display:flex;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:16px">
           <a class="btn btn-ghost btn-sm" href="https://ranger.qwalora.com/handbook">Handbook</a>

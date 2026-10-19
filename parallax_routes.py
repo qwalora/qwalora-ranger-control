@@ -72,6 +72,18 @@ def register(app, candidate_model=None, db=None, helpers=None):
         c = session.get("cand")
         return str(c) if c else None
 
+    def _parallax_member_cid(cid):
+        """Strict program entitlement: True iff candidate id `cid` holds an ACTIVE PARALLAX
+        membership. No legacy fallback (PARALLAX was never a default) - access to the PARALLAX
+        program is always an explicit grant, so a STRATA-approved candidate is denied here."""
+        from models import ProgramMembership
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            return False
+        m = ProgramMembership.query.filter_by(candidate_id=cid_int, program="parallax").first()
+        return bool(m and m.status == "active")
+
     def _load_approval():
         admins = _admins()
         b64 = os.environ.get("RANGER_PARALLAX_LABA_APPROVAL_B64")
@@ -90,6 +102,13 @@ def register(app, candidate_model=None, db=None, helpers=None):
         ckey = _authenticated_candidate()
         if not ckey:
             return None, None, None, (jsonify(error="authenticated candidate session required"), 401)
+        # Program entitlement: when the session identity resolves to a real candidate row, it must
+        # hold an active PARALLAX membership. (The opaque dev-key path, used only without a DB
+        # candidate, is unchanged.)
+        if candidate_model is not None and str(ckey).isdigit():
+            real = candidate_model.query.get(int(ckey))
+            if real is not None and not _parallax_member_cid(real.id):
+                return None, None, None, (jsonify(error="not authorized for the PARALLAX program"), 403)
         approval, admins = _load_approval()
         if not approval:
             return None, None, None, (jsonify(
@@ -139,6 +158,8 @@ def register(app, candidate_model=None, db=None, helpers=None):
             return None
         c = candidate_model.query.get(cid)
         if c is None or getattr(c, "status", None) != "active":
+            return None
+        if not _parallax_member_cid(c.id):     # explicit active PARALLAX membership required
             return None
         return c.github_id or c.handle
 
@@ -406,6 +427,13 @@ def register(app, candidate_model=None, db=None, helpers=None):
             # route through the existing GitHub-authenticated candidate flow
             try:
                 return redirect(url_for("gh_login"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        if not _parallax_member_cid(c.id):
+            # authenticated and active, but not entitled to the PARALLAX program: send them to
+            # their unified dashboard (which shows only what they are authorized for). No leak.
+            try:
+                return redirect(url_for("candidate_me"))
             except Exception:  # noqa: BLE001
                 return redirect("/me")
         from parallax.research import protocol as _P

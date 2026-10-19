@@ -1246,3 +1246,62 @@ class CaseSubmission(db.Model):
     submitted_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class ProgramMembership(db.Model):
+    """Per-candidate, per-program entitlement. One Ranger identity can hold a STRATA
+    membership, a PARALLAX membership, both, or neither, each decided independently.
+    `status == 'active'` is the ONLY value that grants access; the membership is read
+    fresh on every request (never session-cached) so a suspension or revocation takes
+    effect without the candidate re-authenticating. Program ids are the canonical
+    pathway ids from pathways.py ('strata' / 'parallax'); authz branches on the id,
+    never on branding."""
+    __tablename__ = "program_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"),
+                             nullable=False, index=True)
+    program = db.Column(db.String(20), nullable=False, index=True)   # 'strata' | 'parallax'
+    # requested -> pending -> active ; active|suspended -> revoked ; pending|requested -> rejected ;
+    # active <-> suspended (reinstate). Only 'active' authorizes.
+    status = db.Column(db.String(20), nullable=False, default="pending", index=True)
+    granted_by = db.Column(db.String(120), nullable=True)   # admin github id / handle, or system:migration
+    cohort = db.Column(db.String(40), nullable=True)
+    requested_at = db.Column(db.DateTime(timezone=True), default=_now)
+    decided_at = db.Column(db.DateTime(timezone=True), nullable=True)   # approve/reject
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)   # suspend/revoke
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (
+        db.UniqueConstraint("candidate_id", "program", name="uq_membership_candidate_program"),
+    )
+
+    PROGRAMS = pathways.PATHWAYS                       # ('strata', 'parallax')
+    STATUSES = ("requested", "pending", "active", "suspended", "rejected", "revoked")
+    GRANTS_ACCESS = "active"
+
+    @property
+    def is_active(self):
+        return self.status == self.GRANTS_ACCESS
+
+    def as_dict(self):
+        return {"program": self.program, "status": self.status, "cohort": self.cohort,
+                "granted_by": self.granted_by,
+                "requested_at": self.requested_at, "decided_at": self.decided_at,
+                "revoked_at": self.revoked_at}
+
+
+class ProgramMembershipEvent(db.Model):
+    """Append-only authorization audit trail for program memberships. Every create,
+    approve, reject, suspend, revoke, reinstate, request and migration writes one row;
+    rows are never updated or deleted, so the full authorization history is verifiable."""
+    __tablename__ = "program_membership_events"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, nullable=False, index=True)
+    program = db.Column(db.String(20), nullable=False, index=True)
+    action = db.Column(db.String(32), nullable=False)   # request|approve|reject|suspend|revoke|reinstate|migrate|grant
+    from_status = db.Column(db.String(20), nullable=True)
+    to_status = db.Column(db.String(20), nullable=True)
+    actor = db.Column(db.String(120), nullable=True)    # admin github id / handle, or system:migration
+    reason = db.Column(db.String(400), nullable=True)
+    at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
