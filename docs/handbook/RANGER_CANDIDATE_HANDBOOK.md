@@ -162,8 +162,22 @@ or recorded as an attempt. Saving progress never grades, never records a scored 
 changes qualification. (The incident investigation is an additional, non-graded exercise; it does
 not affect Board-1 scoring or the 95% standard.)
 
-*(Draft autosave now covers the Board-1 SOC triage and the Board-1 incident investigation. The
-written report and PARALLAX workspaces are tracked for the same treatment; see
+### Written report (Board clearance)
+
+The written report you submit from the dashboard (Clear board → report) also autosaves. Your
+in-progress text is saved to the server and restored after navigation, refresh, logout/login, and a
+new session, with **Saving**, **Saved**, **Unsaved changes**, and **Save failed** indicators and an
+explicit **Save progress** button next to **Submit report**. Long technical reports are supported.
+
+**Save progress** keeps a private, unsubmitted draft — it never submits the report, creates a report
+record, triggers review or grading, or changes qualification. The report stays explicitly **not
+submitted** until you choose **Submit report**, which is a separate, deliberate action (with a
+confirmation) that sends your report to a reviewer. The established report policy is unchanged: an
+empty report is rejected server-side, and no new minimum length or scoring was introduced. A
+successful submission supersedes the draft so it does not resurface as unsubmitted work.
+
+*(Draft autosave now covers the Board-1 SOC triage, the Board-1 incident investigation, and the
+written report. The PARALLAX workspaces are tracked for the same treatment; see
 docs/DRAFT_PERSISTENCE_AUDIT.md.)*
 
 ## 10. Reviewer workflows

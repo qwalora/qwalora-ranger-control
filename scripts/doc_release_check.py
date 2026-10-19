@@ -36,7 +36,7 @@ sys.path.insert(0, ROOT)
 REQUIRED_ROUTES = [
     "/me", "/me/workspace", "/me/workspace/data", "/me/workspace/draft",
     "/me/workspace/incident", "/me/workspace/incident/data", "/me/workspace/incident/draft",
-    "/me/mission",
+    "/me/report", "/me/report/draft", "/me/mission",
     "/account", "/parallax/workspace", "/resources",
 ]
 

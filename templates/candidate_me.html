@@ -196,12 +196,63 @@
               {% if vm.report_error %}<p class="note-warn">{{ vm.report_error }}</p>{% endif %}
               {% if vm.cur_report_notes and vm.cur_report_status in ('needs_changes','rejected') %}<div class="reviewnote"><b>Reviewer:</b> {{ vm.cur_report_notes }}</div>{% endif %}
               {% if vm.report_open %}
-              <form method="post" action="/me/report" style="margin-top:10px">
+              <form method="post" action="/me/report" id="report-form" style="margin-top:10px"
+                    onsubmit="return window.__rpConfirm ? window.__rpConfirm() : true">
                 <input type="hidden" name="csrf" value="{{ csrf_token }}">
-                <textarea name="body" class="input" rows="5" placeholder="Your written analysis for board {{ vm.board }}: what you found, how, and the evidence. This is reviewed alongside your objective score." {% if vm.preview %}disabled{% endif %}></textarea>
-                {% if vm.preview %}<span class="btn btn-primary btn-sm" style="opacity:.5;pointer-events:none;margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</span>
-                {% else %}<button class="btn btn-primary btn-sm" style="margin-top:8px">{{ ic('inbox','ic ic-sm') }} Submit report</button>{% endif %}
+                <textarea name="body" id="report-body" class="input" rows="6" data-draft-version="{{ vm.report_draft.version if vm.report_draft else 0 }}" placeholder="Your written analysis for board {{ vm.board }}: what you found, how, and the evidence. This is reviewed alongside your objective score." {% if vm.preview %}disabled{% endif %}>{{ vm.report_draft.payload.body if vm.report_draft else '' }}</textarea>
+                <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap">
+                  {% if vm.preview %}
+                  <span class="btn btn-outline btn-sm" style="opacity:.5;pointer-events:none">{{ ic('inbox','ic ic-sm') }} Save progress</span>
+                  <span class="btn btn-primary btn-sm" style="opacity:.5;pointer-events:none">{{ ic('inbox','ic ic-sm') }} Submit report</span>
+                  {% else %}
+                  <button type="button" class="btn btn-outline btn-sm" id="report-save">{{ ic('inbox','ic ic-sm') }} Save progress</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="report-submit">{{ ic('inbox','ic ic-sm') }} Submit report</button>
+                  {% endif %}
+                  <span id="report-save-status" class="save-status" aria-live="polite"></span>
+                </div>
+                <p class="dim" style="font-size:11px;margin-top:6px">Save progress keeps a private, unsubmitted draft; it does not send your report. Submitting sends it to a reviewer.</p>
               </form>
+              {% if not vm.preview %}
+              <script>
+              (function(){
+                var ta=document.getElementById('report-body'); if(!ta) return;
+                var CSRF="{{ csrf_token }}";
+                var version=parseInt(ta.getAttribute('data-draft-version')||'0',10)||0;
+                var saveTimer=null,retryTimer=null,saving=false,dirty=false,submitting=false;
+                var statusEl=document.getElementById('report-save-status');
+                function setStatus(cls,txt){if(statusEl){statusEl.className='save-status '+cls;statusEl.textContent=txt;}}
+                function fmt(iso){try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
+                function sched(){clearTimeout(saveTimer);saveTimer=setTimeout(doSave,900);}
+                function retry(){clearTimeout(retryTimer);retryTimer=setTimeout(doSave,4000);}
+                async function doSave(){
+                  if(saving){sched();return;}
+                  saving=true;var res;
+                  try{var r=await fetch('/me/report/draft',{method:'POST',credentials:'same-origin',
+                    headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},
+                    body:JSON.stringify({payload:{body:ta.value},base_version:version})});
+                    res={status:r.status,body:await r.json().catch(function(){return null;})};}
+                  catch(e){saving=false;setStatus('failed','Save failed — retrying');retry();return;}
+                  saving=false;
+                  if(res.status===200&&res.body&&res.body.ok){version=res.body.version;dirty=false;setStatus('saved','Saved '+fmt(res.body.saved_at));}
+                  else if(res.status===409&&res.body&&res.body.conflict){
+                    // changed in another tab/session: adopt the new base version but DO NOT silently
+                    // overwrite — warn and let the next edit save over it deliberately.
+                    if(res.body.current){version=res.body.current.version||version;}
+                    setStatus('failed','Edited in another tab — keep typing to save over it');}
+                  else{setStatus('failed','Save failed — retrying');retry();}
+                }
+                ta.addEventListener('input',function(){dirty=true;setStatus('unsaved','Unsaved changes');sched();});
+                var sb=document.getElementById('report-save'); if(sb)sb.addEventListener('click',function(){clearTimeout(saveTimer);doSave();});
+                window.__rpConfirm=function(){submitting=true;return window.confirm('Submit your board report for review? Saving progress is separate; submitting sends it to a reviewer and cannot be undone from here.');};
+                function flush(){if(!dirty||submitting)return;clearTimeout(saveTimer);
+                  try{fetch('/me/report/draft',{method:'POST',credentials:'same-origin',keepalive:true,
+                    headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+                    body:JSON.stringify({payload:{body:ta.value},base_version:version})});}catch(e){}}
+                window.addEventListener('pagehide',flush);
+                document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush();});
+              })();
+              </script>
+              {% endif %}
               {% elif vm.cur_report_status == 'pending' %}
               <p class="dim" style="font-size:12px;margin-top:8px">Your report is in review. You will be promoted when it is approved and your objective is at {{ vm.pass_bar }}%.</p>
               {% endif %}
@@ -299,6 +350,9 @@
 
 <style>
   .cand-body{padding:22px 28px 30px;display:flex;flex-direction:column;gap:16px}
+  .save-status{font:600 11px/1 var(--f)}
+  .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48}
+  .save-status.failed{color:#b4232b} .save-status.unsaved{color:#9a7b1f}
   .cand-body .card{max-width:none}
   .cand-next{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px}
   .cand-next b{font:600 13px/1.35 var(--f);color:var(--ink)}

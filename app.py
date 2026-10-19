@@ -591,6 +591,7 @@ def create_app():
         # autosave is debounced client-side; generous per-IP ceiling to blunt abuse only
         "candidate_workspace_draft": (300, 60),
         "candidate_incident_draft": (300, 60),
+        "candidate_report_draft": (300, 60),
     }
 
     def _client_ip():
@@ -3795,9 +3796,22 @@ def create_app():
                 next_action = "Your report is in review; you'll be promoted once it's approved"
         elif selected == pathways.PATHWAY_PARALLAX:
             next_action = "Open the research console: run a benign control, then an adversarial trial"
+        # restore the candidate's own in-progress written-report draft (never a submission)
+        report_draft = None
+        report_dsv = None
+        if c.is_active and selected == pathways.PATHWAY_STRATA:
+            _rseed = _current_seed(c)
+            if _rseed:
+                import drafts as _drafts
+                report_draft = _drafts.load(c.id, "strata", n, "strata_report",
+                                            _scenario_ref(c, n, _rseed))
+                report_dsv = _dataset_version(_rseed)
         return {
             "name": c.name, "handle": c.handle, "status": c.status,
             "ini": _initials(c.name),
+            "report_draft": report_draft, "report_dataset_version": report_dsv,
+            "next_action": next_action,
+            "applied": c.status == "pending", "rejected": c.status == "rejected",
             "next_action": next_action,
             "applied": c.status == "pending", "rejected": c.status == "rejected",
             # program entitlements (unified, program-aware dashboard)
@@ -3998,7 +4012,54 @@ def create_app():
         _, rerr = _create_report(c, request.form.get("body") or "")
         if rerr:
             return redirect(url_for("candidate_me", report_error=rerr[0]))
+        # a successful final submission supersedes any in-progress report draft, so it never
+        # resurfaces as "unsubmitted" work; the submitted Report is now the record of truth.
+        try:
+            seed = _current_seed(c)
+            if seed:
+                import drafts as _drafts
+                _drafts.delete(c.id, "strata", c.current_board, "strata_report",
+                               _scenario_ref(c, c.current_board, seed))
+        except Exception:  # noqa: BLE001 - draft cleanup is best-effort; never blocks a submit
+            db.session.rollback()
         return redirect(url_for("candidate_me", report_ok="1"))
+
+    @app.post("/me/report/draft")
+    @require_program("strata")
+    def candidate_report_draft():
+        """Autosave the candidate's IN-PROGRESS written report for the current board. Session+CSRF
+        authed, STRATA-entitled, active, structural ownership (session candidate + own seed-derived
+        case), optimistic concurrency. This is NOT a submission: it NEVER creates a Report, submits,
+        grades, triggers review, or changes qualification. Final submission stays the explicit
+        /me/report form POST."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = c.current_board
+        body = request.get_json(silent=True) or {}
+        payload = body.get("payload")
+        if not isinstance(payload, dict):
+            return jsonify(error="a payload object is required"), 400
+        base_version = body.get("base_version", 0)
+        if not isinstance(base_version, int) or base_version < 0:
+            return jsonify(error="base_version must be a non-negative integer"), 400
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+            db.session.commit()
+        case_ref = _scenario_ref(c, n, seed)
+        import drafts as _drafts
+        try:
+            res = _drafts.save(c.id, "strata", n, "strata_report", case_ref,
+                               _dataset_version(seed), payload, base_version)
+        except _drafts.DraftError as e:
+            return jsonify(ok=False, error="invalid draft: %s" % e), 400
+        if res.get("conflict"):
+            return jsonify(ok=False, conflict=True, current=res.get("current")), 409
+        return jsonify(ok=True, version=res["version"], saved_at=res["updated_at"]), 200
 
     @app.get("/me/wireguard")
     @require_program("strata")

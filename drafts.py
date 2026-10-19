@@ -15,7 +15,8 @@ import json
 
 from models import WorkspaceDraft, db as _db, _now
 
-MAX_PAYLOAD_BYTES = 131072  # 128 KiB hard cap on a serialized draft payload
+MAX_PAYLOAD_BYTES = 262144  # 256 KiB hard cap on a serialized draft payload (holds long reports)
+MAX_REPORT_BODY_CHARS = 100000  # generous ceiling for a long technical report draft
 
 _VERDICTS = {"", "true_positive", "false_positive"}
 _SEVERITIES = {"", "low", "medium", "high", "critical"}
@@ -118,8 +119,23 @@ def _validate_board1_incident(payload):
     return {"incidents": incidents, "assign": assign, "nextInc": nxt, "selKey": sel}
 
 
+def _validate_strata_report(payload):
+    """STRATA written-report draft: {"body": "<markdown text>"}. The body is the candidate's own
+    in-progress writing (any length up to a generous cap; emptiness is fine for a draft, and the
+    SUBMIT route enforces the real non-empty report policy). Bounded to protect storage."""
+    if not isinstance(payload, dict):
+        raise DraftError("payload must be an object")
+    body = payload.get("body", "")
+    if not isinstance(body, str):
+        raise DraftError("body must be a string")
+    if len(body) > MAX_REPORT_BODY_CHARS:
+        raise DraftError("report draft too long")
+    return {"body": body}
+
+
 _VALIDATORS = {"board1_triage": _validate_board1_triage,
-               "board1_incident": _validate_board1_incident}
+               "board1_incident": _validate_board1_incident,
+               "strata_report": _validate_strata_report}
 
 
 def validate(kind, payload):
@@ -151,6 +167,19 @@ def load(candidate_id, program, board, kind, case_key):
     if row is None or row.program != program:
         return None
     return _as_view(row)
+
+
+def delete(candidate_id, program, board, kind, case_key):
+    """Remove the candidate's own draft for this scope (e.g. after a successful final submission,
+    so a submitted report's draft does not resurface). Program-checked as defence in depth."""
+    row = (WorkspaceDraft.query
+           .filter_by(candidate_id=candidate_id, kind=kind, board=board, case_key=case_key)
+           .first())
+    if row is not None and row.program == program:
+        _db.session.delete(row)
+        _db.session.commit()
+        return True
+    return False
 
 
 def save(candidate_id, program, board, kind, case_key, dataset_version, payload, base_version):
