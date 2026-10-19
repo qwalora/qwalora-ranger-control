@@ -60,8 +60,12 @@
             </table>
           </div>
           <div class="iw-submit" id="submit-bar" hidden>
-            <div class="muted" style="font-size:12px"><b id="adj-count">0</b> of <b id="alert-total">0</b> adjudicated</div>
-            <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit adjudication</button>
+            <div class="muted" style="font-size:12px"><b id="adj-count">0</b> of <b id="alert-total">0</b> adjudicated
+              <span id="save-status" class="save-status" aria-live="polite"></span></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-outline btn-sm" id="btn-save" type="button">{{ ic('inbox','ic ic-sm') }} Save progress</button>
+              <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit adjudication</button>
+            </div>
           </div>
           <div id="result-panel" class="iw-result" hidden>
             <div class="iw-result-h"><span class="pill" id="result-pill"></span> <span class="dim" id="result-note" style="font-size:11.5px"></span></div>
@@ -115,6 +119,8 @@
   .soc-tpwrap{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   .iw-flag{font-size:10px;font-family:var(--m)}.iw-flag.ok{color:#0f7a48}.iw-flag.bad{color:#b4232b}
   .iw-submit{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid var(--line)}
+  .save-status{margin-left:10px;font:600 11px/1 var(--f)}
+  .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48} .save-status.failed{color:#b4232b}
   .iw-result{border-top:1px solid var(--line);padding:12px 15px}
   .iw-result-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .note-err{background:#fdecee;border:1px solid #f3b9bf;color:#b4232b;border-radius:9px;padding:10px 13px;font-size:12.5px}
@@ -128,6 +134,37 @@
   var CSRF="{{ csrf_token }}", SEV={{ vm.severities|tojson }}, PASS={{ vm.soc.pass_bar|default(95) }};
   var $=function(id){return document.getElementById(id);};
   var alerts=[], state={}, openRaw={};
+  // --- draft autosave state (server-side, optimistic concurrency) ---
+  var draftVersion=0, saveTimer=null, retryTimer=null, saving=false, dirty=false;
+  function setStatus(cls,txt){var el=$('save-status');if(!el)return;el.className='save-status '+cls;el.textContent=txt;}
+  function fmtTime(iso){try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
+  function buildDraft(){return {adjudications:state};}
+  function scheduleSave(){clearTimeout(saveTimer);saveTimer=setTimeout(doSave,800);}
+  function scheduleRetry(){clearTimeout(retryTimer);retryTimer=setTimeout(doSave,4000);}
+  function markDirty(){dirty=true;setStatus('saving','Saving…');scheduleSave();}
+  function saveNow(){clearTimeout(saveTimer);doSave();}
+  async function doSave(){
+    if(saving){scheduleSave();return;}   // coalesce: retry shortly after the in-flight save
+    saving=true; var res;
+    try{res=await postJSON('/me/workspace/draft',{payload:buildDraft(),base_version:draftVersion});}
+    catch(e){saving=false;setStatus('failed','Save failed — retrying');scheduleRetry();return;}
+    saving=false;
+    if(res.status===200&&res.body&&res.body.ok){draftVersion=res.body.version;dirty=false;setStatus('saved','Saved '+fmtTime(res.body.saved_at));}
+    else if(res.status===409&&res.body&&res.body.conflict){reconcile(res.body.current);}
+    else{setStatus('failed','Save failed — retrying');scheduleRetry();}
+  }
+  function reconcile(cur){
+    // another tab/session saved a newer draft: merge server values, then re-apply THIS session's
+    // edits on top (local wins per alert), bump to the server version, and persist — never a silent
+    // overwrite and never a silent loss of local work.
+    if(cur&&cur.payload&&cur.payload.adjudications){
+      var merged={},srv=cur.payload.adjudications;
+      Object.keys(srv).forEach(function(id){merged[id]=srv[id];});
+      Object.keys(state).forEach(function(id){merged[id]=state[id];});
+      state=merged;draftVersion=cur.version||0;render();count();
+    }else{draftVersion=(cur&&cur.version)||0;}
+    setStatus('saving','Merging…');scheduleSave();
+  }
   function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
   async function getJSON(u){var r=await fetch(u,{headers:{'Accept':'application/json'},credentials:'same-origin'});
     if(r.status!==200){throw new Error('('+r.status+') '+(await r.text()).slice(0,160));}return r.json();}
@@ -168,9 +205,9 @@
       var io=document.querySelector('.soc-in[data-field="iocs"][data-id="'+a.id+'"]'); if(io&&s.iocs)io.value=s.iocs;});
     document.querySelectorAll('[data-caret]').forEach(function(c){c.addEventListener('click',function(){openRaw[c.dataset.caret]=!openRaw[c.dataset.caret];render();});});
     document.querySelectorAll('.soc-seg').forEach(function(seg){seg.querySelectorAll('button').forEach(function(btn){
-      btn.addEventListener('click',function(){var id=seg.dataset.id,v=btn.dataset.v;state[id]=state[id]||{};state[id].verdict=v;count();render();});});});
+      btn.addEventListener('click',function(){var id=seg.dataset.id,v=btn.dataset.v;state[id]=state[id]||{};state[id].verdict=v;count();markDirty();render();});});});
     document.querySelectorAll('[data-field]').forEach(function(el){el.addEventListener('input',function(){
-      var id=el.dataset.id;state[id]=state[id]||{};state[id][el.dataset.field]=el.value;});});
+      var id=el.dataset.id;state[id]=state[id]||{};state[id][el.dataset.field]=el.value;markDirty();});});
   }
   function count(){$('adj-count').textContent=Object.keys(state).filter(function(k){return state[k]&&state[k].verdict;}).length;}
 
@@ -197,12 +234,25 @@
     $('ws-error').hidden=true;result(r.body);}
 
   async function load(){try{var d=await getJSON('/me/workspace/data');alerts=d.alerts||[];
-    alerts.forEach(function(a){state[a.id]=state[a.id]||{};});$('ws-loading').hidden=true;$('tbl-wrap').hidden=false;$('submit-bar').hidden=false;
+    alerts.forEach(function(a){state[a.id]=state[a.id]||{};});
+    // restore the candidate's own saved draft (verdict/severity/technique/IOC) if one exists
+    if(d.draft&&d.draft.payload&&d.draft.payload.adjudications){var adj=d.draft.payload.adjudications;
+      Object.keys(adj).forEach(function(id){state[id]=Object.assign(state[id]||{},adj[id]);});
+      draftVersion=d.draft.version||0;setStatus('saved','Saved '+fmtTime(d.draft.updated_at));}
+    $('ws-loading').hidden=true;$('tbl-wrap').hidden=false;$('submit-bar').hidden=false;
     $('alert-total').textContent=alerts.length;$('queue-meta').textContent=alerts.length+' alerts · '+(d.theme||'');render();count();
   }catch(e){$('ws-loading').textContent='Could not load your dataset: '+e.message+'. Re-open your workspace to retry.';}}
 
   $('q').addEventListener('input',render);$('only-open').addEventListener('change',render);
-  $('btn-submit').addEventListener('click',submit);load();
+  $('btn-submit').addEventListener('click',submit);$('btn-save').addEventListener('click',saveNow);
+  // flush unsaved work when the page is hidden/navigated (keepalive survives unload, carries CSRF)
+  function flush(){if(!dirty)return;clearTimeout(saveTimer);
+    try{fetch('/me/workspace/draft',{method:'POST',credentials:'same-origin',keepalive:true,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+      body:JSON.stringify({payload:buildDraft(),base_version:draftVersion})});}catch(e){}}
+  window.addEventListener('pagehide',flush);
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush();});
+  load();
 })();
 </script>
 {% endblock %}

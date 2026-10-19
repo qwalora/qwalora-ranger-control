@@ -588,6 +588,8 @@ def create_app():
         "grade": (120, 60), "enroll": (20, 3600), "submit_report": (120, 60),
         "lab_start": (30, 60), "candidate_start": (30, 60),
         "grade_submit": (120, 60), "lab_dataset": (120, 60),
+        # autosave is debounced client-side; generous per-IP ceiling to blunt abuse only
+        "candidate_workspace_draft": (300, 60),
     }
 
     def _client_ip():
@@ -4020,6 +4022,12 @@ def create_app():
     # key is never sent to the browser - grading stays server-side.
     SOC_WORKSPACE_BOARD = 1
 
+    def _dataset_version(seed):
+        """A short, stable identifier for the candidate's current dataset attempt, derived from the
+        seed. Scopes a draft to the exact attempt so a new seed/attempt starts a fresh draft."""
+        import hashlib
+        return hashlib.sha256(("b1:" + (seed or "")).encode()).hexdigest()[:16]
+
     def _soc_mission_vm(n):
         pkg = strata_missions.get(n) or {}
         return {"title": pkg.get("title"), "role": pkg.get("assigned_role"),
@@ -4086,9 +4094,15 @@ def create_app():
         _touch(c, n)
         db.session.commit()
         ds = scenarios.dataset(n, seed)   # answer-free (public_board1 strips the key)
-        return jsonify(ok=True, board=n, case_ref=_scenario_ref(c, n, seed),
+        case_ref = _scenario_ref(c, n, seed)
+        # restore the candidate's own in-progress draft (answer-free; their inputs only)
+        import drafts as _drafts
+        draft = _drafts.load(c.id, "strata", n, "board1_triage", case_ref)
+        return jsonify(ok=True, board=n, case_ref=case_ref,
                        theme=ds.get("theme"), alerts=ds.get("alerts", []),
-                       status=_soc_status_vm(c, n)), 200
+                       status=_soc_status_vm(c, n),
+                       dataset_version=_dataset_version(seed),
+                       draft=draft), 200
 
     @app.post("/me/workspace/submit")
     @require_program("strata")
@@ -4129,6 +4143,47 @@ def create_app():
                        pass_bar=P.PASS_BAR, per_alert=per_alert, promoted=promoted,
                        status=_soc_status_vm(c, n),
                        note="Report approval is also required to clear the board."), 200
+
+    @app.post("/me/workspace/draft")
+    @require_program("strata")
+    def candidate_workspace_draft():
+        """Autosave the candidate's IN-PROGRESS Board-1 triage inputs. Session+CSRF authed,
+        STRATA-entitled, active, Board 1, own dataset (ownership is structural: the draft is keyed
+        to the SESSION candidate's id and their own seed-derived case). Optimistic concurrency.
+        This is NOT a submission: it NEVER grades, records an objective, evaluates the gate, or
+        promotes. Final adjudication remains the explicit /me/workspace/submit."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = c.current_board
+        if int(n) != SOC_WORKSPACE_BOARD:
+            return jsonify(error="no triage workspace for this board"), 404
+        if _strata_portfolios_on():
+            return jsonify(error="this cohort uses the bound-portfolio flow"), 409
+        body = request.get_json(silent=True) or {}
+        payload = body.get("payload")
+        if not isinstance(payload, dict):
+            return jsonify(error="a payload object is required"), 400
+        base_version = body.get("base_version", 0)
+        if not isinstance(base_version, int) or base_version < 0:
+            return jsonify(error="base_version must be a non-negative integer"), 400
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+            db.session.commit()
+        case_ref = _scenario_ref(c, n, seed)
+        import drafts as _drafts
+        try:
+            res = _drafts.save(c.id, "strata", n, "board1_triage", case_ref,
+                               _dataset_version(seed), payload, base_version)
+        except _drafts.DraftError as e:
+            return jsonify(ok=False, error="invalid draft: %s" % e), 400
+        if res.get("conflict"):
+            return jsonify(ok=False, conflict=True, current=res.get("current")), 409
+        return jsonify(ok=True, version=res["version"], saved_at=res["updated_at"]), 200
 
     # --- Board-1 ADVANCED: multi-step incident investigation ----------------
     # Additive assessment. Shares the triage entitlement (STRATA active, Board 1) and the answer-free

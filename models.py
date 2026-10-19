@@ -422,6 +422,33 @@ class BoardResult(db.Model):
     __table_args__ = (db.UniqueConstraint("candidate_id", "board", name="uq_board_per_candidate"),)
 
 
+class WorkspaceDraft(db.Model):
+    """Secure server-side autosave of a candidate's IN-PROGRESS workspace inputs.
+
+    A draft only preserves the candidate's own inputs across navigation, refresh, logout/login and
+    session changes. It is NEVER graded and NEVER a submission: final adjudication stays a separate,
+    explicit submit. Scoped to one candidate + program + board + case + dataset version, so drafts
+    never cross candidates, programs, boards or attempts. Optimistic concurrency via `version`:
+    a save that carries a stale base version is rejected rather than silently overwriting a newer
+    one written by another tab/session.
+    """
+    __tablename__ = "workspace_drafts"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    program = db.Column(db.String(20), nullable=False)        # 'strata' | 'parallax'
+    board = db.Column(db.Integer, nullable=False)
+    kind = db.Column(db.String(40), nullable=False)           # e.g. 'board1_triage'
+    case_key = db.Column(db.String(120), nullable=False)      # case reference (seed-derived)
+    dataset_version = db.Column(db.String(80), nullable=True)  # seed hash; scopes to the attempt
+    payload = db.Column(db.Text, nullable=False, default="{}")
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (db.UniqueConstraint("candidate_id", "kind", "board", "case_key",
+                                          name="uq_draft_per_candidate_case"),)
+
+
 class ScenarioAssignment(db.Model):
     """Lifetime ledger of every scenario seed ever given to a person (github_id),
     spanning cohorts. Guarantees a returning ranger never repeats a scenario:

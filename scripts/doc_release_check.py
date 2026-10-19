@@ -34,7 +34,8 @@ sys.path.insert(0, ROOT)
 # Candidate-facing routes the documentation depends on. If any is renamed/removed, the docs
 # that reference it are stale and this check fails.
 REQUIRED_ROUTES = [
-    "/me", "/me/workspace", "/me/workspace/incident", "/me/mission",
+    "/me", "/me/workspace", "/me/workspace/data", "/me/workspace/draft",
+    "/me/workspace/incident", "/me/mission",
     "/account", "/parallax/workspace", "/resources",
 ]
 
