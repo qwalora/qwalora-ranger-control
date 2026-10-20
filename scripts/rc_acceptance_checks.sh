@@ -29,21 +29,30 @@
 #                    postgresql://rc_ro:<pw>@127.0.0.1:<tunnel-port>/railway   (via `railway connect`)
 #   RC_AUDIT_URL     connection string the 41-check uses (rc_ro is correct; the audit is read-only).
 #                    Defaults to RC_RO_URL.
-#   RANGER_SIGNING_KEYS   JSON: historical verify_only PUBLIC entry (legacy:696697820b69d289) plus a
-#                    disposable active key - the SAME value configured on parallax-portal-rc. No seed.
-#   BASELINE_JSON    REQUIRED path to rc-publications-before-startup.json (the pre-startup full-row
-#                    MD5 fingerprint baseline). Missing/empty/unparsable => FAIL.
+#   RANGER_SIGNING_KEYS   JSON array of {kid,alg,state,seed_b64?,public_b64?}: the historical
+#                    verify_only entry (legacy:696697820b69d289, PUBLIC ONLY, no seed) plus the single
+#                    disposable active key (which legitimately carries its private seed_b64) - the SAME
+#                    value configured on parallax-portal-rc. The shape is validated before the audit.
+#   BASELINE_JSON    REQUIRED path to the preserved pre-startup baseline rc-publications-before-startup
+#                    .json. The baseline fingerprints were produced with md5(row_to_json(r)::text) over
+#                    complete resource rows; this script matches that exact expression. The file is
+#                    read-only here and never regenerated or overwritten. Missing/empty/unparsable,
+#                    wrong record count, differing identifier sets, or any fingerprint change => FAIL.
+#   BASELINE_SHA256  OPTIONAL expected SHA-256 of BASELINE_JSON. When set, the file must match it
+#                    byte-for-byte before it is trusted (preserves the original evidence). The known
+#                    value for the current baseline is
+#                    cab041be0f896a1c0c49eed7e5eb75f383d12cea6e53b91c38ae6ea35b0d4c95
 #   REPO_ROOT        checkout of the deployed commit (acf50ec); defaults to the parent of this script.
 #                    The auditor imports the app (models, parallax.*) from here.
 #   EXPECT_TABLES=34 EXPECT_RUNS=7 EXPECT_PUBLICATIONS=24 EXPECT_CHECKS=41   (migration-evidence defaults)
 #
 # MODE
-#   EMIT_BASELINE=1  Print the canonical publication fingerprint JSON for the CURRENT DB to stdout
-#                    (for redirection to a baseline file) and exit. Uses the identity gate first.
-#                    The acceptance comparison and this emitter use the IDENTICAL canonical method:
-#                    key = resources.pub_id, fingerprint = md5(resources::text) over the full row.
-#                    The pre-startup baseline MUST have been produced by this same method for the
-#                    comparison to be meaningful; if it was not, regenerate it with EMIT_BASELINE.
+#   EMIT_BASELINE=1  Print publication fingerprints for the CURRENT DB to stdout (records with
+#                    id/pub_id/slug/fp) using the SAME expression the comparison uses -
+#                    md5(row_to_json(r)::text) over the full resource row, predicate pub_id IS NOT NULL
+#                    - then exit, after the identity gate. This is a pre-startup / documentation aid.
+#                    Do NOT use it to regenerate or overwrite the preserved baseline, and do NOT create
+#                    a new baseline after deployment.
 #
 # EXIT CODES: 0 = PASS; 1 = one or more checks failed; 2 = identity/gate fatal or usage error.
 
@@ -74,26 +83,30 @@ RC_AUDIT_URL="${RC_AUDIT_URL:-$RC_RO_URL}"
 umask 077
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-# --- Parse RC_RO_URL into PG* env (password never reaches any argv) -----------------------------
-# The URL is read from the environment by the parser (not passed as an argument), and the emitted
-# export lines are shell-quoted. Nothing here echoes the password.
-PGENV="$(RC_RO_URL="$RC_RO_URL" python3 -I -c '
+# --- URL -> PG* env export lines (password never reaches any argv) ------------------------------
+# Reads the URL from the NAMED env var given as $1 (never the value on argv) and prints shell-quoted
+# `export` lines for PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE. Nothing here echoes the password.
+pgenv_for(){
+  python3 -I -c '
 import os, shlex, sys, urllib.parse as u
+name = sys.argv[1]
 try:
-    p = u.urlparse(os.environ["RC_RO_URL"])
+    p = u.urlparse(os.environ[name])
 except Exception as e:
-    sys.stderr.write("bad RC_RO_URL: %s\n" % type(e).__name__); sys.exit(3)
+    sys.stderr.write("bad %s: %s\n" % (name, type(e).__name__)); sys.exit(3)
 if p.scheme not in ("postgresql", "postgres"):
-    sys.stderr.write("RC_RO_URL is not a postgresql URL\n"); sys.exit(3)
+    sys.stderr.write("%s is not a postgresql URL\n" % name); sys.exit(3)
 def ex(k, v): print("export %s=%s" % (k, shlex.quote(v or "")))
 ex("PGHOST", p.hostname or "")
 ex("PGPORT", str(p.port or 5432))
 ex("PGUSER", u.unquote(p.username or ""))
 ex("PGPASSWORD", u.unquote(p.password or ""))
 ex("PGDATABASE", (p.path or "/").lstrip("/") or "railway")
-')" || die "could not parse RC_RO_URL"
-eval "$PGENV"
-unset PGENV
+' "$1"
+}
+
+PGENV="$(pgenv_for RC_RO_URL)" || die "could not parse RC_RO_URL"
+eval "$PGENV"; unset PGENV
 # Force a server-side read-only session for EVERY libpq connection (psql and the auditor's psycopg).
 export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=60000'
 export PGCONNECT_TIMEOUT=10
@@ -139,17 +152,18 @@ ok "rc_fork_marker present with exactly one row (RC identity confirmed)"
 # EMIT mode: after the gate, print the canonical publication fingerprints and exit.
 # ------------------------------------------------------------------------------------------------
 if [ "${EMIT_BASELINE:-0}" = "1" ]; then
-  echo "-- emitting canonical publication baseline (method: md5(resources::text), key=pub_id) --" >&2
-  ROWS="$(q "SELECT coalesce(json_agg(json_build_object('pub_id', pub_id, 'fp', md5(resources::text)) ORDER BY pub_id), '[]'::json) FROM resources WHERE pub_id IS NOT NULL;")" \
+  echo "-- emitting publication fingerprints (method: md5(row_to_json(r)::text) over full resource rows) --" >&2
+  echo "-- WARNING: never redirect this over the preserved pre-startup baseline; it is evidence --" >&2
+  ROWS="$(q "SELECT coalesce(json_agg(json_build_object('id', r.id, 'pub_id', r.pub_id, 'slug', r.slug, 'fp', md5(row_to_json(r)::text)) ORDER BY r.pub_id), '[]'::json) FROM resources r WHERE r.pub_id IS NOT NULL;")" \
     || die "fingerprint query errored ($(tr -d '\n' <"$TMP/q.err"))"
   printf '%s' "$ROWS" | python3 -I -c '
 import json, sys, datetime
 rows = json.load(sys.stdin)
 print(json.dumps({
-  "method": "md5(resources::text) full-row; key=pub_id; predicate=pub_id IS NOT NULL",
+  "method": "md5(row_to_json(r)::text) over full resource row; predicate=pub_id IS NOT NULL",
   "generated_at_utc": datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z",
   "count": len(rows),
-  "fingerprints": {r["pub_id"]: r["fp"] for r in rows},
+  "records": rows,
 }, indent=2, sort_keys=True))
 ' >&3
   exit 0
@@ -209,7 +223,70 @@ done
 echo ""
 echo "== 3. Signing verification + pinned 41-check audit (public-key only; reuse b04698e) =="
 : "${RANGER_SIGNING_KEYS:?set RANGER_SIGNING_KEYS (verify_only PUBLIC $HIST_KID + disposable active; no seed)}"
-if [ ! -f "$REPO_ROOT/models.py" ] || [ ! -d "$REPO_ROOT/parallax" ]; then
+AUDIT_OK=1
+
+# 3a. Validate the signing registry SHAPE without printing any key material. The registry is a JSON
+#     array of {kid,alg,state,seed_b64?,public_b64?}. Exactly one `active` entry, which MUST carry a
+#     private seed_b64 (it is the disposable signer - legitimately private). Every verify_only /
+#     retired / revoked entry MUST NOT carry a seed_b64. The historical kid must be present exactly
+#     once as verify_only, with public_b64 and NO seed. Only kid/state/counts are ever printed.
+if RANGER_SIGNING_KEYS="$RANGER_SIGNING_KEYS" HIST_KID="$HIST_KID" python3 -I -c '
+import os, json, sys
+try:
+    reg = json.loads(os.environ["RANGER_SIGNING_KEYS"])
+except Exception as e:
+    print("registry is not valid JSON (%s)" % type(e).__name__); sys.exit(1)
+if not isinstance(reg, list) or not reg:
+    print("registry must be a non-empty JSON array"); sys.exit(1)
+for e in reg:
+    if not isinstance(e, dict) or not e.get("kid") or not e.get("state"):
+        print("every entry needs kid and state"); sys.exit(1)
+active = [e for e in reg if e.get("state") == "active"]
+if len(active) != 1:
+    print("expected exactly one active entry, found %d" % len(active)); sys.exit(1)
+if not active[0].get("seed_b64"):
+    print("active entry %r has no seed_b64 (cannot sign)" % active[0].get("kid")); sys.exit(1)
+for e in reg:
+    if e.get("state") in ("verify_only", "retired", "revoked") and e.get("seed_b64"):
+        print("non-active entry %r (state=%s) carries a private seed_b64 - forbidden"
+              % (e.get("kid"), e.get("state"))); sys.exit(1)
+hist = [e for e in reg if e.get("kid") == os.environ["HIST_KID"]]
+if len(hist) != 1:
+    print("historical kid present %d times (expected 1)" % len(hist)); sys.exit(1)
+if hist[0].get("state") != "verify_only":
+    print("historical kid state=%r (expected verify_only)" % hist[0].get("state")); sys.exit(1)
+if hist[0].get("seed_b64"):
+    print("historical verify-only kid carries a private seed_b64 - forbidden"); sys.exit(1)
+if not hist[0].get("public_b64"):
+    print("historical verify-only kid has no public_b64 to verify with"); sys.exit(1)
+print("ok")
+' >"$TMP/signing.err" 2>&1; then
+  ok "signing registry shape valid (one active with seed; $HIST_KID verify_only, public-only; no seed in any verify-only entry)"
+else
+  no "signing registry invalid: $(tr -d '\n' <"$TMP/signing.err")"; AUDIT_OK=0
+fi
+
+# 3b. The audit connects with RC_AUDIT_URL as DATABASE_URL, which may differ from RC_RO_URL. Apply
+#     the SAME identity gate to that exact connection: current_user=rc_ro, current_database=railway,
+#     and a read-only session (PGOPTIONS default_transaction_read_only=on, which the auditor's psycopg
+#     inherits too). The password reaches psql only via PG* env parsed from the URL, never on argv.
+if AUERR="$(
+      PE="$(pgenv_for RC_AUDIT_URL)" || { echo "RC_AUDIT_URL unparsable"; exit 1; }
+      eval "$PE"
+      acu="$(psql -X -tAqw -c 'SELECT current_user;' 2>/dev/null)"
+      acd="$(psql -X -tAqw -c 'SELECT current_database();' 2>/dev/null)"
+      aro="$(psql -X -tAqw -c "SELECT current_setting('transaction_read_only');" 2>/dev/null)"
+      if [ "$acu" = "rc_ro" ] && [ "$acd" = "railway" ] && [ "$aro" = "on" ]; then exit 0; fi
+      echo "user=${acu:-?} db=${acd:-?} read_only=${aro:-?}"; exit 1
+    )"; then
+  ok "audit DB connection (RC_AUDIT_URL) is rc_ro@railway, read-only (same gate as the psql checks)"
+else
+  no "audit DB connection (RC_AUDIT_URL) failed identity gate: ${AUERR:-connect error} (expected rc_ro@railway, read-only)"; AUDIT_OK=0
+fi
+
+if [ "$AUDIT_OK" != "1" ]; then
+  no "skipping the 41-check audit because a pre-run gate (signing registry or audit connection) failed (fail-closed)"
+elif [ ! -f "$REPO_ROOT/models.py" ] || [ ! -d "$REPO_ROOT/parallax" ]; then
   no "REPO_ROOT=$REPO_ROOT is not a checkout of acf50ec (models.py / parallax/ not found); the audit cannot import the app"
 else
   # Fetch the pinned auditor into its OWN isolated subdir and verify its git blob hash BEFORE running.
@@ -274,94 +351,134 @@ if [ -z "${BASELINE_JSON:-}" ]; then
 elif [ ! -s "${BASELINE_JSON}" ]; then
   no "BASELINE_JSON '$BASELINE_JSON' is missing or empty (REQUIRED)"
 else
-  # Canonical live fingerprints: md5 over the full resources row, keyed by pub_id, for every
-  # publication (pub_id IS NOT NULL). Only {pub_id, fp} leaves the DB - no row content, no secrets.
-  AFTER="$(q "SELECT coalesce(json_agg(json_build_object('pub_id', pub_id, 'fp', md5(resources::text)) ORDER BY pub_id), '[]'::json) FROM resources WHERE pub_id IS NOT NULL;")" \
+  # Live fingerprints computed with the SAME expression the pre-startup baseline used:
+  # md5(row_to_json(r)::text) over the FULL resource row, for every publication (pub_id IS NOT NULL).
+  # id/pub_id/slug are exposed so we match whatever record identifier the baseline keyed on. Only
+  # {id, pub_id, slug, fp} leaves the DB - no row content, no secrets.
+  AFTER="$(q "SELECT coalesce(json_agg(json_build_object('id', r.id, 'pub_id', r.pub_id, 'slug', r.slug, 'fp', md5(row_to_json(r)::text)) ORDER BY r.pub_id), '[]'::json) FROM resources r WHERE r.pub_id IS NOT NULL;")" \
     || { no "live publication fingerprint query errored ($(tr -d '\n' <"$TMP/q.err"))"; AFTER=""; }
   if [ -n "$AFTER" ]; then
     printf '%s' "$AFTER" > "$TMP/after.json"
-    if python3 -I - "$BASELINE_JSON" "$TMP/after.json" "$EXPECT_PUBLICATIONS" <<'PY'
-import json, sys
+    if python3 -I - "$BASELINE_JSON" "$TMP/after.json" "$EXPECT_PUBLICATIONS" "${BASELINE_SHA256:-}" <<'PY'
+import json, sys, hashlib
 baseline_path, after_path, expect = sys.argv[1], sys.argv[2], int(sys.argv[3])
+expected_sha = (sys.argv[4] if len(sys.argv) > 4 else "").strip().lower()
 
 def fail(msg):
     print("    FAIL: " + msg); sys.exit(1)
 
-# --- Load + normalise the baseline into {key: md5hex}. Unparsable/empty => FAIL (never skip). ---
+# Preserve the original evidence: read the baseline read-only; if a SHA-256 is supplied, the file
+# must match it byte-for-byte before we trust or compare it. We never write to this file.
 try:
-    with open(baseline_path) as fh:
-        raw = json.load(fh)
+    raw_bytes = open(baseline_path, "rb").read()
+except Exception as e:
+    fail("baseline not readable (%s)" % type(e).__name__)
+if expected_sha:
+    actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+    if actual_sha != expected_sha:
+        fail("baseline SHA-256 %s does not match expected %s (evidence changed, or wrong file)"
+             % (actual_sha, expected_sha))
+
+try:
+    raw = json.loads(raw_bytes)
 except Exception as e:
     fail("baseline not parseable as JSON (%s) - cannot verify publications" % type(e).__name__)
 
-def as_map(obj):
-    # Accept: {key: hex}; {"fingerprints": {key: hex}}; {"publications"/"records": [ ... ]};
-    # or a list of records each carrying a key field and a fingerprint field.
-    if isinstance(obj, dict) and "fingerprints" in obj and isinstance(obj["fingerprints"], dict):
-        obj = obj["fingerprints"]
+# --- Pull the baseline's records out of whatever envelope it uses. ---
+def baseline_records(obj):
+    if isinstance(obj, dict) and isinstance(obj.get("fingerprints"), dict):
+        return [{"__k": k, "__fp": v} for k, v in obj["fingerprints"].items()]
     if isinstance(obj, dict):
-        for wrap in ("publications", "records", "rows", "resources"):
-            if wrap in obj and isinstance(obj[wrap], list):
-                obj = obj[wrap]; break
-    if isinstance(obj, dict):
-        # flat {key: hex}
-        out = {}
-        for k, v in obj.items():
-            if isinstance(v, str):
-                out[str(k)] = v.lower()
-            elif isinstance(v, dict):
-                fp = v.get("fp") or v.get("md5") or v.get("fingerprint") or v.get("hash")
-                if isinstance(fp, str):
-                    out[str(k)] = fp.lower()
-        return out
+        for wrap in ("records", "publications", "rows", "resources"):
+            if isinstance(obj.get(wrap), list):
+                return obj[wrap]
+        return [{"__k": k, "__fp": v} for k, v in obj.items()]   # flat {key: hex-or-obj}
     if isinstance(obj, list):
-        out = {}
-        for r in obj:
-            if not isinstance(r, dict):
-                return {}
-            key = r.get("pub_id") or r.get("slug") or r.get("key") or r.get("id")
-            fp = r.get("fp") or r.get("md5") or r.get("fingerprint") or r.get("hash")
-            if key is not None and isinstance(fp, str):
-                out[str(key)] = fp.lower()
-        return out
-    return {}
+        return obj
+    return []
 
-base = as_map(raw)
-if not base:
-    fail("baseline contained no usable {key: full-row-md5} fingerprints")
+def fp_of(rec):
+    if not isinstance(rec, dict):
+        return None
+    for f in ("__fp", "fp", "md5", "fingerprint", "hash"):
+        v = rec.get(f)
+        if isinstance(v, str):
+            return v.lower()
+    return None
 
+brecs = baseline_records(raw)
+if not brecs:
+    fail("baseline contained no usable records")
+
+# Build a baseline map for each candidate identifier field; keep only fields present+complete on
+# every record (so we match the baseline's OWN record identifier, be it id, pub_id, or slug).
+bmaps = {}
+for fld in ("__k", "pub_id", "slug", "id", "key"):
+    m = {}
+    good = True
+    for rec in brecs:
+        if not isinstance(rec, dict):
+            good = False; break
+        k = rec.get(fld); fp = fp_of(rec)
+        if k is None or fp is None:
+            good = False; break
+        m[str(k)] = fp
+    if good and len(m) == len(brecs):
+        bmaps[fld] = m
+if not bmaps:
+    fail("could not extract a consistent identifier+fingerprint from the baseline records")
+
+# Live rows carry id/pub_id/slug + fp.
 try:
-    after_rows = json.load(open(after_path)) or []
-    live = {str(r["pub_id"]): str(r["fp"]).lower() for r in after_rows}
+    live_rows = json.loads(open(after_path).read()) or []
 except Exception as e:
     fail("live fingerprint set not parseable (%s)" % type(e).__name__)
+live_by = {}
+for fld in ("id", "pub_id", "slug"):
+    m = {}
+    good = True
+    for r in live_rows:
+        k = r.get(fld); fp = r.get("fp")
+        if k is None or not isinstance(fp, str):
+            good = False; break
+        m[str(k)] = fp.lower()
+    if good and len(m) == len(live_rows):
+        live_by[fld] = m
+
+# Choose the baseline-field / live-field pairing whose key sets overlap most (match like-for-like).
+best = None
+for bfld, bm in bmaps.items():
+    for lfld, lm in live_by.items():
+        ov = len(set(bm) & set(lm))
+        if best is None or ov > best[0]:
+            best = (ov, bfld, lfld, bm, lm)
+_, bfld, lfld, base, live = best
 
 # Counts must match the expected publication population exactly (fail-closed on drift).
 if len(base) != expect:
-    fail("baseline has %d fingerprints, expected %d publications" % (len(base), expect))
+    fail("baseline has %d records, expected %d publications" % (len(base), expect))
 if len(live) != expect:
     fail("live DB has %d publications (pub_id IS NOT NULL), expected %d" % (len(live), expect))
 
-# The baseline may be keyed by pub_id or by slug. We key live by pub_id; if the baseline keys do not
-# line up with pub_id, re-key live by slug and retry so we compare like-for-like.
-if set(base) != set(live):
-    # try slug-keying by reading slug alongside (not available here) -> report as structural change.
-    missing = sorted(set(base) - set(live))
-    extra = sorted(set(live) - set(base))
-    msg = []
-    if missing: msg.append("missing in live: " + ", ".join(missing[:20]))
-    if extra:   msg.append("unexpected in live: " + ", ".join(extra[:20]))
-    fail("publication key sets differ (" + "; ".join(msg) + ")")
+removed = sorted(set(base) - set(live))   # in baseline, absent live
+added = sorted(set(live) - set(base))     # in live, absent baseline
+if removed or added:
+    parts = []
+    if removed: parts.append("in baseline but not live: " + ", ".join(removed[:20]))
+    if added:   parts.append("in live but not baseline: " + ", ".join(added[:20]))
+    fail("publication identifier sets differ (baseline key=%s, live key=%s): %s"
+         % (bfld, lfld, "; ".join(parts)))
 
 changed = sorted(k for k in base if base[k] != live[k])
 if changed:
     alln = len(changed) == expect
-    note = " [ALL records differ - this usually means the baseline was produced with a DIFFERENT " \
-           "fingerprint method; regenerate it with EMIT_BASELINE=1 for an apples-to-apples compare]" if alln else ""
-    fail("%d of %d publication full-row fingerprints changed since pre-startup%s: %s"
+    note = (" [ALL records differ - confirm the baseline used md5(row_to_json(r)::text) over the "
+            "full resource row]") if alln else ""
+    fail("%d of %d publication fingerprints changed since pre-startup%s: %s"
          % (len(changed), expect, note, ", ".join(changed[:20])))
 
-print("    OK: all %d publication full-row fingerprints match the pre-startup baseline" % expect)
+print("    OK: all %d publication fingerprints match the pre-startup baseline (matched on %s)"
+      % (expect, bfld))
 PY
     then
       ok "publication fingerprints: all $EXPECT_PUBLICATIONS match the pre-startup baseline (no publication changed during startup)"

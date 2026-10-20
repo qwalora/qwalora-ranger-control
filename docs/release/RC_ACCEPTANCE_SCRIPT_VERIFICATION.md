@@ -16,14 +16,20 @@ promote `3376ddb`. No RC database or accepted environment was touched.
 
 2. Malformed identity SQL fixed: `SELECT current_user || '@' || current_database();`.
 
-3. Publications compared against the full-row MD5 fingerprint baseline. Predicate is the code's
-   own definition of a publication, `resources.pub_id IS NOT NULL` (matches
-   `is_publication = bool(r.pub_id)`), not a 4-field `resources` projection. The canonical
-   fingerprint is `md5(resources::text)` over the full row, keyed by `pub_id`. The comparator
-   requires baseline count == 24, live count == 24, identical key sets, and identical
-   fingerprints; a missing, empty, unparsable, wrong-count, or mismatched baseline is a FAIL,
-   never SKIP/PASS. An `EMIT_BASELINE=1` mode emits the baseline with the identical method so the
-   pre-startup and post-startup fingerprints are computed the same way.
+3. Publications compared against the preserved pre-startup full-row fingerprint baseline. Predicate
+   is the code's own definition of a publication, `resources.pub_id IS NOT NULL` (matches
+   `is_publication = bool(r.pub_id)`), not a 4-field `resources` projection. The fingerprint uses the
+   exact expression the existing baseline was produced with: `md5(row_to_json(r)::text)` over the
+   complete resource row (corrected from an earlier `md5(resources::text)`, which yields a different
+   hash - verified: for one fixture row `row_to_json` gives `a7e1d0e8...` vs `resources::text`
+   `babecad9...`). The comparator is identifier-agnostic: it exposes `id`/`pub_id`/`slug` per live row
+   and matches whichever record identifier the baseline keyed on, across flat `{key: hex}`,
+   `{"fingerprints": {...}}`, or record-list shapes. It requires baseline count == 24, live count ==
+   24, identical identifier sets, and identical fingerprints, and prints a precise difference report
+   (which identifiers are missing/extra, which fingerprints changed). A missing, empty, unparsable,
+   wrong-count, or mismatched baseline is a FAIL, never SKIP/PASS. `BASELINE_SHA256` (optional) is
+   enforced byte-for-byte before the file is trusted, so the original evidence is preserved. The file
+   is read-only here and is never regenerated or overwritten.
 
 4. Pinned auditor reused and proven. The script fetches `px_review_audit.py` at
    `b04698e...`, verifies its git blob is `57f2ce5...` before running, and runs it with
@@ -31,7 +37,19 @@ promote `3376ddb`. No RC database or accepted environment was touched.
    `from parallax... import ...` resolve. `python -I` is intentionally not used (isolated mode
    ignores `PYTHONPATH`); the fetched file sits alone in its own temp subdir so nothing can
    shadow a module. The audit passes only when it exits 0 AND `summary.total == 41` AND
-   `summary.failed == []`; abort, crash, non-zero exit, or unparsable JSON all FAIL.
+   `summary.failed == []`; abort, crash, non-zero exit, or unparsable JSON all FAIL. Two pre-run
+   gates guard the auditor (both fail-closed - on failure the auditor is not run and the check
+   FAILs):
+   - Signing registry shape. `RANGER_SIGNING_KEYS` (a JSON array of
+     `{kid,alg,state,seed_b64?,public_b64?}`) is validated without printing any key material:
+     exactly one `active` entry which MUST carry a private `seed_b64` (the disposable signer,
+     legitimately private); every `verify_only`/`retired`/`revoked` entry MUST NOT carry a
+     `seed_b64`; and `legacy:696697820b69d289` must be present once as `verify_only`, public-only.
+     A private seed on the historical verify-only entry is a FAIL.
+   - Audit connection identity. The audit uses `RC_AUDIT_URL` as `DATABASE_URL`, which may differ
+     from `RC_RO_URL`, so the same identity gate (`current_user=rc_ro`, `current_database=railway`,
+     read-only session) is applied to that exact connection before the auditor runs. The auditor's
+     own psycopg connection inherits the read-only `PGOPTIONS`.
 
 5. Schema names verified against `models.py` (not assumed): tables `resources`, `candidates`,
    `cohorts`, `qualification_decisions`, `parallax_research_runs`, `program_memberships`,
@@ -75,9 +93,20 @@ Results (all passed):
 - Schema/runs/entitlement: all PASS (base-table count, `summary=900`, `uq_unit_result_record`,
   every column, 7 runs + both protected records, fixture entitlement == `parallax`, 0
   qualification decisions).
-- Publications: `EMIT_BASELINE` then compare == all 24 match. Negatives each FAIL: one-record
-  drift (reported 1 of 24 changed), wrong baseline count (23 vs 24), `BASELINE_JSON` unset (FAIL,
-  no SKIP wording), unparsable baseline. A record/list-shaped baseline parses and matches too.
+- Publications: `EMIT_BASELINE` (now `md5(row_to_json(r)::text)`) then compare == all 24 match,
+  across record-list, flat `{pub_id: hex}`, and `{"fingerprints": {...}}` baseline shapes (matched on
+  the baseline's own identifier). Negatives each FAIL: one-record drift (reported 1 of 24 changed),
+  wrong baseline count (23 vs 24), `BASELINE_JSON` unset (FAIL, no SKIP wording), unparsable baseline.
+- Baseline integrity: correct `BASELINE_SHA256` matches; a wrong SHA FAILs with
+  "baseline SHA-256 ... does not match expected". Expression cross-check in psql confirmed the live
+  value equals `md5(row_to_json(r)::text)` and differs from the former `md5(resources::text)`.
+- Signing registry: a valid registry (one active-with-seed + historical verify_only public-only)
+  PASSes; a registry whose historical verify_only entry carries a `seed_b64` FAILs with
+  "carries a private seed_b64 - forbidden", the auditor is skipped (fail-closed), and the forbidden
+  seed value never appears in the output.
+- Audit connection gate: with `RC_AUDIT_URL` pointed at the wrong database the audit-connection gate
+  FAILs (and the auditor is not run) while the primary `psql` gate on `RC_RO_URL` still reports
+  `rc_ro@railway`.
 - Audit: fetch + blob-verify against GitHub returns the pinned blob `57f2ce5`. With `REPO_ROOT`
   set to the `acf50ec` checkout the auditor's app imports resolve (verified: the old temp-dir
   invocation failed with `No module named 'models'`; the corrected `cwd`+`PYTHONPATH` invocation
@@ -97,13 +126,20 @@ tunnel once Railway builds resume and the RC service is deployed on `acf50ec`.
 
 ## Operator run (over the tunnel, read-only)
 
-    RC_RO_URL=postgresql://rc_ro:<pw>@127.0.0.1:<tunnel-port>/railway \
-    RANGER_SIGNING_KEYS='<verify_only public + disposable active>' \
-    BASELINE_JSON=./rc-publications-before-startup.json \
-    REPO_ROOT=<acf50ec checkout> \
+Open the read-only tunnel, then run with the locally held credentials. Nothing prints secrets: the
+rc_ro password is read from `RC_RO_URL`/`RC_AUDIT_URL` into `PG*` env (never on a psql argv), and
+`RANGER_SIGNING_KEYS` reaches the auditor by environment only. Read the private signing JSON from the
+local file into the variable so it is not typed inline.
+
+    export RC_RO_URL='postgresql://rc_ro:<pw>@127.0.0.1:<tunnel-port>/railway'
+    export RC_AUDIT_URL="$RC_RO_URL"
+    export RANGER_SIGNING_KEYS="$(cat ~/qwalora-rc-migration/rc-audit-signing.json)"
+    export BASELINE_JSON=/home/franck/qwalora-rc-migration/rc-publications-before-startup.json
+    export BASELINE_SHA256=cab041be0f896a1c0c49eed7e5eb75f383d12cea6e53b91c38ae6ea35b0d4c95
+    export REPO_ROOT=/path/to/acf50ec/checkout
     scripts/rc_acceptance_checks.sh
 
-Exit codes: 0 = PASS (zero failures); 1 = one or more checks failed; 2 = identity/gate fatal.
-If the pre-startup baseline was produced by a different method, regenerate it pre-startup with
-`EMIT_BASELINE=1 scripts/rc_acceptance_checks.sh > rc-publications-before-startup.json` so both
-sides use the identical `md5(resources::text)` full-row method.
+Exit codes: 0 = PASS (zero failures); 1 = one or more checks failed; 2 = identity/gate fatal. The
+baseline is read-only input and is neither regenerated nor overwritten; do not create another
+baseline after deployment. The fingerprint expression (`md5(row_to_json(r)::text)` over the full
+resource row) matches how `rc-publications-before-startup.json` was produced.
