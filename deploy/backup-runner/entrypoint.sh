@@ -27,26 +27,14 @@ if [ -n "${RANGER_BACKUP_S3_URL:-}" ]; then
       --recursive --exclude "*" --include "*.dump.age" --include "*.sha256" --include "*.manifest.json"
   log info upload.ok
 
-  # 2b) Durable-upload confirmation: the job must NOT report success until the newest encrypted
-  #     artifact is confirmed present offsite at the exact byte size. Fails closed on mismatch/absence.
-  #     This needs s3:GetObject/HeadObject (a read), so it is slightly more than pure write-only; set
-  #     RANGER_BACKUP_VERIFY_UPLOAD=0 to keep write-only credentials and rely only on the upload exit
-  #     code (weaker: an incomplete-but-non-erroring upload would not be detected).
-  if [ "${RANGER_BACKUP_VERIFY_UPLOAD:-1}" = "1" ]; then
-    newest="$(ls -1t "$RANGER_BACKUP_DEST"/*.dump.age 2>/dev/null | head -1)"
-    [ -n "$newest" ] || { log error upload.verify_no_artifact; exit 2; }
-    lsize="$(stat -c %s "$newest")"
-    url="${RANGER_BACKUP_S3_URL%/}/$(basename "$newest")"
-    bkt="$(printf '%s' "$url" | sed -E 's#^s3://([^/]+)/.*#\1#')"
-    key="$(printf '%s' "$url" | sed -E 's#^s3://[^/]+/(.*)$#\1#')"
-    rsize="$(aws "${AWS_ARGS[@]}" s3api head-object --bucket "$bkt" --key "$key" \
-             --query ContentLength --output text 2>/dev/null)" \
-             || { log error upload.verify_head_failed; exit 2; }
-    [ "$rsize" = "$lsize" ] || { log error upload.verify_size_mismatch; exit 2; }
-    log info upload.verify_ok
-  else
-    log info upload.verify_skipped
-  fi
+  # 2b) Mandatory durable-upload confirmation: the job must NOT report success until the newest
+  #     encrypted OBJECT and BOTH integrity sidecars (.sha256, .manifest.json) are confirmed visible
+  #     offsite at their expected byte sizes. For a production/readiness job
+  #     (RANGER_BACKUP_REQUIRE_VERIFY=1 or a production marker), this CANNOT be disabled:
+  #     RANGER_BACKUP_VERIFY_UPLOAD=0 then fails closed. Needs s3:GetObject/HeadObject (a read), a
+  #     documented step above pure write-only. Remote visibility is confirmed here; durability is the
+  #     provider SLA. A nonzero exit is the alerting signal.
+  python /app/scripts/backup_upload_verify.py "$RANGER_BACKUP_DEST" "$RANGER_BACKUP_S3_URL"
 else
   log error upload.skipped_no_target   # no durable target configured -> fail (not operational)
   exit 2
