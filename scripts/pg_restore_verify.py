@@ -74,6 +74,22 @@ def _bin(name):
     return os.path.join(d, name) if d else name
 
 
+def _tool_major(binpath):
+    import re as _re
+    try:
+        out = subprocess.run([binpath, "--version"], capture_output=True, text=True, timeout=10)
+        m = _re.search(r"(\d+)\.", (out.stdout or "") + " " + (out.stderr or ""))
+        return int(m.group(1)) if m else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _manifest_major(manifest):
+    import re as _re
+    m = _re.search(r"(\d+)\.", (manifest or {}).get("pg_dump_version") or "")
+    return int(m.group(1)) if m else None
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -215,14 +231,18 @@ def _require_signing_key():
 def _verify_research_runs(db):
     """Re-verify EVERY signed research record from the restored rows: recompute the canonical SHA-256
     and the Ed25519 signature (kid-aware) for research evidence, investigations, and reviewer
-    adjudications. Returns (ok, summary). Fails closed if any row's hash or signature does not verify."""
+    adjudications; confirm the signed researcher_id matches the row's researcher_id column; and confirm
+    each investigation's linked evidence exists and is owned by the same researcher. Fails closed if
+    any row's hash, signature, or ownership does not verify."""
     import hashlib as _h
     import json as _j
     import signing
     from models import ParallaxResearchRun
     rows = ParallaxResearchRun.query.all()
+    owner_by_id = {r.run_id: r.researcher_id for r in rows}
     counts = {"total": 0, "trial": 0, "investigation": 0, "adjudication": 0, "other": 0}
     bad = 0
+    owner_bad = 0
     for r in rows:
         counts["total"] += 1
         try:
@@ -230,16 +250,26 @@ def _verify_research_runs(db):
         except Exception:  # noqa: BLE001
             bad += 1
             continue
-        kind = ((rec.get("metrics") or {}).get("kind")
-                or (rec.get("manifest") or {}).get("kind") or "other")
-        counts[kind] = counts.get(kind, 0) + 1 if kind in counts else counts["other"] + 1
+        manifest = rec.get("manifest") or {}
+        metrics = rec.get("metrics") or {}
+        kind = metrics.get("kind") or manifest.get("kind") or "other"
+        counts[kind] = counts.get(kind, 0) + 1 if kind in counts else counts.get("other", 0) + 1
         hash_ok = (_h.sha256(signing.canonical(rec)).hexdigest() == r.record_hash)
         sig_ok = bool(signing.verify(rec, r.signature, kid=r.signing_kid))
-        if not (hash_ok and sig_ok):
+        # researcher_id in the signed record must match the stored column (no row re-pointing)
+        col_owner_ok = (rec.get("researcher_id") == r.researcher_id)
+        # an investigation's linked evidence must exist and be owned by the same researcher
+        owner_ok = True
+        if kind == "investigation":
+            parent = manifest.get("parent_run") or metrics.get("parent_run")
+            owner_ok = (parent in owner_by_id and owner_by_id[parent] == r.researcher_id)
+        if not (hash_ok and sig_ok and col_owner_ok and owner_ok):
             bad += 1
+            if not (col_owner_ok and owner_ok):
+                owner_bad += 1
     ok = (bad == 0)
     _log("info" if ok else "error", "restore.research_signature_integrity",
-         ok=ok, verified=counts["total"], failed=bad,
+         ok=ok, verified=counts["total"], failed=bad, ownership_failures=owner_bad,
          trials=counts.get("trial", 0), investigations=counts.get("investigation", 0),
          adjudications=counts.get("adjudication", 0))
     return ok
@@ -312,10 +342,19 @@ def verify_signatures(target_url):
             except Exception as e:  # noqa: BLE001
                 events_ok = False
                 _log("error", "restore.verify_events_failed", note=str(e)[:200])
+            # Checkpoint integrity: a restored checkpoint stream must be self-consistent. A healthy
+            # result is ok or no_checkpoint; truncated/rewritten/forged/broken fail closed.
+            try:
+                ck = audit_integrity.assess(db)
+                ck_status = ck.get("status") if isinstance(ck, dict) else str(ck)
+            except Exception as e:  # noqa: BLE001
+                ck_status = "error:%s" % str(e)[:80]
+            checkpoint_ok = ck_status in ("ok", "no_checkpoint")
             research_ok = _verify_research_runs(db)
-        ok = chain_ok and events_ok and research_ok
+        ok = chain_ok and events_ok and checkpoint_ok and research_ok
         _log("info" if ok else "error", "restore.signature_integrity",
-             ok=ok, audit_events=n, chain_ok=chain_ok, events_ok=events_ok, research_ok=research_ok)
+             ok=ok, audit_events=n, chain_ok=chain_ok, events_ok=events_ok,
+             checkpoint_status=ck_status, checkpoint_ok=checkpoint_ok, research_ok=research_ok)
         return ok
     finally:
         if prev_db is None:
@@ -370,6 +409,16 @@ def run(artifact, target_url, source_url=None, expected_sha=None, expected_count
     if not ok_sha:
         raise SystemExit(4)
     manifest = _load_manifest(artifact)
+    # PostgreSQL major-version compatibility: pg_restore must be >= the pg_dump major that produced the
+    # backup, or the restore would fail or silently misbehave. Fail closed before touching the target.
+    src_major, rst_major = _manifest_major(manifest), _tool_major(_bin("pg_restore"))
+    if src_major and rst_major and rst_major < src_major:
+        _log("error", "restore.version_incompatible", pg_restore_major=rst_major, dump_major=src_major,
+             reason="pg_restore major is older than the backup's pg_dump major")
+        raise SystemExit(2)
+    # Completeness reference: prefer an explicit/live source; otherwise fall back to the row counts
+    # recorded in the manifest so a partial/empty restore is caught even with no live source.
+    ref_counts = expected_counts or (manifest.get("row_counts") if not source_url else None)
     ident, ident_tmp = _identity_file()
     plain = None
     try:
@@ -377,7 +426,7 @@ def run(artifact, target_url, source_url=None, expected_sha=None, expected_count
         recreate_target(u)
         restore(plain, u)
         ok_schema = verify_schema(target_url, manifest.get("schema_tables"))
-        ok_counts, restored = compare_counts(target_url, source_url, expected_counts)
+        ok_counts, restored = compare_counts(target_url, source_url, ref_counts)
         ok_sig = verify_signatures(target_url)
         sample_records(target_url)
     finally:

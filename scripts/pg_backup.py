@@ -52,6 +52,14 @@ except Exception:  # noqa: BLE001 - sqlalchemy is a portal dependency; fail clea
     text = None
 
 
+# Evidence/authorization tables whose row counts are recorded in the manifest so a restore can verify
+# completeness even without a live source to compare against (closes an empty/partial-restore false
+# positive). Kept in step with pg_restore_verify._CORE_TABLES.
+_COUNT_TABLES = ("candidates", "program_memberships", "board_results", "qualification_decisions",
+                 "unit_results", "badges", "parallax_audit_events", "parallax_audit_checkpoints",
+                 "parallax_approvals", "parallax_research_runs")
+
+
 def _schema_tables(source_url: str):
     """Best-effort sorted list of public base tables, recorded in the manifest so a restore can verify
     schema consistency. Returns None (and logs a note) if the schema cannot be read; it never blocks
@@ -68,6 +76,27 @@ def _schema_tables(source_url: str):
         return sorted(r[0] for r in rows)
     except Exception as e:  # noqa: BLE001
         _log("info", "backup.schema_note", note="could not read schema: %s" % str(e)[:160])
+        return None
+
+
+def _row_counts(source_url: str):
+    """Best-effort core-table row counts (never any row data), recorded in the manifest so a restore
+    can prove completeness. Returns None if unreadable."""
+    if create_engine is None:
+        return None
+    try:
+        out = {}
+        eng = create_engine(source_url, future=True)
+        with eng.connect() as c:
+            for t in _COUNT_TABLES:
+                try:
+                    out[t] = c.execute(text('SELECT count(*) FROM "%s"' % t)).scalar()
+                except Exception:  # noqa: BLE001 - table may not exist in a given schema
+                    out[t] = None
+        eng.dispose()
+        return out
+    except Exception as e:  # noqa: BLE001
+        _log("info", "backup.counts_note", note="could not read counts: %s" % str(e)[:160])
         return None
 
 
@@ -165,12 +194,16 @@ def run_backup(source_url: str, dest_dir: str, recipients: list, *, age_bin: str
         age_cmd += ["-r", r]
     age_cmd += ["-o", out_path]
 
+    dump_err_f = tempfile.TemporaryFile()
     try:
-        dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        # pg_dump stderr goes to a file, not a pipe: while we block on age's communicate(), a large
+        # pg_dump stderr could otherwise fill a 64 KiB pipe buffer and deadlock the dump.
+        dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=dump_err_f, env=env)
         enc = subprocess.Popen(age_cmd, stdin=dump.stdout, stderr=subprocess.PIPE)
         dump.stdout.close()  # allow dump to get SIGPIPE if enc exits
         enc_err = enc.communicate()[1]
-        dump_err = dump.stderr.read(); dump.stderr.close(); dump.wait()
+        dump.wait()
+        dump_err_f.seek(0); dump_err = dump_err_f.read()
         if dump.returncode != 0:
             _log("error", "backup.pg_dump_failed", code=dump.returncode,
                  stderr=(dump_err or b"").decode("utf-8", "replace")[:500])
@@ -183,12 +216,17 @@ def run_backup(source_url: str, dest_dir: str, recipients: list, *, age_bin: str
             raise SystemExit(3)
     finally:
         _safe_unlink(pgpass)
+        try:
+            dump_err_f.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     size = os.path.getsize(out_path)
     sha = _sha256_file(out_path)
     with open(out_path + ".sha256", "w", encoding="utf-8") as fh:
         fh.write("%s  %s\n" % (sha, os.path.basename(out_path)))
     schema_tables = _schema_tables(source_url)
+    row_counts = _row_counts(source_url)
     manifest = {
         "manifest_version": 1,
         "artifact": os.path.basename(out_path),
@@ -204,6 +242,7 @@ def run_backup(source_url: str, dest_dir: str, recipients: list, *, age_bin: str
         "pg_dump_version": _tool_version(_pg_dump_path()),
         "schema_tables": schema_tables,
         "schema_table_count": (len(schema_tables) if schema_tables is not None else None),
+        "row_counts": row_counts,
     }
     with open(out_path + ".manifest.json", "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

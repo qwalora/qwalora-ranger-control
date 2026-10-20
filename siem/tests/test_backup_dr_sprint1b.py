@@ -126,6 +126,17 @@ def _backup(bk):
     return os.path.join(bk["dest"], m["artifact"]), m
 
 
+def _app_ctx(url):
+    os.environ["DATABASE_URL"] = url
+    os.environ["RANGER_SIGNING_KEY"] = _SIGNKEY
+    import signing
+    signing._reset_registry()
+    import app as appmod
+    importlib.reload(appmod)
+    from models import db
+    return appmod.create_app(), db
+
+
 # (a) positive round trip also re-verifies research + adjudication signatures now
 def test_roundtrip_reverifies_research_and_adjudication_signatures(bk):
     artifact, m = _backup(bk)
@@ -256,3 +267,77 @@ def test_restore_verify_is_idempotent(bk):
     r2 = rv.run(artifact, bk["restore_url"], source_url=bk["src_url"], drop_after=True)
     assert r1["ok"] is True and r2["ok"] is True
     assert r1["restored_counts"] == r2["restored_counts"]
+
+
+# tampered SHA-256 sidecar (the integrity manifest hash) is caught before any decrypt/restore
+def test_tampered_sha256_sidecar_fails_closed(bk):
+    artifact, _ = _backup(bk)
+    with open(artifact + ".sha256", "w") as fh:
+        fh.write("%s  %s\n" % ("0" * 64, os.path.basename(artifact)))  # wrong hash
+    os.environ["RANGER_BACKUP_AGE_IDENTITY_FILE"] = bk["ident"]
+    with pytest.raises(SystemExit) as ei:
+        rv.run(artifact, bk["restore_url"], source_url=bk["src_url"])
+    assert ei.value.code == 4  # SHA gate
+
+
+# broken audit checkpoint: a tail-truncated chain under a valid checkpoint fails closed (exit 4)
+def test_broken_audit_checkpoint_fails_closed(bk):
+    app_, db = _app_ctx(bk["src_url"])
+    with app_.app_context():
+        from parallax import audit_integrity as ai
+        from models import ParallaxAuditEvent, ParallaxAuditCheckpoint
+        import signing
+        v = ai.verify_events(db)
+        rec = ai._checkpoint_record("parallax-governance", v["count"], v["head"],
+                                    v.get("head_seq"), None)
+        db.session.add(ParallaxAuditCheckpoint(
+            stream="parallax-governance", event_count=rec["event_count"], head_hash=rec["head_hash"],
+            head_seq=rec["head_seq"], prev_checkpoint_hash=None, checkpoint_hash=rec["checkpoint_hash"],
+            ts=rec["ts"], signature=signing.sign(rec), signing_kid=signing.active_kid()))
+        db.session.commit()
+        last = (ParallaxAuditEvent.query.filter_by(stream="parallax-governance")
+                .order_by(ParallaxAuditEvent.seq.desc()).first())
+        db.session.delete(last); db.session.commit()   # tail-truncate the chain
+        assert ai.assess(db)["status"] == "truncated"
+    artifact, _ = _backup(bk)
+    os.environ["RANGER_BACKUP_AGE_IDENTITY_FILE"] = bk["ident"]
+    with pytest.raises(SystemExit) as ei:
+        rv.run(artifact, bk["restore_url"], source_url=bk["src_url"])
+    assert ei.value.code == 4  # checkpoint/assess detects tail truncation
+
+
+# restore destination mistakes: a non-disposable / live-looking target is refused (exit 2)
+def test_restore_destination_must_be_disposable(bk):
+    for bad in ("railway", "nonprod_live", "ranger", "qwalora_ranger"):
+        url = str(bk["base"].set(database=bad))
+        with pytest.raises(SystemExit) as ei:
+            rv.guard_disposable(url)
+        assert ei.value.code == 2
+
+
+# partial/short restore is caught by manifest row-count parity even with NO live source reference
+def test_manifest_count_parity_detects_shortfall(bk):
+    artifact, _ = _backup(bk)
+    mpath = artifact + ".manifest.json"
+    man = json.load(open(mpath))
+    man["row_counts"]["candidates"] = man["row_counts"]["candidates"] + 5  # claim more than the dump has
+    json.dump(man, open(mpath, "w"))
+    os.environ["RANGER_BACKUP_AGE_IDENTITY_FILE"] = bk["ident"]
+    with pytest.raises(SystemExit) as ei:
+        rv.run(artifact, bk["restore_url"])  # no source_url -> manifest counts are the reference
+    assert ei.value.code == 4
+
+
+# researcher ownership: a research run whose researcher_id COLUMN was re-pointed (record unchanged)
+# is detected by the per-row ownership check
+def test_researcher_id_column_mismatch_detected(bk):
+    eng = create_engine(bk["src_url"], future=True)
+    with eng.begin() as c:
+        c.execute(text("UPDATE parallax_research_runs SET researcher_id='attacker' "
+                       "WHERE run_id=:i"), {"i": bk["info"]["evidence_id"]})
+    eng.dispose()
+    artifact, _ = _backup(bk)
+    os.environ["RANGER_BACKUP_AGE_IDENTITY_FILE"] = bk["ident"]
+    with pytest.raises(SystemExit) as ei:
+        rv.run(artifact, bk["restore_url"], source_url=bk["src_url"])
+    assert ei.value.code == 4  # signed researcher_id != column
