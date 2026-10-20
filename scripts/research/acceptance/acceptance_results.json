@@ -1,0 +1,85 @@
+{
+  "axe": {
+    "command-center@desktop1280": [],
+    "console@desktop1280": [],
+    "evidence@desktop1280": [],
+    "account@desktop1280": [],
+    "command-center@mobile390": [],
+    "console@mobile390": [],
+    "evidence@mobile390": [],
+    "account@mobile390": []
+  },
+  "journey": [
+    {
+      "step": "1 open command center",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "2 research console",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "3 inspect trial list",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "4 open signed evidence detail",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "5 verify provenance+metadata",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "6 export authorized JSON",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "step": "7 return to workspace",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "8 account + program authorization",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": "9 not-found/unavailable state",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "step": "10 keyboard focus reaches a named control",
+      "ok": true,
+      "detail": "{\"tag\": \"A\", \"text\": \"Dashboard\", \"outline\": \"auto\", \"boxShadow\": \"none\"}"
+    }
+  ],
+  "screenshots": [
+    "accept-command-center-mobile390.png",
+    "accept-console-mobile390.png",
+    "accept-evidence-mobile390.png",
+    "accept-account-mobile390.png",
+    "accept-command-center-tablet768.png",
+    "accept-console-tablet768.png",
+    "accept-evidence-tablet768.png",
+    "accept-account-tablet768.png",
+    "accept-command-center-desktop1280.png",
+    "accept-console-desktop1280.png",
+    "accept-evidence-desktop1280.png",
+    "accept-account-desktop1280.png",
+    "accept-command-center-large1440.png",
+    "accept-console-large1440.png",
+    "accept-evidence-large1440.png",
+    "accept-account-large1440.png"
+  ],
+  "errors": [],
+  "axe_critical_serious": [],
+  "axe_total_violations": 0
+}
