@@ -21,8 +21,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 import prodconfig  # noqa: E402
 import signing  # noqa: E402
 
-_MANAGED = ("SECRET_KEY", "RANGER_SIGNING_KEY", "RANGER_SIGNING_KEYS",
-            "RANGER_ENV", "APP_ENV", "ENVIRONMENT", "FLASK_ENV")
+_MANAGED = ("SECRET_KEY", "RANGER_SIGNING_KEY", "RANGER_SIGNING_KEYS", "RANGER_SIGNING_VERIFY_KIDS",
+            "RANGER_ENV", "APP_ENV", "ENVIRONMENT", "FLASK_ENV", "RANGER_REQUIRE_SECURE_SECRETS")
 
 
 @pytest.fixture()
@@ -188,6 +188,84 @@ def test_unknown_kid_fails_closed(clean_env):
     rec = {"x": 1}
     sig = signing.sign(rec)
     assert signing.verify(rec, sig, kid="no-such-kid") is False
+
+
+# ---- hardening: marker ambiguity, force flag, var conflicts, leakage, entropy, kid pinning ----
+
+def test_ambiguous_ranger_env_fails_closed(clean_env):
+    os.environ["RANGER_ENV"] = "produciton"  # misspelled production
+    with pytest.raises(prodconfig.InsecureConfigError):
+        prodconfig.is_production()
+    with pytest.raises(prodconfig.InsecureConfigError):
+        prodconfig.require_secret_key()
+
+
+def test_recognized_dev_marker_is_lenient(clean_env):
+    os.environ["RANGER_ENV"] = "development"
+    assert prodconfig.is_production() is False
+    assert prodconfig.require_secret_key() is None
+
+
+def test_force_flag_enables_secure_mode_without_marker(clean_env):
+    os.environ["RANGER_REQUIRE_SECURE_SECRETS"] = "1"
+    assert prodconfig.is_production() is True
+    with pytest.raises(prodconfig.InsecureConfigError):
+        prodconfig.require_secret_key()  # no SECRET_KEY -> fail closed
+
+
+def test_low_entropy_secret_in_production_raises(clean_env):
+    os.environ["RANGER_ENV"] = "production"
+    os.environ["SECRET_KEY"] = "a" * 48  # long but near-zero entropy
+    with pytest.raises(prodconfig.InsecureConfigError):
+        prodconfig.require_secret_key()
+    os.environ["SECRET_KEY"] = "0123" * 12  # 48 chars, only 4 distinct -> weak
+    with pytest.raises(prodconfig.InsecureConfigError):
+        prodconfig.require_secret_key()
+
+
+def test_both_signing_vars_set_fails_closed(clean_env):
+    os.environ["RANGER_SIGNING_KEY"] = _seed_b64()
+    os.environ["RANGER_SIGNING_KEYS"] = json.dumps(
+        [{"kid": "kA", "alg": "ed25519", "state": "active", "seed_b64": _seed_b64()}])
+    with pytest.raises(prodconfig.InsecureConfigError) as ei:
+        signing.assert_signing_ready()
+    assert "exactly one" in str(ei.value)
+
+
+def test_malformed_registry_does_not_leak_key_material(clean_env):
+    secret_seed = _seed_b64()
+    # invalid JSON that nonetheless embeds the seed; the error must not echo it
+    os.environ["RANGER_SIGNING_KEYS"] = '[{"kid":"kA","state":"active","seed_b64":"%s"' % secret_seed
+    with pytest.raises(prodconfig.InsecureConfigError) as ei:
+        signing.assert_signing_ready()
+    assert secret_seed not in str(ei.value)
+    assert "malformed or invalid" in str(ei.value)
+
+
+def test_verify_kids_pin_missing_fails_closed(clean_env):
+    os.environ["RANGER_SIGNING_KEY"] = _seed_b64()
+    os.environ["RANGER_SIGNING_VERIFY_KIDS"] = "legacy:deadbeefdeadbeef"  # not present in registry
+    with pytest.raises(prodconfig.InsecureConfigError):
+        signing.assert_signing_ready()
+
+
+def test_verify_kids_pin_present_ok(clean_env):
+    seed_a, seed_b = _seed_b64(), _seed_b64()
+    os.environ["RANGER_SIGNING_KEYS"] = json.dumps([
+        {"kid": "kA", "alg": "ed25519", "state": "verify_only", "seed_b64": seed_a},
+        {"kid": "kB", "alg": "ed25519", "state": "active", "seed_b64": seed_b}])
+    os.environ["RANGER_SIGNING_VERIFY_KIDS"] = "kA,kB"
+    assert signing.assert_signing_ready() == "kB"
+
+
+def test_verify_kids_pin_revoked_fails_closed(clean_env):
+    seed_a, seed_b = _seed_b64(), _seed_b64()
+    os.environ["RANGER_SIGNING_KEYS"] = json.dumps([
+        {"kid": "kA", "alg": "ed25519", "state": "revoked", "seed_b64": seed_a},
+        {"kid": "kB", "alg": "ed25519", "state": "active", "seed_b64": seed_b}])
+    os.environ["RANGER_SIGNING_VERIFY_KIDS"] = "kA"  # revoked is not a trusted state
+    with pytest.raises(prodconfig.InsecureConfigError):
+        signing.assert_signing_ready()
 
 
 # ---- create_app startup demonstration (subprocess) ------------------------------------------

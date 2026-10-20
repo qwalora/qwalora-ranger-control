@@ -11,17 +11,22 @@ regenerating keys, or invalidating existing signatures.
 
 ## Production configuration contract
 Set all of the following in the production environment:
-- `RANGER_ENV=production` (the authoritative production marker).
-- `SECRET_KEY`: a stable, securely random value of at least 32 characters (e.g. `python -c "import os;print(os.urandom(32).hex())"`). Must not be a known placeholder. It is independent of the signing key and must not be reused as one.
-- Signing material, exactly one of:
+- Declare secure mode. Set `RANGER_REQUIRE_SECURE_SECRETS=1` (the authoritative, unambiguous switch, recommended for production) and/or `RANGER_ENV=production`. A generic `APP_ENV`/`ENVIRONMENT`/`FLASK_ENV` set to `production` is also honored as a positive signal. A `RANGER_ENV` set to an unrecognized value (a misspelling such as `produciton`) fails closed rather than silently relaxing to development.
+- `SECRET_KEY`: a stable, securely random value of at least 32 characters (e.g. `python -c "import os;print(os.urandom(32).hex())"`). Must not be a known placeholder and must pass a minimum-entropy check (a long but repetitive value is rejected). It is independent of the signing key and must not be reused as one.
+- Signing material, exactly one of (setting both fails closed):
   - `RANGER_SIGNING_KEYS`: a JSON array of `{kid, alg, state, seed_b64?, public_b64?}` with exactly one `active` key carrying a private seed (the versioned registry; preferred, supports rotation and historical verification); or
   - `RANGER_SIGNING_KEY`: base64 of a 32-byte Ed25519 seed (single-key form).
+- Optional but recommended: `RANGER_SIGNING_VERIFY_KIDS` = comma-separated key ids that must remain verifiable. Startup fails closed if any listed kid is absent or not in a trusted state (active/verify_only/retired), so a rotation cannot silently drop the ability to verify existing evidence.
 
-If any required item is missing, too short, a placeholder, or malformed, the app refuses to boot with
-`InsecureConfigError` naming the offending variable (never its value).
+If any required item is missing, too short, low-entropy, a placeholder, malformed, ambiguous, or
+conflicting, the app refuses to boot with `InsecureConfigError` naming the offending variable (never
+its value, and never the registry content).
 
 Nonproduction (`parallax-nonprod`) is not affected: it already sets `SECRET_KEY` and
-`RANGER_SIGNING_KEY` explicitly, and without a production marker the lenient dev behavior remains.
+`RANGER_SIGNING_KEY` explicitly, and without a secure-mode marker the lenient dev behavior remains.
+Because secure mode is opt-in, production MUST set `RANGER_REQUIRE_SECURE_SECRETS=1` (or a recognized
+`RANGER_ENV`): a deploy with no marker at all runs in lenient mode. Treat setting the force flag as a
+required line in the production environment template.
 
 ## Safe migration sequence (operator)
 1. Generate (out of band) a production `SECRET_KEY` and, if using the registry form, a production signing key; store them in the secret manager. Do not commit them. This change set does not generate, replace, or rotate any key automatically.
