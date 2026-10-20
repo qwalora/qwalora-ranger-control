@@ -35,10 +35,11 @@ research records, signing keys, and the preserved publication baseline are uncha
 - `parallax-portal-rc`: no service domains, no custom domains, no TCP proxies, no new volumes.
 - The RC portal is private; candidate access is not enabled.
 
-## Post-deployment acceptance (operator-side, read-only against the RC fork)
+## Post-deployment acceptance after INITIAL deployment (operator-side, read-only against the RC fork)
 
 Executed by the operator against the disposable fork over the read-only `rc_ro` role, with
-`RANGER_SIGNING_KEYS` set to the verify-only public entry; no record modified.
+`RANGER_SIGNING_KEYS` set to the verify-only public entry; no record modified. These results are
+as of initial deployment, before the superuser password rotation below.
 
 | Check | Result |
 |---|---|
@@ -61,14 +62,34 @@ Executed by the operator against the disposable fork over the read-only `rc_ro` 
 - PR #4 (design-completion into `integration/parallax-research-platform`) remains open and
   unmerged, independent of this release.
 
-## Open operational-readiness items (tracked separately)
+## Operational evidence after superuser rotation (operator-reported)
 
-1. `/healthz` direct HTTP check over the private network - pending an in-network exec
-   (`railway ssh` into a `parallax-rc` service, or dashboard exec):
-   `curl -i http://parallax-portal-rc.railway.internal:8080/healthz` (expect `{"status":"ok","db":true}`).
-2. Rotation of the previously exposed RC Postgres superuser password - RC-only, operator-executed
-   over a private connection (see the RC readiness notes).
-3. Separate RC GitHub OAuth app + controlled authenticated researcher/reviewer acceptance -
-   depends on an access-controlled RC reachability decision (no public domain).
+Completed and verified by the operator over the authorized private connection:
 
-Deployment is operationally healthy; full RC acceptance is gated on the items above.
+| Item | Status |
+|---|---|
+| RC deployment at `acf50ec` | VERIFIED (SUCCESS) |
+| Direct `/healthz` (private) | VERIFIED - HTTP 200, `db:true` |
+| RC Postgres superuser password rotated (RC-only) | VERIFIED |
+| Railway configuration updated to match | VERIFIED |
+| Fresh PostgreSQL administrative connection post-rotation | VERIFIED |
+| Application health re-checked post-rotation | VERIFIED |
+| Post-rotation historical integrity audit (41-check) | PENDING - not yet rerun |
+| Post-rotation publication fingerprint recheck (24) | PENDING - not yet rerun |
+
+The most recent acceptance rerun attempt did not execute its checks: the fresh shell was missing
+the seven required environment variables, so the run aborted at setup. This is a shell/environment
+setup condition, NOT a database, rotation, or integrity failure. The post-rotation recheck is
+therefore PENDING, neither passed nor failed. The pre-rotation 41/41 and 24/24 results above stand
+as of initial deployment and are unaffected.
+
+## Open items
+
+1. Post-rotation historical-integrity recheck (41-check over `rc_ro`) and publication-fingerprint
+   recheck (24) - PENDING. To be rerun once a safe execution path is chosen; see the automation
+   assessment in `RC_OPERATIONAL_READINESS_NOTES.md`.
+2. GitHub OAuth and external researcher/reviewer access - intentionally DISABLED until their
+   separate security requirements (dedicated test OAuth app, verified protected access path) are met.
+
+Deployment is operationally healthy and the superuser rotation is complete; full RC sign-off is
+gated only on the post-rotation integrity recheck above.

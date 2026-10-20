@@ -148,3 +148,30 @@ Existing automated coverage already green (local, pre-deploy): `tests/test_paral
 `tests/test_research_execution.py` (7), `tests/test_security_acceptance.py` (4) - 25 passed; the
 researcher-journey harness - 10/10. These assert the same authorization, entitlement-separation,
 reviewer-only, and provenance properties the live matrix above re-checks against the deployed RC.
+
+## 4. Automated integrity verification - feasibility (read-only, no new infra)
+
+Question: can the post-rotation historical-integrity recheck (41-check over `rc_ro`, plus the 24
+publication fingerprints) be automated safely using the existing read-only credentials, without
+exposing secrets or creating infrastructure?
+
+Assessment:
+- From the automation (cloud agent) environment: NO. `parallax-postgres-rc` is private with no TCP
+  proxy and the sandbox is not on the `parallax-rc` network. The `rc_ro` credentials are useless
+  remotely without a network path, and creating one (proxy, tunnel, or a runner service) is exactly
+  the infrastructure excluded. So I cannot run it with my current authorized tools.
+- The only mechanism that adds NO new service and exposes NO secret is an in-environment scheduled
+  run on an EXISTING `parallax-rc` service: a Railway cron that executes `scripts/px_review_audit.py`
+  over the already-present `rc_ro` credentials and logs `summary.failed` (and the 24 fingerprint
+  comparisons) to the deploy logs. It reads only credentials already in that environment and writes
+  no record. Tradeoff: it is a config change to an existing service (a schedule), so it requires
+  explicit authorization and is borderline against the "no infrastructure change" boundary; it is
+  not implemented here.
+- An in-app read-only `/audit` endpoint would require application code not present on `acf50ec`, so
+  it is out of scope for the accepted release.
+
+Conclusion: there is no zero-change automation available through current authorized tools. The
+recheck remains either a one-off operator action over the authorized private connection, or, if
+later authorized, an existing-service scheduled read-only job. Until then it stays PENDING. The
+audit is read-only by construction (`rc_ro`, verify-only public key), so no automation path should
+ever hold a private signing seed or write to any record.
