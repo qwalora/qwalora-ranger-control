@@ -43,8 +43,13 @@ fi
 # 3) Freshness / integrity healthcheck over what we just wrote (dead-man's-switch).
 python /app/scripts/backup_healthcheck.py "$RANGER_BACKUP_DEST"
 
-# 4) Local retention prune (bucket retention is primarily S3 lifecycle rules; this is the secondary,
-#    auditable pass over the runner's local mirror). Dry-run unless RANGER_BACKUP_PRUNE_APPLY=1.
+# 4) Retention prune. On a provider WITH lifecycle rules, those are the primary retention and this
+#    local pass is secondary. On Railway Buckets (no lifecycle, no Object Lock), the bucket prune is
+#    the ONLY offsite retention, so it runs against the bucket directly. Both are dry-run unless
+#    RANGER_BACKUP_PRUNE_APPLY=1, never delete the newest, and refuse to delete everything.
 python /app/scripts/pg_backup_prune.py "$RANGER_BACKUP_DEST" || true
+if [ -n "${RANGER_BACKUP_S3_URL:-}" ] && [ "${RANGER_BACKUP_BUCKET_PRUNE:-1}" = "1" ]; then
+  python /app/scripts/bucket_prune.py "$RANGER_BACKUP_S3_URL" || true
+fi
 
 log info backup.done
