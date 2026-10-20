@@ -48,6 +48,8 @@ import hashlib
 import json
 import os
 
+import prodconfig
+
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey)
@@ -67,10 +69,23 @@ _cached = {}
 def _legacy_seed():
     raw = os.environ.get("RANGER_SIGNING_KEY")
     if raw:
+        # An explicitly configured key must be well-formed. A malformed value is a misconfiguration,
+        # never silently ignored (which would mask it behind a derived dev key).
         try:
-            return base64.b64decode(raw)[:32]
+            seed = base64.b64decode(raw)
         except Exception:  # noqa: BLE001
-            pass
+            seed = None
+        if seed is None or len(seed) < 32:
+            raise prodconfig.InsecureConfigError(
+                "RANGER_SIGNING_KEY is malformed: expected base64 of a 32-byte Ed25519 seed.")
+        return seed[:32]
+    # No explicit signing material. In production this must fail closed: deriving a signing key from
+    # SECRET_KEY or a hardcoded development literal would make signed evidence forgeable.
+    if prodconfig.is_production():
+        raise prodconfig.InsecureConfigError(
+            "No signing key configured in production. Set RANGER_SIGNING_KEYS (versioned registry) "
+            "or RANGER_SIGNING_KEY (base64 of a 32-byte Ed25519 seed). Derivation from SECRET_KEY or "
+            "a development default is not permitted in production.")
     base = (os.environ.get("SECRET_KEY") or "qwalora-ranger-dev").encode()
     return hashlib.sha256(base).digest()
 
@@ -176,6 +191,15 @@ def _install_registry(entries, active_kid):
 
 
 def active_kid():
+    _registry()
+    return _cached["active"]
+
+
+def assert_signing_ready():
+    """Force-build the signing registry so missing, malformed, or (in production) implicitly derived
+    key material fails CLOSED at startup rather than at first sign/verify. Returns the active kid.
+    Never logs or returns key material. Safe to call once during app creation."""
+    _reset_registry()  # ignore any stale cache so the current environment is validated now
     _registry()
     return _cached["active"]
 

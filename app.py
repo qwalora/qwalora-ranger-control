@@ -43,6 +43,7 @@ import scenarios
 import strata_missions
 import strata_assignment
 import notify
+import prodconfig
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
@@ -464,10 +465,16 @@ def _normalize_db_url(url):
 
 def create_app():
     app = Flask(__name__)
+    # Fail closed on unsafe production secret configuration BEFORE anything is served.
+    # In production this raises prodconfig.InsecureConfigError when SECRET_KEY or the signing key
+    # is missing, malformed, or a development placeholder; outside production it is lenient and the
+    # historical dev fallbacks below still apply. Errors name the variable at fault, never its value.
+    secret = prodconfig.require_secret_key()
+    signing.assert_signing_ready()  # force-validate signing key material (prod: must be explicit)
     # SECRET_KEY must be a stable secret so sessions survive restarts and are
     # consistent across workers. A per-boot random fallback silently logs people
-    # out; warn loudly if it is missing instead of pretending it is fine.
-    secret = os.environ.get("SECRET_KEY")
+    # out; warn loudly if it is missing instead of pretending it is fine. (Not reachable in
+    # production: require_secret_key() has already failed closed above when it is unset there.)
     if not secret:
         import logging
         logging.getLogger(__name__).warning(
