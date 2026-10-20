@@ -44,6 +44,7 @@ import strata_missions
 import strata_assignment
 import notify
 import prodconfig
+import rc_guard
 import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
@@ -502,6 +503,12 @@ def create_app():
         app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
     db.init_app(app)
     with app.app_context():
+        # RC isolation guard: in RC validation mode (RANGER_RC_ALLOW=1 + RANGER_RC_EXPECT_TOKEN),
+        # fail closed BEFORE any write-capable initialization unless the connected database is the
+        # expected disposable fork (verified by a read-only marker probe). No-op outside RC mode, so
+        # production/nonprod/dev/test startup is unchanged. This rejects the accepted operational
+        # database (which is not marked) before create_all/ensure_schema/bootstrap can write.
+        rc_guard.assert_rc_identity(db.engine)
         # Two gunicorn workers import the app concurrently and both run these.
         # create_all() is checkfirst, but the check+create still races between
         # workers on a brand-new table; the loser sees "already exists". Swallow
