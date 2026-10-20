@@ -56,10 +56,12 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
     observed = None
     retrieved_ids: List[str] = []
     forced = False
+    gen_meta: Dict[str, Any] = {}
     try:
         out = rag.run_rag(backend, corpus, task=task["task"], injected=injected)
         res = out["result"]
         observed = res.text
+        gen_meta = dict(getattr(res, "meta", None) or {})
         retrieved_ids = out["retrieved_doc_ids"]
         forced = out["injected_forced_into_context"]
         ident = backend.identity()
@@ -80,9 +82,15 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
         "hypothesis": HYPOTHESIS,
         "application_version": app_version,
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "model": {"id": ident["model_id"], "runtime": ident["runtime"], "backend": ident["backend"]},
+        "model": {"id": ident["model_id"], "runtime": ident["runtime"], "backend": ident["backend"],
+                  "digest": (gen_meta.get("weights_sha256") or gen_meta.get("digest")
+                             or gen_meta.get("model_digest") or gen_meta.get("model_version"))},
         "backend_is_real": bool(ident["is_real"]),
         "backend_provenance": "infrastructure_backed" if ident["is_real"] else "simulated",
+        "inference_params": {"temperature": gen_meta.get("temperature"),
+                             "max_tokens": gen_meta.get("max_tokens"),
+                             "latency_s": gen_meta.get("latency_s")},
+        "infra_error": infra_error,
         "corpus_version": corpus.version,
         "corpus_hash": corpus.content_hash(),
         "retrieved_doc_ids": retrieved_ids,

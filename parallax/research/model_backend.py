@@ -107,8 +107,15 @@ class HTTPBackend(Backend):
         except Exception as e:  # noqa: BLE001 - surfaced as infrastructure failure, never faked
             raise ModelBackendError("model endpoint call failed: %s" % e)
         text = body.get("response") or body.get("text") or ""
+        meta = {"latency_s": round(time.time() - t0, 3),
+                "temperature": req.temperature, "max_tokens": req.max_tokens}
+        # capture a model weights digest / version if the endpoint reports one (reproducibility)
+        for k in ("weights_sha256", "digest", "model_digest", "model_version"):
+            v = body.get(k)
+            if v:
+                meta[k] = v
         return GenResult(text=text, backend=self.name, is_real=True, model_id=self.model_id,
-                         runtime=self.runtime, meta={"latency_s": round(time.time() - t0, 3)})
+                         runtime=self.runtime, meta=meta)
 
 
 class TransformersBackend(Backend):
@@ -143,7 +150,9 @@ class TransformersBackend(Backend):
         except Exception as e:  # noqa: BLE001
             raise ModelBackendError("transformers generation failed: %s" % e)
         return GenResult(text=text, backend=self.name, is_real=True, model_id=self.model_id,
-                         runtime=self.runtime, meta={"latency_s": round(time.time() - t0, 3)})
+                         runtime=self.runtime,
+                         meta={"latency_s": round(time.time() - t0, 3),
+                               "temperature": max(req.temperature, 1e-6), "max_tokens": req.max_tokens})
 
 
 class DeterministicStubBackend(Backend):
