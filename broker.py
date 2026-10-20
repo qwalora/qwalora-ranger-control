@@ -194,7 +194,8 @@ def _cohort_tag(candidate):
 def _mock_user_id(candidate):
     # Ludus userIDs are short and alnum; derive a stable, cohort-scoped one.
     h = "".join(ch for ch in candidate.handle if ch.isalnum()).upper()
-    sig = hashlib.md5(f"{_cohort_tag(candidate)}:{candidate.handle}".encode()).hexdigest()[:4].upper()
+    sig = hashlib.md5(f"{_cohort_tag(candidate)}:{candidate.handle}".encode(),
+                      usedforsecurity=False).hexdigest()[:4].upper()
     return _cohort_tag(candidate) + "-" + (h[:6] or "RGR") + "-" + sig
 
 

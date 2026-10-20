@@ -533,7 +533,7 @@ def create_app():
     # new deploy is never masked by a stale cached app.css on any origin.
     try:
         _css_bytes = open(os.path.join(app.static_folder, "app.css"), "rb").read()
-        asset_ver = hashlib.md5(_css_bytes).hexdigest()[:10]
+        asset_ver = hashlib.md5(_css_bytes, usedforsecurity=False).hexdigest()[:10]
     except Exception:
         asset_ver = "1"
 
@@ -4703,4 +4703,7 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=True)
+    # Dev convenience runner only; production/RC runs under gunicorn (see Procfile). The Werkzeug
+    # debugger allows arbitrary code execution, so it is OFF unless explicitly opted in locally.
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)),
+            debug=os.environ.get("FLASK_DEBUG") == "1")

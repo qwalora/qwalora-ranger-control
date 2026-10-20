@@ -232,7 +232,7 @@ def _scenario(events, r, clock, candidate_id, board, seed, family, sidx):
         c2 = EXTERNAL_SUS[0]
         for i in range(4):
             m(25 + i * 9, "network.dns", "network", "dns_query", "ws-corp-03",
-              f"query {hashlib.md5(str(i).encode()).hexdigest()[:10]}.{c2} TXT",
+              f"query {hashlib.md5(str(i).encode(), usedforsecurity=False).hexdigest()[:10]}.{c2} TXT",
               {"dns.question.name": f"x{i}.{c2}", "destination.ip": actor_ip})
         m(60, "network.firewall", "network", "firewall_allow", "fw-edge",
           f"ALLOW ws-corp-03 -> {actor_ip}:443 (bytes=84000000)",
