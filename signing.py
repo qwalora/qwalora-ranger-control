@@ -48,6 +48,8 @@ import hashlib
 import json
 import os
 
+import prodconfig
+
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey)
@@ -67,10 +69,23 @@ _cached = {}
 def _legacy_seed():
     raw = os.environ.get("RANGER_SIGNING_KEY")
     if raw:
+        # An explicitly configured key must be well-formed. A malformed value is a misconfiguration,
+        # never silently ignored (which would mask it behind a derived dev key).
         try:
-            return base64.b64decode(raw)[:32]
+            seed = base64.b64decode(raw)
         except Exception:  # noqa: BLE001
-            pass
+            seed = None
+        if seed is None or len(seed) < 32:
+            raise prodconfig.InsecureConfigError(
+                "RANGER_SIGNING_KEY is malformed: expected base64 of a 32-byte Ed25519 seed.")
+        return seed[:32]
+    # No explicit signing material. In production this must fail closed: deriving a signing key from
+    # SECRET_KEY or a hardcoded development literal would make signed evidence forgeable.
+    if prodconfig.is_production():
+        raise prodconfig.InsecureConfigError(
+            "No signing key configured in production. Set RANGER_SIGNING_KEYS (versioned registry) "
+            "or RANGER_SIGNING_KEY (base64 of a 32-byte Ed25519 seed). Derivation from SECRET_KEY or "
+            "a development default is not permitted in production.")
     base = (os.environ.get("SECRET_KEY") or "qwalora-ranger-dev").encode()
     return hashlib.sha256(base).digest()
 
@@ -118,32 +133,67 @@ class _KeyEntry:
 def _build_registry():
     """Build {kid: _KeyEntry} and the active kid from env. Cached; call _reset_registry() in tests."""
     raw = os.environ.get("RANGER_SIGNING_KEYS")
+    single = os.environ.get("RANGER_SIGNING_KEY")
+    # Exactly one source of signing identity. Both set is ambiguous (which key is active?) and fails
+    # closed rather than silently preferring the registry and ignoring RANGER_SIGNING_KEY.
+    if raw and single:
+        raise prodconfig.InsecureConfigError(
+            "Both RANGER_SIGNING_KEYS and RANGER_SIGNING_KEY are set; configure exactly one. Use "
+            "RANGER_SIGNING_KEYS (versioned registry) for rotation, or RANGER_SIGNING_KEY alone.")
     reg = {}
     active = None
     if raw:
-        entries = json.loads(raw)
-        for e in entries:
-            seed = base64.b64decode(e["seed_b64"]) if e.get("seed_b64") else None
-            ke = _KeyEntry(kid=e["kid"], alg=e.get("alg", ALG), state=e["state"],
-                           seed=seed, public_b64=e.get("public_b64"))
-            if ke.kid in reg:
-                raise ValueError("duplicate kid %r in RANGER_SIGNING_KEYS" % ke.kid)
-            reg[ke.kid] = ke
-            if ke.state == STATE_ACTIVE:
-                if active is not None:
-                    raise ValueError("more than one active signing key configured")
-                active = ke.kid
+        # Parse and build defensively: a malformed registry must never surface its content (which
+        # contains private seeds) in an exception message or traceback. Re-raise a sanitized error.
+        try:
+            entries = json.loads(raw)
+            if not isinstance(entries, list):
+                raise ValueError("not a list")
+            for e in entries:
+                seed = base64.b64decode(e["seed_b64"]) if e.get("seed_b64") else None
+                ke = _KeyEntry(kid=e["kid"], alg=e.get("alg", ALG), state=e["state"],
+                               seed=seed, public_b64=e.get("public_b64"))
+                if ke.kid in reg:
+                    raise ValueError("duplicate kid %r" % ke.kid)
+                reg[ke.kid] = ke
+                if ke.state == STATE_ACTIVE:
+                    if active is not None:
+                        raise ValueError("more than one active signing key")
+                    active = ke.kid
+        except prodconfig.InsecureConfigError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never echo the registry content (holds seeds)
+            raise prodconfig.InsecureConfigError(
+                "RANGER_SIGNING_KEYS is malformed or invalid (%s). It must be a JSON array of "
+                "{kid, alg, state, seed_b64|public_b64} with exactly one active key holding a private "
+                "seed." % type(exc).__name__) from None
         if active is None:
-            raise ValueError("RANGER_SIGNING_KEYS defines no active signing key")
+            raise prodconfig.InsecureConfigError("RANGER_SIGNING_KEYS defines no active signing key.")
         if reg[active]._seed is None:
-            raise ValueError("active signing key has no private seed")
+            raise prodconfig.InsecureConfigError("the active signing key has no private seed.")
     else:
         seed = _legacy_seed()
         pub = _pub_b64_of_seed(seed)
         kid = _kid_for_pub(pub)
         reg[kid] = _KeyEntry(kid=kid, alg=ALG, state=STATE_ACTIVE, seed=seed, public_b64=pub)
         active = kid
+    _assert_required_verify_kids(reg)
     return reg, active
+
+
+def _assert_required_verify_kids(reg):
+    """Optionally pin historical verification: if RANGER_SIGNING_VERIFY_KIDS is set (comma-separated
+    kids), every listed kid must be present in the registry in a trusted (non-revoked) state, so a
+    rotation that would silently drop the ability to verify existing evidence fails closed. No-op
+    when unset."""
+    pinned = [k.strip() for k in (os.environ.get("RANGER_SIGNING_VERIFY_KIDS") or "").split(",") if k.strip()]
+    for kid in pinned:
+        ke = reg.get(kid)
+        if ke is None or ke.state not in _VERIFY_TRUSTED:
+            raise prodconfig.InsecureConfigError(
+                "RANGER_SIGNING_VERIFY_KIDS pins a key id that is not present in a trusted state; "
+                "refusing to drop verification of existing evidence. Include every pinned kid as "
+                "active, verify_only, or retired.")
 
 
 def _registry():
@@ -176,6 +226,15 @@ def _install_registry(entries, active_kid):
 
 
 def active_kid():
+    _registry()
+    return _cached["active"]
+
+
+def assert_signing_ready():
+    """Force-build the signing registry so missing, malformed, or (in production) implicitly derived
+    key material fails CLOSED at startup rather than at first sign/verify. Returns the active kid.
+    Never logs or returns key material. Safe to call once during app creation."""
+    _reset_registry()  # ignore any stale cache so the current environment is validated now
     _registry()
     return _cached["active"]
 

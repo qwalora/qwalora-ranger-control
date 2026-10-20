@@ -17,6 +17,29 @@ import random
 
 import pytest
 
+# Several suites set RANGER_ENV (and the other environment markers) at module import or in fixtures to
+# exercise env-gated behavior, and some pop them without restoring. In a full run that leaks across
+# tests: a suite that clears RANGER_ENV before test_strata_s5_board2 runs leaves its signed test
+# activation seeing RANGER_ENV='' and failing. Establish a deterministic session baseline and restore
+# the markers after every test so no test can leak a process-global marker into another. The test
+# suite's intended environment is RANGER_ENV=test (strata test-qual grading requires test/ci); set it
+# as the default without overriding an explicit value. Test-isolation hygiene only; no production code.
+os.environ.setdefault("RANGER_ENV", "test")
+_ENV_MARKERS = ("RANGER_ENV", "APP_ENV", "ENVIRONMENT", "FLASK_ENV")
+
+
+@pytest.fixture(autouse=True)
+def _restore_env_markers():
+    snapshot = {k: os.environ.get(k) for k in _ENV_MARKERS}
+    try:
+        yield
+    finally:
+        for k, v in snapshot.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
 
 def pytest_collection_modifyitems(session, config, items):
     """Phase 1D (Workstream B): a narrowly-scoped, reproducible collection shuffler for test-order
