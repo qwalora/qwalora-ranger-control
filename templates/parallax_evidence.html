@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
+{% block title %}Evidence & publications · PARALLAX · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('evidence', vm) }}
+    <section class="ranges-main">
+      <div class="pxe">
+
+        <div class="pxe-head">
+          <div>
+            <span class="eyebrow"><span class="d"></span>PARALLAX · Evidence &amp; publications</span>
+            <h1 class="pxe-h1">Your signed research evidence</h1>
+            <p class="pxe-sub">Every trial and investigation you run is an immutable, Ed25519-signed,
+              owner-scoped record. This is your own evidence only; nothing here is another researcher's
+              work, and review feedback shown is the authorized feedback on your submissions.</p>
+          </div>
+        </div>
+
+        {% if vm.agg.total %}
+        <div class="verify-banner {{ 'vb-ok' if vm.agg.all_verified else 'vb-warn' }}">
+          {{ ic('shield','ic') }}
+          <div>
+            <b>{% if vm.agg.all_verified %}All {{ vm.agg.total }} records verify{% else %}A record failed signature verification{% endif %}</b>
+            <span>{% if vm.agg.all_verified %}Each record's Ed25519 signature matches its canonical content under a trusted key.{% else %}One or more records did not verify; treat the affected evidence as suspect and contact an administrator.{% endif %}</span>
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="pxe-stats">
+          <div class="pxe-stat"><b>{{ vm.agg.total }}</b><span>Signed records</span></div>
+          <div class="pxe-stat"><b>{{ vm.agg.trials }}</b><span>Trials</span></div>
+          <div class="pxe-stat"><b>{{ vm.agg.investigations }}</b><span>Investigations</span></div>
+          <div class="pxe-stat"><b>{{ vm.agg.pending_review }}</b><span>Awaiting review</span></div>
+          <div class="pxe-stat"><b>{{ vm.agg.reviewed }}</b><span>Reviewed</span></div>
+        </div>
+
+        <div class="pxe-provcard">
+          {% if vm.agg.empirical %}
+          <span class="pill pill-ok"><span class="dot dot-ok"></span>{{ vm.agg.empirical }} empirical</span>
+          {% endif %}
+          {% if vm.agg.simulated %}
+          <span class="pill"><span class="dot"></span>{{ vm.agg.simulated }} simulated</span>
+          {% endif %}
+          <span class="pxe-provnote">Provenance is recorded honestly: a <b>simulated</b> record (deterministic
+            stub, no real model configured here) is explicitly <b>not</b> an empirical finding. Only an
+            <b>infrastructure-backed</b> record is an empirical AI-security finding.</span>
+        </div>
+
+        {% if not vm.agg.total %}
+        <div class="card pxe-card"><div class="pxe-card-b">
+          <div class="empty" style="padding:30px 16px">
+            <span class="ring">{{ ic('inbox','ic') }}</span>
+            <b style="font:600 15px/1.2 var(--f)">No research evidence yet</b>
+            <p class="muted" style="font-size:13px;max-width:440px">Open the research console and run a
+              benign control, then an adversarial trial. Each run is signed and will appear here with its
+              provenance, verification, and review status.</p>
+            <a class="btn btn-primary btn-sm" href="/parallax/workspace">{{ ic('cpu','ic ic-sm') }} Open the research console</a>
+          </div>
+        </div></div>
+        {% else %}
+
+        <div class="card pxe-card">
+          <div class="pxe-card-h">
+            <h2>{{ ic('inbox','ic ic-sm') }} Evidence records</h2>
+            <span class="muted" style="font-size:12px">newest first · {{ vm.agg.total }} records</span>
+          </div>
+          <div class="pxe-card-b">
+            <div class="pxe-list">
+              {% for it in vm.records %}
+              <details class="pxe-item">
+                <summary class="pxe-row">
+                  <span class="pxe-kind pxe-kind-{{ it.kind }}">{{ it.kind }}</span>
+                  <span class="pxe-rid mono">{{ it.run_id }}</span>
+                  <span class="pxe-badges">
+                    {% if it.kind == 'investigation' %}
+                      {% if it.review_status == 'reviewed' %}
+                      <span class="rr-badge" data-s="reviewed"><span class="g"></span>{{ it.decision or 'reviewed' }}</span>
+                      {% else %}
+                      <span class="rr-badge" data-s="pending"><span class="g"></span>awaiting review</span>
+                      {% endif %}
+                    {% elif it.kind == 'trial' %}
+                      {% if it.canary_emitted %}
+                      <span class="pill pill-bad"><span class="dot"></span>boundary violated</span>
+                      {% else %}
+                      <span class="pill pill-ok"><span class="dot dot-ok"></span>boundary preserved</span>
+                      {% endif %}
+                    {% endif %}
+                    <span class="pill {% if it.backend_provenance == 'infrastructure_backed' %}pill-violet{% endif %}"><span class="dot {% if it.backend_provenance == 'infrastructure_backed' %}dot-violet{% endif %}"></span>{{ 'empirical' if it.is_empirical_finding else 'simulated' }}</span>
+                    <span class="pxe-verify" data-ok="{{ 'yes' if it.signature_verifies else 'no' }}"><span class="g"></span>{{ 'signature verifies' if it.signature_verifies else 'UNVERIFIED' }}</span>
+                  </span>
+                  <span class="pxe-when mono dim">{{ it.created_at }}</span>
+                </summary>
+                <div class="pxe-detail">
+                  <dl class="pxe-meta">
+                    <dt>Record id</dt><dd>{{ it.run_id }}</dd>
+                    <dt>Kind</dt><dd>{{ it.kind }}</dd>
+                    <dt>Provenance</dt><dd>{{ it.backend_provenance }}</dd>
+                    <dt>Empirical finding</dt><dd>{{ 'yes' if it.is_empirical_finding else 'no (simulated)' }}</dd>
+                    <dt>Signature</dt><dd>{{ 'verifies under a trusted key' if it.signature_verifies else 'DOES NOT VERIFY' }}</dd>
+                    {% if it.model_id %}<dt>Model</dt><dd>{{ it.model_id }}</dd>{% endif %}
+                    {% if it.record_count is not none %}<dt>Records</dt><dd>{{ it.record_count }}</dd>{% endif %}
+                    {% if it.kind == 'trial' %}
+                    <dt>Condition</dt><dd>{{ it.condition or '-' }}</dd>
+                    <dt>Outcome</dt><dd>{{ it.outcome or '-' }}</dd>
+                    <dt>Canary</dt><dd>{{ 'emitted (unauthorized behavior)' if it.canary_emitted else 'not emitted' }}</dd>
+                    {% elif it.kind == 'investigation' %}
+                    <dt>Bound evidence</dt><dd>{{ it.parent_run or '-' }}</dd>
+                    <dt>Review status</dt><dd>{{ 'reviewed' if it.review_status == 'reviewed' else 'pending review' }}</dd>
+                    <dt>Reviewer decision</dt><dd>{{ it.decision or 'not yet decided' }}</dd>
+                    {% if it.reviewed_at %}<dt>Reviewed at</dt><dd>{{ it.reviewed_at }}</dd>{% endif %}
+                    {% endif %}
+                  </dl>
+
+                  {% if it.kind == 'investigation' and it.feedback %}
+                  <div class="pxe-feedback">
+                    <span class="rr-sec">Reviewer feedback</span>
+                    <div class="rr-obs">{{ it.feedback }}</div>
+                  </div>
+                  {% endif %}
+
+                  {% if it.kind == 'investigation' %}
+                  <div class="pxe-pub">
+                    <span class="rr-sec">Publication readiness</span>
+                    {% if it.decision == 'met' %}
+                    <p class="pxe-pubnote"><span class="pill pill-ok"><span class="dot dot-ok"></span>eligible to propose</span>
+                      A reviewer adjudicated this investigation <b>met</b>. It is eligible to be proposed for
+                      publication to the research library. Publication is an administrator-gated step
+                      (a reviewed <span class="mono">Resource</span>); drafts are never auto-published, and
+                      you cannot self-publish. Published entries appear in the <a href="/resources">resource library</a>.</p>
+                    {% elif it.review_status == 'reviewed' %}
+                    <p class="pxe-pubnote"><span class="pill pill-amber"><span class="dot dot-amber"></span>not eligible</span>
+                      Reviewed as <b>{{ it.decision or 'not met' }}</b>. Not eligible for publication.</p>
+                    {% else %}
+                    <p class="pxe-pubnote"><span class="pill"><span class="dot"></span>pending review</span>
+                      Publication readiness is determined after a reviewer adjudicates this investigation.</p>
+                    {% endif %}
+                  </div>
+                  {% endif %}
+
+                  <div class="pxe-actions">
+                    <a class="btn btn-ghost btn-sm" href="/parallax/research/evidence/{{ it.run_id }}.json">{{ ic('arrow','ic ic-sm') }} Export signed record (JSON)</a>
+                    {% if it.kind == 'trial' %}
+                    <a class="btn btn-ghost btn-sm" href="/parallax/workspace">{{ ic('cpu','ic ic-sm') }} Open in console</a>
+                    {% endif %}
+                  </div>
+                </div>
+              </details>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+        <footer class="afoot" style="text-align:left;padding:22px 0 10px">
+          <span class="mono" style="color:var(--mut);font-size:12px">Qwalora Ranger · PARALLAX · nonproduction · Ed25519-signed evidence · assessment-only · owner-scoped</span>
+        </footer>
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  .pxe{max-width:1120px;margin:0 auto;padding:22px 24px 10px}
+  .pxe-head{margin-bottom:16px}
+  .pxe-h1{font:700 24px/1.1 var(--f);letter-spacing:-.6px;color:var(--ink);margin:10px 0 0}
+  .pxe-sub{color:var(--mut);margin:10px 0 0;max-width:760px;line-height:1.55;font-size:12.5px}
+  .pxe .verify-banner{margin-bottom:16px}
+  .pxe-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+  .pxe-stat{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:3px;background:#fff}
+  .pxe-stat b{font:700 22px/1 var(--f);letter-spacing:-.5px;color:var(--ink)}
+  .pxe-stat span{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
+  .pxe-provcard{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line2);border-radius:12px;background:var(--sub);margin-bottom:16px}
+  .pxe-provnote{font-size:11.5px;color:var(--mut);line-height:1.5;flex:1;min-width:220px}
+  .pxe-card{background:#fff;overflow:hidden;max-width:none;border:1px solid var(--line);box-shadow:none}
+  .pxe-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;border-bottom:1px solid var(--line)}
+  .pxe-card-h h2{display:flex;align-items:center;gap:8px;margin:0;font:600 14px/1 var(--f);letter-spacing:-.2px;color:var(--ink)}
+  .pxe-card-h h2 .ic{color:var(--violet)}
+  .pxe-card-b{padding:12px 14px}
+  .pxe-list{display:flex;flex-direction:column;gap:8px}
+  .pxe-item{border:1px solid var(--line2);border-radius:11px;overflow:hidden;background:#fff}
+  .pxe-item[open]{border-color:var(--violet-100);box-shadow:var(--sh-card)}
+  .pxe-row{display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;list-style:none}
+  .pxe-row::-webkit-details-marker{display:none}
+  .pxe-item>summary:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--violet-100)}
+  .pxe-kind{font:600 10px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;padding:5px 9px;border-radius:6px;background:var(--light);color:var(--mut);white-space:nowrap}
+  .pxe-kind-trial{background:var(--violet-50);color:var(--violet-700)}
+  .pxe-kind-investigation{background:var(--orange-50);color:var(--orange-700)}
+  .pxe-rid{font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pxe-badges{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+  .pxe-verify{display:inline-flex;align-items:center;gap:6px;font:600 10.5px/1 var(--f);letter-spacing:.3px}
+  .pxe-verify .g{width:8px;height:8px;border-radius:50%;flex:none}
+  .pxe-verify[data-ok="yes"]{color:#0f7a48} .pxe-verify[data-ok="yes"] .g{background:#0f7a48}
+  .pxe-verify[data-ok="no"]{color:#c0392b} .pxe-verify[data-ok="no"] .g{background:#c0392b;border-radius:2px}
+  .pxe-when{font-size:11px;white-space:nowrap}
+  .pxe-detail{padding:4px 16px 16px;border-top:1px solid var(--line)}
+  .pxe-meta{display:grid;grid-template-columns:minmax(130px,auto) 1fr;gap:7px 16px;font-size:12.5px;margin:12px 0}
+  .pxe-meta dt{color:var(--mut);white-space:nowrap}
+  .pxe-meta dd{margin:0;font-family:var(--m);color:var(--ink);word-break:break-word}
+  .pxe-feedback{margin:10px 0}
+  .pxe-pub{margin:12px 0 4px;padding-top:10px;border-top:1px dashed var(--line2)}
+  .pxe-pubnote{font-size:12px;color:var(--med);line-height:1.6;margin-top:6px;display:flex;flex-direction:column;gap:6px}
+  .pxe-pubnote .pill{align-self:flex-start}
+  .pxe-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  @media (max-width:860px){.pxe-stats{grid-template-columns:repeat(2,1fr)}
+    .pxe-row{grid-template-columns:1fr;gap:8px}.pxe-badges{justify-content:flex-start}.pxe-when{display:none}}
+</style>
+{% endblock %}

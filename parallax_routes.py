@@ -795,3 +795,96 @@ def register(app, candidate_model=None, db=None, helpers=None):
     app.add_url_rule("/parallax/research/investigation/<run_id>/status",
                      "parallax_research_review_status", parallax_research_review_status,
                      methods=["GET"])
+
+    # ---- Researcher-facing Evidence & Publication Center (nonprod + flag gated) --------------------
+    # A dedicated home for the capability the workspace History tab only hinted at: the researcher's
+    # own signed runs with provenance, cryptographic verification, review/adjudication status, and
+    # publication readiness. READ-ONLY and strictly owner-scoped (reuses store.overview_for /
+    # get_run / review_status_for). It never exposes another researcher's work, never reviewer-only
+    # data beyond the authorized feedback the owner already sees, and has NO publish path:
+    # publication stays an administrator-gated Resource action, surfaced here as read-only status.
+    def _px_nav_vm(c):
+        """The shared candidate app-shell fields for a PARALLAX page (presentation only; entitlement
+        is already enforced by the caller). PARALLAX is the selected program."""
+        import pathways as _pw
+        from models import ProgramMembership as _PM
+        _active = {m.program for m in _PM.query.filter_by(candidate_id=c.id, status="active").all()}
+        _progs = [p for p in _pw.PATHWAYS if p in _active]
+        if "parallax" not in _progs:
+            _progs.append("parallax")
+        _nm = (c.name or c.handle or "?")
+        _ini = "".join(w[0] for w in _nm.split()[:2]).upper() or _nm[:2].upper()
+        return {"name": c.name, "handle": c.handle, "ini": _ini, "status": c.status,
+                "board": getattr(c, "current_board", 1), "programs": _progs,
+                "selected_program": "parallax", "is_dual": len(_progs) > 1,
+                "program_brands": {p: (_pw.branding(p).get("name") or p.upper()) for p in _pw.PATHWAYS}}
+
+    def parallax_research_evidence():
+        if not _nonprod():
+            return ("not found", 404)
+        c = _resolve_candidate()
+        if not c:
+            try:
+                return redirect(url_for("gh_login"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        if not _parallax_member_cid(c.id):
+            try:
+                return redirect(url_for("candidate_me"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        rid = c.github_id or c.handle
+        from parallax.research import store as _rstore
+        items = _rstore.overview_for(db, authenticated_researcher_id=rid)
+        trials = [i for i in items if i["kind"] == "trial"]
+        invs = [i for i in items if i["kind"] == "investigation"]
+        reviewed = [i for i in invs if i.get("review_status") == "reviewed"]
+        pending = [i for i in invs if i.get("review_status") != "reviewed"]
+        met = [i for i in invs if i.get("decision") == "met"]
+        agg = {
+            "total": len(items), "trials": len(trials), "investigations": len(invs),
+            "reviewed": len(reviewed), "pending_review": len(pending), "publishable": len(met),
+            "empirical": sum(1 for i in items if i.get("is_empirical_finding")),
+            "simulated": sum(1 for i in items if i["backend_provenance"] == "simulated"),
+            "all_verified": (all(i["signature_verifies"] for i in items) if items else True),
+        }
+        vm = _px_nav_vm(c)
+        vm.update(records=items, agg=agg)
+        return render_template("parallax_evidence.html", vm=vm)
+    app.add_url_rule("/parallax/research/evidence", "parallax_research_evidence",
+                     parallax_research_evidence, methods=["GET"])
+
+    def parallax_research_evidence_export(run_id):
+        """Authorized export of the researcher's OWN signed record as downloadable JSON. Owner-scoped
+        (reuses store.get_run, which 404s cross-owner); read-only; no reviewer-only fields."""
+        if not _nonprod():
+            return ("not found", 404)
+        rid = _resolve_candidate_key()
+        if not rid:
+            return jsonify(error="active authenticated researcher session required"), 401
+        from parallax.research import store as _rstore
+        try:
+            run = _rstore.get_run(db, run_id=run_id, authenticated_researcher_id=rid)
+        except _rstore.ResearchStoreError:
+            return jsonify(error="not found"), 404     # never reveal another researcher's run exists
+        if run is None:
+            return jsonify(error="not found"), 404
+        from flask import Response
+        payload = {
+            "run_id": run["run_id"], "researcher_id": run["researcher_id"],
+            "backend_provenance": run["backend_provenance"], "model_id": run["model_id"],
+            "record_count": run["record_count"], "record_hash": run["record_hash"],
+            "signature_verifies": run["signature_verifies"],
+            "is_empirical_finding": run["is_empirical_finding"], "record": run["record"],
+            "assessment_only": True, "pathway_qualified": False,
+            "exported_note": ("Owner-exported signed evidence record. Provenance and empirical status "
+                              "are as recorded; a simulated record is explicitly not an empirical finding."),
+        }
+        body = json.dumps(payload, indent=2, default=str)
+        safe = "".join(ch for ch in run_id if ch.isalnum() or ch in "-_") or "record"
+        resp = Response(body, mimetype="application/json")
+        resp.headers["Content-Disposition"] = 'attachment; filename="parallax-%s.json"' % safe
+        return resp
+    app.add_url_rule("/parallax/research/evidence/<run_id>.json",
+                     "parallax_research_evidence_export", parallax_research_evidence_export,
+                     methods=["GET"])

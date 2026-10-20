@@ -306,6 +306,8 @@
         {% endif %}
 
         {% if vm.selected_program == 'parallax' %}
+        {% set ov = vm.parallax.overview %}
+        {% set stage_label = {'not_started':'Not started','experimenting':'Experimenting','under_review':'Investigation under review','reviewed':'Reviewed'} %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your assignment</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
             <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
@@ -314,28 +316,59 @@
             </div>
             <div>
               <label class="label">Lab access</label>
-              <a href="{{ vm.parallax.workspace_url }}" style="text-decoration:none;display:block;border:1px solid var(--line2);border-radius:10px;padding:14px 16px">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-                  <div><b style="font:600 13.5px/1.2 var(--f);color:var(--ink)">{{ ic('cpu','ic ic-sm') }} Open the research console</b>
-                    <span class="muted" style="font-size:12px;display:block;margin-top:2px">Live model-backed experiments: benign controls, adversarial trials, deterministic evaluation.</span></div>
+              <div class="pxc-links">
+                <a href="{{ vm.parallax.workspace_url }}" class="pxc-link">
+                  <div class="pxc-link-t"><b>{{ ic('cpu','ic ic-sm') }} Research console</b>
+                    <span class="muted">Benign controls, adversarial trials, deterministic evaluation.</span></div>
                   <span class="pill pill-violet"><span class="dot dot-violet"></span>assessment-only</span>
-                </div>
-              </a>
-            </div>
-            <div>
-              <label class="label">History, evidence &amp; submissions</label>
-              <div class="record">
-                <div class="rec-row" style="align-items:center">
-                  <span class="rec-pip"><span>{{ ic('inbox','ic ic-sm') }}</span></span>
-                  <div class="rec-id"><b>Signed research runs</b><span class="muted">Each trial is an Ed25519-signed, owner-scoped evidence record in the workspace History tab.</span></div>
-                </div>
-                <div class="rec-row" style="align-items:center">
-                  <span class="rec-pip"><span>{{ ic('shield','ic ic-sm') }}</span></span>
-                  <div class="rec-id"><b>Investigation submissions</b><span class="muted">Bind a reasoned security analysis to a trial's evidence id and submit it from the console.</span></div>
-                </div>
+                </a>
+                <a href="{{ vm.parallax.evidence_url }}" class="pxc-link">
+                  <div class="pxc-link-t"><b>{{ ic('shield','ic ic-sm') }} Evidence &amp; publications</b>
+                    <span class="muted">Your signed records, verification, review status, publication readiness.</span></div>
+                  {{ ic('arrow','ic ic-sm') }}
+                </a>
               </div>
-              <p class="dim" style="font-size:11.5px;margin-top:6px">Assessment-only. No pathway qualification is issued and no credential is awarded.</p>
             </div>
+          </div>
+        </div>
+
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Research activity</span>
+          {% if ov and ov.total %}<span class="pill {% if ov.stage=='reviewed' %}pill-ok{% elif ov.stage=='under_review' %}pill-amber{% else %}pill-violet{% endif %}" style="flex:none"><span class="dot {% if ov.stage=='reviewed' %}dot-ok{% elif ov.stage=='under_review' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ stage_label[ov.stage] }}</span>{% endif %}</div>
+          <div class="card-body">
+            {% if ov and ov.total %}
+            <div class="pxc-tiles">
+              <div class="pxc-tile"><b>{{ ov.total }}</b><span>Signed records</span></div>
+              <div class="pxc-tile"><b>{{ ov.trials }}</b><span>Trials</span></div>
+              <div class="pxc-tile"><b>{{ ov.investigations }}</b><span>Investigations</span></div>
+              <div class="pxc-tile"><b>{{ ov.pending_review }}</b><span>Awaiting review</span></div>
+              <div class="pxc-tile"><b>{{ ov.reviewed }}</b><span>Reviewed</span></div>
+            </div>
+            <div class="pxc-prov">
+              <span class="verify-banner {{ 'vb-ok' if ov.all_verified else 'vb-warn' }}" style="padding:9px 12px">
+                {{ ic('shield','ic ic-sm') }}<span style="font-size:12px">{% if ov.all_verified %}All {{ ov.total }} records' signatures verify{% else %}A record failed verification — see Evidence{% endif %}</span></span>
+              {% if ov.empirical %}<span class="pill pill-ok"><span class="dot dot-ok"></span>{{ ov.empirical }} empirical</span>{% endif %}
+              {% if ov.simulated %}<span class="pill"><span class="dot"></span>{{ ov.simulated }} simulated</span>{% endif %}
+            </div>
+            <label class="label" style="margin-top:14px">Recent runs</label>
+            <div class="record">
+              {% for it in ov.recent %}
+              <a class="rec-row" href="{{ vm.parallax.evidence_url }}" style="align-items:center;text-decoration:none">
+                <span class="rec-pip {% if it.kind=='investigation' %}t5{% else %}t1{% endif %}">{{ 'I' if it.kind=='investigation' else 'T' }}</span>
+                <div class="rec-id"><b class="mono" style="font-size:12.5px">{{ it.run_id }}</b>
+                  <span class="muted">{{ it.kind }}{% if it.kind=='trial' %} · {{ 'boundary violated' if it.canary_emitted else 'boundary preserved' }}{% elif it.kind=='investigation' %} · {{ 'reviewed: ' ~ (it.decision or 'reviewed') if it.review_status=='reviewed' else 'awaiting review' }}{% endif %}</span></div>
+                <span class="pill {% if it.backend_provenance=='infrastructure_backed' %}pill-violet{% endif %}"><span class="dot {% if it.backend_provenance=='infrastructure_backed' %}dot-violet{% endif %}"></span>{{ 'empirical' if it.is_empirical_finding else 'simulated' }}</span>
+              </a>
+              {% endfor %}
+            </div>
+            <p class="dim" style="font-size:11.5px;margin-top:8px">Assessment-only; no pathway qualification is issued. Full verification and publication readiness in <a href="{{ vm.parallax.evidence_url }}">Evidence &amp; publications</a>.</p>
+            {% else %}
+            <div class="empty" style="padding:24px 16px">
+              <span class="ring">{{ ic('cpu','ic') }}</span>
+              <b style="font:600 15px/1.2 var(--f)">No research runs yet</b>
+              <p class="muted" style="font-size:13px;max-width:420px">Open the research console and run a benign control, then an adversarial trial. Each run is signed and tracked here and in Evidence &amp; publications.</p>
+              <a class="btn btn-primary btn-sm" href="{{ vm.parallax.workspace_url }}">{{ ic('cpu','ic ic-sm') }} Open the research console</a>
+            </div>
+            {% endif %}
           </div>
         </div>
         {% endif %}

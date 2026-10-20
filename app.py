@@ -3879,6 +3879,42 @@ def create_app():
                 "programs": progs, "selected_program": sel,
                 "program_brands": _program_brands(), "is_dual": len(progs) > 1}
 
+    def _parallax_overview(c):
+        """Live, owner-scoped PARALLAX research summary for the researcher command center on /me.
+        Read-only; reuses store.overview_for. Degrades to None if the research store is unavailable so
+        the dashboard always renders."""
+        try:
+            from parallax.research import store as _rstore
+            rid = c.github_id or c.handle
+            items = _rstore.overview_for(db, authenticated_researcher_id=rid)
+        except Exception:  # noqa: BLE001 - the command center must never break the dashboard
+            return None
+        invs = [i for i in items if i["kind"] == "investigation"]
+        pending = [i for i in invs if i.get("review_status") != "reviewed"]
+        reviewed = [i for i in invs if i.get("review_status") == "reviewed"]
+        met = [i for i in invs if i.get("decision") == "met"]
+        if not items:
+            stage = "not_started"
+        elif not invs:
+            stage = "experimenting"
+        elif pending:
+            stage = "under_review"
+        else:
+            stage = "reviewed"
+        return {
+            "total": len(items),
+            "trials": sum(1 for i in items if i["kind"] == "trial"),
+            "investigations": len(invs),
+            "pending_review": len(pending),
+            "reviewed": len(reviewed),
+            "publishable": len(met),
+            "empirical": sum(1 for i in items if i.get("is_empirical_finding")),
+            "simulated": sum(1 for i in items if i["backend_provenance"] == "simulated"),
+            "all_verified": (all(i["signature_verifies"] for i in items) if items else True),
+            "stage": stage,
+            "recent": items[:6],
+        }
+
     def _me_vm(c, selected=None):
         """The candidate dashboard view model. Shared by /me and the admin
         preview so both render exactly what the ranger sees. Program-aware: `programs`
@@ -3945,7 +3981,10 @@ def create_app():
             "requestable": _requestable_programs(c),
             "parallax": {"available": (pathways.PATHWAY_PARALLAX in programs),
                          "workspace_url": "/parallax/workspace",
-                         "brand": _program_brands().get(pathways.PATHWAY_PARALLAX)},
+                         "evidence_url": "/parallax/research/evidence",
+                         "brand": _program_brands().get(pathways.PATHWAY_PARALLAX),
+                         "overview": (_parallax_overview(c)
+                                      if pathways.PATHWAY_PARALLAX in programs else None)},
             "siem_live": SIEM_LIVE,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
@@ -4552,9 +4591,10 @@ def create_app():
                     "granted_by": None, "can_request": (prog in requestable)}
         progs = _effective_programs(c)
         return {"name": c.name, "handle": c.handle, "cohort": c.cohort, "status": c.status,
-                "ini": _initials(c.name), "board": c.current_board,
+                "ini": _initials(c.name), "board": c.current_board, "github_id": c.github_id,
                 "programs": progs, "selected_program": (progs[0] if progs else None),
                 "program_brands": brands, "is_dual": len(progs) > 1,
+                "authorized_brands": [brands[p] for p in progs],
                 "cells": [cell(p) for p in pathways.PATHWAYS],
                 "requested_ok": request.args.get("requested") == "1"}
 

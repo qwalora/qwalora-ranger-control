@@ -160,6 +160,49 @@ def runs_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]]:
              "is_empirical_finding": r.backend_provenance == "infrastructure_backed"} for r in rows]
 
 
+def overview_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]]:
+    """Owner-scoped, READ-ONLY researcher summary of their OWN signed runs, for the researcher
+    command center and evidence center. For each trial/investigation (adjudications, which are
+    reviewer-authored, are excluded) it returns kind, provenance, signature-verify, and - for an
+    investigation - the researcher's OWN review status + authorized feedback (exactly the fields
+    review_status_for already exposes to the owner). It reuses the same owner scope as runs_for and
+    the same sanitization as review_status_for/_evidence_summary: it never returns another
+    researcher's rows, never a signature/key/raw payload, and no reviewer-only data beyond the
+    authorized feedback already visible to the owner. Newest first."""
+    from models import ParallaxResearchRun
+    rows = (ParallaxResearchRun.query.filter_by(researcher_id=authenticated_researcher_id)
+            .order_by(ParallaxResearchRun.created_at.desc()).all())
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        rec = _rec_of(r)
+        kind = _kind_of(rec) or "run"
+        if kind == "adjudication":
+            continue  # reviewer-authored; not part of the researcher's own evidence view
+        verifies = bool(signing.verify(rec, r.signature, kid=r.signing_kid))
+        item = {
+            "run_id": r.run_id, "kind": kind, "parent_run": _parent_of(rec),
+            "backend_provenance": r.backend_provenance,
+            "signature_verifies": verifies,
+            "is_empirical_finding": (r.backend_provenance == "infrastructure_backed" and verifies),
+            "record_count": r.record_count, "model_id": r.model_id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        if kind == "trial":
+            tr = (rec.get("metrics") or {}).get("record") or {}
+            item["outcome"] = tr.get("outcome")
+            item["condition"] = tr.get("condition")
+            item["canary_emitted"] = (tr.get("evaluation") or {}).get("canary")
+        elif kind == "investigation":
+            decisions = _decisions_for(db, r.run_id)
+            latest = decisions[-1] if decisions else None
+            item["review_status"] = "reviewed" if decisions else "pending_review"
+            item["decision"] = latest["decision"] if latest else None
+            item["feedback"] = latest["comment"] if latest else None
+            item["reviewed_at"] = latest["at"] if latest else None
+        out.append(item)
+    return out
+
+
 # =============================================================================================
 # PARALLAX research reviewer workflow (adjudication integrity, review queue, candidate visibility)
 # All functions here are read-only EXCEPT adjudicate_investigation, which persists ONE signed
