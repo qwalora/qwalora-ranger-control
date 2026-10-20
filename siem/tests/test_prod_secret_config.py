@@ -289,6 +289,31 @@ def test_create_app_fails_closed_in_production_without_secret():
     assert "InsecureConfigError" in r.stderr
 
 
+def _run_preflight(env_overrides):
+    env = {k: v for k, v in os.environ.items() if k not in _MANAGED}
+    env["PYTHONPATH"] = ROOT
+    env.update(env_overrides)
+    return subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "preflight_prod_secrets.py")],
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_preflight_gate_rejects_missing_force_flag():
+    # force flag omitted -> deploy gate fails even though secrets are otherwise valid
+    r = _run_preflight({"SECRET_KEY": os.urandom(32).hex(), "RANGER_SIGNING_KEY": _seed_b64()})
+    assert r.returncode == 2 and "RANGER_REQUIRE_SECURE_SECRETS" in r.stdout
+
+
+def test_preflight_gate_rejects_flag_without_valid_secrets():
+    r = _run_preflight({"RANGER_REQUIRE_SECURE_SECRETS": "1"})  # flag set, no SECRET_KEY/signing
+    assert r.returncode == 3 and "FAIL" in r.stdout
+
+
+def test_preflight_gate_passes_with_flag_and_valid_secrets():
+    r = _run_preflight({"RANGER_REQUIRE_SECURE_SECRETS": "1",
+                        "SECRET_KEY": os.urandom(32).hex(), "RANGER_SIGNING_KEY": _seed_b64()})
+    assert r.returncode == 0 and "OK:" in r.stdout
+
+
 def test_create_app_boots_in_production_with_valid_secrets():
     env = {k: v for k, v in os.environ.items() if k not in _MANAGED}
     env["RANGER_ENV"] = "production"

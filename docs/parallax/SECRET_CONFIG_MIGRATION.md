@@ -28,6 +28,24 @@ Because secure mode is opt-in, production MUST set `RANGER_REQUIRE_SECURE_SECRET
 `RANGER_ENV`): a deploy with no marker at all runs in lenient mode. Treat setting the force flag as a
 required line in the production environment template.
 
+## Deployment-time configuration gate (required)
+The application guard fails closed only once secure mode is declared, and secure mode is opt-in, so a
+production deploy that simply omits `RANGER_REQUIRE_SECURE_SECRETS` would boot in lenient mode. The
+application guard alone is therefore not sufficient. Add a required deployment-time gate that refuses
+a production deploy unless the force flag is explicitly present:
+
+- Run `python scripts/preflight_prod_secrets.py` as a mandatory step in the production deploy pipeline
+  (CI job, or a pre-deploy hook), with the production environment variables injected into that step.
+  It exits non-zero (2) when `RANGER_REQUIRE_SECURE_SECRETS=1` is absent, non-zero (3) when the secret
+  or signing contract is not satisfied, and 0 only when the flag is present and secrets validate. It
+  never prints a secret value.
+- Treat a non-zero preflight as a hard stop: do not deploy. This makes the force flag mandatory at
+  deploy time rather than relying on an operator remembering to set it.
+- Optionally also run it as a container entrypoint prefix before gunicorn (e.g.
+  `python scripts/preflight_prod_secrets.py && gunicorn app:app ...`) so the container refuses to
+  start without the flag. Wiring it into the Procfile/start command is a separate, authorized change
+  and is not applied here.
+
 ## Safe migration sequence (operator)
 1. Generate (out of band) a production `SECRET_KEY` and, if using the registry form, a production signing key; store them in the secret manager. Do not commit them. This change set does not generate, replace, or rotate any key automatically.
 2. Preserve historical verification: if production will verify evidence signed under an existing key, include that key in `RANGER_SIGNING_KEYS` as `active` (if still signing with it) or `verify_only`/`retired` (if rotating to a new active key). Never drop a key that signed records you still need to verify. Revoked keys fail closed by design.
