@@ -43,9 +43,13 @@ _PRODUCTION_LIKE = frozenset({
     "ranger", "ranger_prod", "ranger_production", "portal", "production", "prod",
     "qwalora", "qwalora_ranger", "app", "application", "main",
 })
-# Evidence-bearing + authorization tables whose fidelity we care about most.
+# Evidence-bearing + authorization tables whose fidelity we care about most. unit_results and badges
+# are included so a restore proves the qualification/credential surfaces round-trip unchanged (no row
+# gained or lost), supporting the post-restore qualification-isolation check.
 _CORE_TABLES = ("candidates", "program_memberships", "board_results", "qualification_decisions",
-                "parallax_audit_events", "parallax_audit_checkpoints", "parallax_approvals")
+                "unit_results", "badges",
+                "parallax_audit_events", "parallax_audit_checkpoints", "parallax_approvals",
+                "parallax_research_runs")
 
 
 def _log(level, event, **f):
@@ -197,9 +201,93 @@ def compare_counts(target_url, source_url=None, expected=None, tables=_CORE_TABL
     return ok, restored
 
 
+def _require_signing_key():
+    """Restore verification must run with the SAME signing key material that signed the records. If
+    neither RANGER_SIGNING_KEY nor RANGER_SIGNING_KEYS is set, signing.py would synthesize a legacy key
+    from SECRET_KEY and verification could pass under the WRONG key (a false positive). Fail closed."""
+    if not (os.environ.get("RANGER_SIGNING_KEY") or os.environ.get("RANGER_SIGNING_KEYS")):
+        _log("error", "restore.misconfigured",
+             reason="no signing key configured (RANGER_SIGNING_KEY/RANGER_SIGNING_KEYS); refusing to "
+                    "verify under a derived key")
+        raise SystemExit(2)
+
+
+def _verify_research_runs(db):
+    """Re-verify EVERY signed research record from the restored rows: recompute the canonical SHA-256
+    and the Ed25519 signature (kid-aware) for research evidence, investigations, and reviewer
+    adjudications. Returns (ok, summary). Fails closed if any row's hash or signature does not verify."""
+    import hashlib as _h
+    import json as _j
+    import signing
+    from models import ParallaxResearchRun
+    rows = ParallaxResearchRun.query.all()
+    counts = {"total": 0, "trial": 0, "investigation": 0, "adjudication": 0, "other": 0}
+    bad = 0
+    for r in rows:
+        counts["total"] += 1
+        try:
+            rec = _j.loads(r.run_record)
+        except Exception:  # noqa: BLE001
+            bad += 1
+            continue
+        kind = ((rec.get("metrics") or {}).get("kind")
+                or (rec.get("manifest") or {}).get("kind") or "other")
+        counts[kind] = counts.get(kind, 0) + 1 if kind in counts else counts["other"] + 1
+        hash_ok = (_h.sha256(signing.canonical(rec)).hexdigest() == r.record_hash)
+        sig_ok = bool(signing.verify(rec, r.signature, kid=r.signing_kid))
+        if not (hash_ok and sig_ok):
+            bad += 1
+    ok = (bad == 0)
+    _log("info" if ok else "error", "restore.research_signature_integrity",
+         ok=ok, verified=counts["total"], failed=bad,
+         trials=counts.get("trial", 0), investigations=counts.get("investigation", 0),
+         adjudications=counts.get("adjudication", 0))
+    return ok
+
+
+def _public_tables(url):
+    eng = create_engine(url, future=True)
+    with eng.connect() as c:
+        rows = c.execute(text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name")).fetchall()
+    eng.dispose()
+    return sorted(r[0] for r in rows)
+
+
+def verify_schema(target_url, manifest_schema):
+    """Confirm the restored schema matches the schema recorded in the backup manifest. Fails closed on
+    any drift (a table present at backup time missing after restore, or vice versa). Reporting-only
+    when the manifest carries no schema list (older backups), with a clear note."""
+    if not manifest_schema:
+        _log("info", "restore.schema_check", ok=True, note="manifest has no schema_tables; skipped")
+        return True
+    restored = _public_tables(target_url)
+    missing = sorted(set(manifest_schema) - set(restored))   # present at backup, absent after restore
+    extra = sorted(set(restored) - set(manifest_schema))     # unexpected tables after restore
+    ok = not missing and not extra
+    _log("info" if ok else "error", "restore.schema_check",
+         ok=ok, manifest_tables=len(manifest_schema), restored_tables=len(restored),
+         missing=missing, unexpected=extra)
+    return ok
+
+
+def _load_manifest(artifact):
+    path = artifact + ".manifest.json"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception as e:  # noqa: BLE001 - a missing/invalid manifest is handled by callers
+        _log("info", "restore.manifest_note", note="unreadable manifest: %s" % str(e)[:160])
+        return {}
+
+
 def verify_signatures(target_url):
-    """Point the portal app at the restored DB and re-verify the signed audit trail from its rows.
-    Requires the same signing key material (RANGER_SIGNING_KEY/RANGER_SIGNING_KEYS) that signed them."""
+    """Point the portal app at the restored DB and re-verify ALL signed records from the restored rows:
+    the Ed25519 hash-chained governance audit trail AND every research evidence / investigation /
+    reviewer-adjudication record. Requires the same signing key material (RANGER_SIGNING_KEY/
+    RANGER_SIGNING_KEYS) that signed them; a wrong/absent key fails closed."""
+    _require_signing_key()
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -215,15 +303,19 @@ def verify_signatures(target_url):
         with application.app_context():
             n = ParallaxAuditEvent.query.filter_by(stream="parallax-governance").count()
             chain_ok = auditlog.verify_chain(db)
+            # A broken checkpoint stream must fail closed, not be silently downgraded. An empty
+            # checkpoint set is benign (verify_events returns ok); only a raised error or an explicit
+            # ok=False indicates corruption.
             try:
                 ev = audit_integrity.verify_events(db)
                 events_ok = bool(ev.get("ok", True)) if isinstance(ev, dict) else bool(ev)
             except Exception as e:  # noqa: BLE001
-                events_ok = chain_ok  # checkpoint stream may be empty in a given snapshot
-                _log("info", "restore.verify_events_note", note=str(e)[:200])
-        ok = chain_ok and events_ok
+                events_ok = False
+                _log("error", "restore.verify_events_failed", note=str(e)[:200])
+            research_ok = _verify_research_runs(db)
+        ok = chain_ok and events_ok and research_ok
         _log("info" if ok else "error", "restore.signature_integrity",
-             ok=ok, audit_events=n, chain_ok=chain_ok, events_ok=events_ok)
+             ok=ok, audit_events=n, chain_ok=chain_ok, events_ok=events_ok, research_ok=research_ok)
         return ok
     finally:
         if prev_db is None:
@@ -273,15 +365,18 @@ def _safe_unlink(p):
 def run(artifact, target_url, source_url=None, expected_sha=None, expected_counts=None,
         drop_after=True):
     u = guard_disposable(target_url)
+    _require_signing_key()  # fail closed up front rather than after a full decrypt+restore
     ok_sha, _ = verify_ciphertext(artifact, expected_sha)
     if not ok_sha:
         raise SystemExit(4)
+    manifest = _load_manifest(artifact)
     ident, ident_tmp = _identity_file()
     plain = None
     try:
         plain = decrypt(artifact, ident)
         recreate_target(u)
         restore(plain, u)
+        ok_schema = verify_schema(target_url, manifest.get("schema_tables"))
         ok_counts, restored = compare_counts(target_url, source_url, expected_counts)
         ok_sig = verify_signatures(target_url)
         sample_records(target_url)
@@ -300,9 +395,9 @@ def run(artifact, target_url, source_url=None, expected_sha=None, expected_count
                 _log("info", "restore.target_dropped", database=u.database)
             except Exception as e:  # noqa: BLE001
                 _log("info", "restore.target_drop_note", note=str(e)[:200])
-    all_ok = ok_sha and ok_counts and ok_sig
+    all_ok = ok_sha and ok_schema and ok_counts and ok_sig
     _log("info" if all_ok else "error", "restore.verify_complete",
-         ok=all_ok, sha=ok_sha, counts=ok_counts, signatures=ok_sig)
+         ok=all_ok, sha=ok_sha, schema=ok_schema, counts=ok_counts, signatures=ok_sig)
     if not all_ok:
         raise SystemExit(4)
     return {"ok": True, "restored_counts": restored}

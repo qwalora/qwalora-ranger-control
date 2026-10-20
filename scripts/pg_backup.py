@@ -44,9 +44,31 @@ import sys
 import tempfile
 
 try:
+    from sqlalchemy import create_engine, text
     from sqlalchemy.engine import make_url
 except Exception:  # noqa: BLE001 - sqlalchemy is a portal dependency; fail clearly if missing
     make_url = None
+    create_engine = None
+    text = None
+
+
+def _schema_tables(source_url: str):
+    """Best-effort sorted list of public base tables, recorded in the manifest so a restore can verify
+    schema consistency. Returns None (and logs a note) if the schema cannot be read; it never blocks
+    the backup and never logs any row data."""
+    if create_engine is None:
+        return None
+    try:
+        eng = create_engine(source_url, future=True)
+        with eng.connect() as c:
+            rows = c.execute(text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name")).fetchall()
+        eng.dispose()
+        return sorted(r[0] for r in rows)
+    except Exception as e:  # noqa: BLE001
+        _log("info", "backup.schema_note", note="could not read schema: %s" % str(e)[:160])
+        return None
 
 
 def _log(level: str, event: str, **fields) -> None:
@@ -166,7 +188,9 @@ def run_backup(source_url: str, dest_dir: str, recipients: list, *, age_bin: str
     sha = _sha256_file(out_path)
     with open(out_path + ".sha256", "w", encoding="utf-8") as fh:
         fh.write("%s  %s\n" % (sha, os.path.basename(out_path)))
+    schema_tables = _schema_tables(source_url)
     manifest = {
+        "manifest_version": 1,
         "artifact": os.path.basename(out_path),
         "created_utc": ts,
         "label": label or os.environ.get("RANGER_BACKUP_LABEL") or "manual",
@@ -178,6 +202,8 @@ def run_backup(source_url: str, dest_dir: str, recipients: list, *, age_bin: str
         "encryption": "age (X25519 public-key); decryption key held separately",
         "recipients": len(recipients),
         "pg_dump_version": _tool_version(_pg_dump_path()),
+        "schema_tables": schema_tables,
+        "schema_table_count": (len(schema_tables) if schema_tables is not None else None),
     }
     with open(out_path + ".manifest.json", "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)
