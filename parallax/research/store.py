@@ -170,6 +170,14 @@ def overview_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]
     researcher's rows, never a signature/key/raw payload, and no reviewer-only data beyond the
     authorized feedback already visible to the owner. Newest first."""
     from models import ParallaxResearchRun
+    from . import model_backend as _mb
+
+    def _mb_is_validated(mid):
+        try:
+            return _mb.is_validated_model(mid)
+        except Exception:  # noqa: BLE001 - presentation helper must never break the read
+            return False
+
     rows = (ParallaxResearchRun.query.filter_by(researcher_id=authenticated_researcher_id)
             .order_by(ParallaxResearchRun.created_at.desc()).all())
     out: List[Dict[str, Any]] = []
@@ -179,11 +187,23 @@ def overview_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]
         if kind == "adjudication":
             continue  # reviewer-authored; not part of the researcher's own evidence view
         verifies = bool(signing.verify(rec, r.signature, kid=r.signing_kid))
+        real = (r.backend_provenance == "infrastructure_backed")
+        infra_backed = real and verifies
         item = {
             "run_id": r.run_id, "kind": kind, "parent_run": _parent_of(rec),
             "backend_provenance": r.backend_provenance,
             "signature_verifies": verifies,
-            "is_empirical_finding": (r.backend_provenance == "infrastructure_backed" and verifies),
+            "is_empirical_finding": infra_backed,   # retained: means real + signature-verified
+            # Explicit, non-conflated provenance taxonomy for honest presentation:
+            #   execution: did a real model run, or the deterministic stub
+            #   infrastructure_backed: real execution with a verifying signature (evidence-grade)
+            #   measurement: a valid scorable observation vs inconclusive/excluded (trials only)
+            #   model_validated: is the model approved as capable+reviewed for scientific findings
+            #   finding_status: a VALIDATED model + a MEASURED outcome is finding-eligible; a
+            #                   proof-of-concept/unlisted model is never a validated finding
+            "execution": "real-model" if real else "simulated",
+            "infrastructure_backed": infra_backed,
+            "model_validated": _mb_is_validated(r.model_id),
             "record_count": r.record_count, "model_id": r.model_id,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
@@ -192,6 +212,20 @@ def overview_for(db, *, authenticated_researcher_id: str) -> List[Dict[str, Any]
             item["outcome"] = tr.get("outcome")
             item["condition"] = tr.get("condition")
             item["canary_emitted"] = (tr.get("evaluation") or {}).get("canary")
+            item["model_digest"] = (tr.get("model") or {}).get("digest")
+            _scorable = {"boundary_preserved", "successful_unauthorized_behavior"}
+            if not infra_backed:
+                item["measurement"] = "none"
+            elif item["outcome"] in _scorable:
+                item["measurement"] = "measured"
+            elif item["outcome"] == "inconclusive":
+                item["measurement"] = "inconclusive"
+            else:
+                item["measurement"] = "excluded"
+            item["finding_status"] = ("finding-eligible"
+                                      if (item["model_validated"] and item["measurement"] == "measured")
+                                      else ("validated-model" if item["model_validated"]
+                                            else "proof-of-concept"))
         elif kind == "investigation":
             decisions = _decisions_for(db, r.run_id)
             latest = decisions[-1] if decisions else None

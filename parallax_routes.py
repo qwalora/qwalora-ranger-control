@@ -841,12 +841,21 @@ def register(app, candidate_model=None, db=None, helpers=None):
         reviewed = [i for i in invs if i.get("review_status") == "reviewed"]
         pending = [i for i in invs if i.get("review_status") != "reviewed"]
         met = [i for i in invs if i.get("decision") == "met"]
+        real_trials = [i for i in trials if i.get("execution") == "real-model"]
         agg = {
             "total": len(items), "trials": len(trials), "investigations": len(invs),
             "reviewed": len(reviewed), "pending_review": len(pending), "publishable": len(met),
-            "empirical": sum(1 for i in items if i.get("is_empirical_finding")),
+            "real_model": sum(1 for i in items if i.get("execution") == "real-model"),
+            "infrastructure_backed": sum(1 for i in items if i.get("infrastructure_backed")),
             "simulated": sum(1 for i in items if i["backend_provenance"] == "simulated"),
+            "measured": sum(1 for i in trials if i.get("measurement") == "measured"),
+            "inconclusive": sum(1 for i in trials if i.get("measurement") == "inconclusive"),
             "all_verified": (all(i["signature_verifies"] for i in items) if items else True),
+            # caveat trigger: real-model runs from a model NOT approved as validated are measurements,
+            # never established findings
+            "has_unvalidated_real": any(i.get("execution") == "real-model" and not i.get("model_validated")
+                                        for i in items),
+            "has_validated": any(i.get("model_validated") for i in real_trials),
         }
         vm = _px_nav_vm(c)
         vm.update(records=items, agg=agg)

@@ -211,3 +211,17 @@ def from_config(env: Optional[Dict[str, str]] = None) -> Backend:
     if mdir:
         return TransformersBackend(mdir, model_id=env.get("RANGER_RESEARCH_MODEL_ID"))
     return DeterministicStubBackend()
+
+
+def validated_model_ids(env: Optional[Dict[str, str]] = None) -> set:
+    """The set of model ids explicitly approved as VALIDATED (capable + reviewed) for scientific
+    findings, from RANGER_RESEARCH_VALIDATED_MODELS. Empty by default: a proof-of-concept or
+    unlisted model is NOT validated, so its real, infrastructure-backed runs are measurements, never
+    established AI-security findings. A model being real/infrastructure-backed is necessary but not
+    sufficient to be validated."""
+    env = env or os.environ
+    return {x.strip() for x in (env.get("RANGER_RESEARCH_VALIDATED_MODELS") or "").split(",") if x.strip()}
+
+
+def is_validated_model(model_id: Optional[str], env: Optional[Dict[str, str]] = None) -> bool:
+    return bool(model_id) and model_id in validated_model_ids(env)

@@ -346,9 +346,14 @@
             <div class="pxc-prov">
               <span class="verify-banner {{ 'vb-ok' if ov.all_verified else 'vb-warn' }}" style="padding:9px 12px">
                 {{ ic('shield','ic ic-sm') }}<span style="font-size:12px">{% if ov.all_verified %}All {{ ov.total }} records' signatures verify{% else %}A record failed verification — see Evidence{% endif %}</span></span>
-              {% if ov.empirical %}<span class="pill pill-ok"><span class="dot dot-ok"></span>{{ ov.empirical }} empirical</span>{% endif %}
+              {% if ov.real_model %}<span class="pill pill-violet"><span class="dot dot-violet"></span>{{ ov.real_model }} real model</span>{% endif %}
+              {% if ov.measured %}<span class="pill pill-ok"><span class="dot dot-ok"></span>{{ ov.measured }} measured</span>{% endif %}
+              {% if ov.inconclusive %}<span class="pill pill-amber"><span class="dot dot-amber"></span>{{ ov.inconclusive }} inconclusive</span>{% endif %}
               {% if ov.simulated %}<span class="pill"><span class="dot"></span>{{ ov.simulated }} simulated</span>{% endif %}
             </div>
+            {% if ov.has_unvalidated_real %}
+            <p class="dim" style="font-size:11.5px;margin-top:8px"><b>Note:</b> real-model runs here use a model not approved as validated, so they are infrastructure-backed measurements, not established AI-security findings.</p>
+            {% endif %}
             <label class="label" style="margin-top:14px">Recent runs</label>
             <div class="record">
               {% for it in ov.recent %}
@@ -356,7 +361,7 @@
                 <span class="rec-pip {% if it.kind=='investigation' %}t5{% else %}t1{% endif %}">{{ 'I' if it.kind=='investigation' else 'T' }}</span>
                 <div class="rec-id"><b class="mono" style="font-size:12.5px">{{ it.run_id }}</b>
                   <span class="muted">{{ it.kind }}{% if it.kind=='trial' %} · {{ 'boundary violated' if it.canary_emitted else 'boundary preserved' }}{% elif it.kind=='investigation' %} · {{ 'reviewed: ' ~ (it.decision or 'reviewed') if it.review_status=='reviewed' else 'awaiting review' }}{% endif %}</span></div>
-                <span class="pill {% if it.backend_provenance=='infrastructure_backed' %}pill-violet{% endif %}"><span class="dot {% if it.backend_provenance=='infrastructure_backed' %}dot-violet{% endif %}"></span>{{ 'empirical' if it.is_empirical_finding else 'simulated' }}</span>
+                <span class="pill {% if it.execution=='real-model' %}pill-violet{% endif %}"><span class="dot {% if it.execution=='real-model' %}dot-violet{% endif %}"></span>{{ 'real model' if it.execution=='real-model' else 'simulated' }}</span>
               </a>
               {% endfor %}
             </div>

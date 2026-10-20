@@ -44,18 +44,23 @@ os.environ.update(
 
 
 def start_server():
-    p = subprocess.Popen([sys.executable, os.path.join(HERE, "local_runtime", "serve_model.py"),
-                          MODEL_DIR, str(PORT)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for _ in range(60):
+    # Launch the ISOLATED inference worker (separate process; resource limits, timeout, concurrency,
+    # loopback-only, model-version endpoint). Researcher workloads execute here, not in the web app.
+    env = dict(os.environ, MODEL_DIR=MODEL_DIR, WORKER_PORT=str(PORT),
+               WORKER_MEM_LIMIT_MB=os.environ.get("WORKER_MEM_LIMIT_MB", "6144"),
+               WORKER_MAX_CONCURRENCY=os.environ.get("WORKER_MAX_CONCURRENCY", "1"),
+               WORKER_GEN_TIMEOUT_S=os.environ.get("WORKER_GEN_TIMEOUT_S", "30"))
+    p = subprocess.Popen([sys.executable, os.path.join(HERE, "inference_worker", "worker.py")],
+                         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for _ in range(90):
         try:
-            r = urllib.request.Request(BASE + "/api/generate", data=json.dumps({"prompt": "ping"}).encode(),
-                                       headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(r, timeout=5) as resp:
-                json.loads(resp.read())
+            with urllib.request.urlopen(BASE + "/api/version", timeout=5) as resp:
+                ver = json.loads(resp.read())
+            globals()["WORKER_VERSION"] = ver
             return p
         except Exception:
             time.sleep(1)
-    raise SystemExit("model server did not come up")
+    raise SystemExit("inference worker did not come up")
 
 
 def main():
@@ -153,9 +158,10 @@ def main():
             ov = rstore.overview_for(db, authenticated_researcher_id="real-researcher")
 
         results = {
-            "model": {"id": "qwalora-charGPT-tiny", "runtime": "local-http (127.0.0.1)",
+            "model": {"id": "qwalora-charGPT-tiny", "runtime": "isolated-worker (127.0.0.1)",
                       "weights_sha256": open(os.path.join(MODEL_DIR, "weights_sha256.txt")).read().strip(),
                       "config": json.load(open(os.path.join(MODEL_DIR, "model_config.json")))},
+            "worker": globals().get("WORKER_VERSION"),
             "n_trials": len(trials),
             "all_infrastructure_backed": all(t["provenance"] == "infrastructure_backed" for t in trials),
             "all_empirical_flag": all(t["is_empirical"] for t in trials),

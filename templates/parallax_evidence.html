@@ -37,16 +37,35 @@
           <div class="pxe-stat"><b>{{ vm.agg.reviewed }}</b><span>Reviewed</span></div>
         </div>
 
+        {% if vm.agg.has_unvalidated_real %}
+        <div class="verify-banner vb-warn" style="margin-bottom:14px">
+          {{ ic('shield','ic') }}
+          <div><b>Infrastructure-backed measurements, not validated findings</b>
+            <span>These real-model runs used a model that is not approved as validated (capable + reviewed).
+              They are genuine, signed, infrastructure-backed measurements, but an inconclusive run on a
+              non-validated model is <b>not</b> an established AI-security finding. A validated finding
+              needs an approved capable model and an adequate, scorable sample.</span></div>
+        </div>
+        {% endif %}
+
         <div class="pxe-provcard">
-          {% if vm.agg.empirical %}
-          <span class="pill pill-ok"><span class="dot dot-ok"></span>{{ vm.agg.empirical }} empirical</span>
+          {% if vm.agg.real_model %}
+          <span class="pill pill-violet"><span class="dot dot-violet"></span>{{ vm.agg.real_model }} real model</span>
+          {% endif %}
+          {% if vm.agg.measured %}
+          <span class="pill pill-ok"><span class="dot dot-ok"></span>{{ vm.agg.measured }} measured</span>
+          {% endif %}
+          {% if vm.agg.inconclusive %}
+          <span class="pill pill-amber"><span class="dot dot-amber"></span>{{ vm.agg.inconclusive }} inconclusive</span>
           {% endif %}
           {% if vm.agg.simulated %}
           <span class="pill"><span class="dot"></span>{{ vm.agg.simulated }} simulated</span>
           {% endif %}
-          <span class="pxe-provnote">Provenance is recorded honestly: a <b>simulated</b> record (deterministic
-            stub, no real model configured here) is explicitly <b>not</b> an empirical finding. Only an
-            <b>infrastructure-backed</b> record is an empirical AI-security finding.</span>
+          <span class="pxe-provnote">Four honest levels: <b>execution</b> (real model vs deterministic
+            stub), <b>infrastructure-backed evidence</b> (real run with a verifying signature),
+            <b>measurement</b> (a scorable outcome vs inconclusive/excluded), and <b>validated finding</b>
+            (a measured outcome from an approved capable model). A simulated record is never any of these;
+            a real but inconclusive run on a non-validated model is a measurement attempt, not a finding.</span>
         </div>
 
         {% if not vm.agg.total %}
@@ -88,7 +107,10 @@
                       <span class="pill pill-ok"><span class="dot dot-ok"></span>boundary preserved</span>
                       {% endif %}
                     {% endif %}
-                    <span class="pill {% if it.backend_provenance == 'infrastructure_backed' %}pill-violet{% endif %}"><span class="dot {% if it.backend_provenance == 'infrastructure_backed' %}dot-violet{% endif %}"></span>{{ 'empirical' if it.is_empirical_finding else 'simulated' }}</span>
+                    <span class="pill {% if it.execution == 'real-model' %}pill-violet{% endif %}"><span class="dot {% if it.execution == 'real-model' %}dot-violet{% endif %}"></span>{{ 'real model' if it.execution == 'real-model' else 'simulated' }}</span>
+                    {% if it.kind == 'trial' and it.measurement %}
+                    <span class="pill {% if it.measurement == 'measured' %}pill-ok{% elif it.measurement == 'inconclusive' %}pill-amber{% endif %}"><span class="dot {% if it.measurement == 'measured' %}dot-ok{% elif it.measurement == 'inconclusive' %}dot-amber{% endif %}"></span>{{ it.measurement }}</span>
+                    {% endif %}
                     <span class="pxe-verify" data-ok="{{ 'yes' if it.signature_verifies else 'no' }}"><span class="g"></span>{{ 'signature verifies' if it.signature_verifies else 'UNVERIFIED' }}</span>
                   </span>
                   <span class="pxe-when mono dim">{{ it.created_at }}</span>
@@ -97,10 +119,11 @@
                   <dl class="pxe-meta">
                     <dt>Record id</dt><dd>{{ it.run_id }}</dd>
                     <dt>Kind</dt><dd>{{ it.kind }}</dd>
-                    <dt>Provenance</dt><dd>{{ it.backend_provenance }}</dd>
-                    <dt>Empirical finding</dt><dd>{{ 'yes' if it.is_empirical_finding else 'no (simulated)' }}</dd>
-                    <dt>Signature</dt><dd>{{ 'verifies under a trusted key' if it.signature_verifies else 'DOES NOT VERIFY' }}</dd>
-                    {% if it.model_id %}<dt>Model</dt><dd>{{ it.model_id }}</dd>{% endif %}
+                    <dt>Execution</dt><dd>{{ 'real model' if it.execution == 'real-model' else 'deterministic stub (simulated)' }}</dd>
+                    <dt>Evidence</dt><dd>{{ 'infrastructure-backed; signature verifies' if it.infrastructure_backed else ('real run, signature DOES NOT VERIFY' if it.execution == 'real-model' else 'simulated; not infrastructure-backed') }}</dd>
+                    {% if it.kind == 'trial' %}<dt>Measurement</dt><dd>{{ it.measurement }}{% if it.measurement == 'inconclusive' %} (no scorable observation){% endif %}</dd>{% endif %}
+                    <dt>Finding status</dt><dd>{% if it.finding_status == 'finding-eligible' %}measured outcome from a validated model (finding-eligible){% elif it.finding_status == 'validated-model' %}validated model{% else %}proof-of-concept model — NOT a validated AI-security finding{% endif %}</dd>
+                    {% if it.model_id %}<dt>Model</dt><dd>{{ it.model_id }}{% if it.model_digest %} · {{ it.model_digest[:16] }}{% endif %}</dd>{% endif %}
                     {% if it.record_count is not none %}<dt>Records</dt><dd>{{ it.record_count }}</dd>{% endif %}
                     {% if it.kind == 'trial' %}
                     <dt>Condition</dt><dd>{{ it.condition or '-' }}</dd>

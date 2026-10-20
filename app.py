@@ -3901,16 +3901,21 @@ def create_app():
             stage = "under_review"
         else:
             stage = "reviewed"
+        trials = [i for i in items if i["kind"] == "trial"]
         return {
             "total": len(items),
-            "trials": sum(1 for i in items if i["kind"] == "trial"),
+            "trials": len(trials),
             "investigations": len(invs),
             "pending_review": len(pending),
             "reviewed": len(reviewed),
             "publishable": len(met),
-            "empirical": sum(1 for i in items if i.get("is_empirical_finding")),
+            "real_model": sum(1 for i in items if i.get("execution") == "real-model"),
+            "measured": sum(1 for i in trials if i.get("measurement") == "measured"),
+            "inconclusive": sum(1 for i in trials if i.get("measurement") == "inconclusive"),
             "simulated": sum(1 for i in items if i["backend_provenance"] == "simulated"),
             "all_verified": (all(i["signature_verifies"] for i in items) if items else True),
+            "has_unvalidated_real": any(i.get("execution") == "real-model" and not i.get("model_validated")
+                                        for i in items),
             "stage": stage,
             "recent": items[:6],
         }

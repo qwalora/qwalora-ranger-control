@@ -63,3 +63,53 @@ def test_stub_run_is_simulated_never_empirical():
     assert rec["backend_provenance"] == "simulated"
     assert rec["backend_is_real"] is False
     assert "evidence_hash" in rec and rec["evidence_hash"]
+
+
+def _persist_trial(researcher_id, *, is_real, outcome, model_id="cap-model"):
+    from models import db
+    from parallax.research import store as rstore
+    camp = {"manifest": {"kind": "trial",
+                         "backend": {"is_real": is_real, "model_id": model_id, "runtime": "http",
+                                     "backend": "http"},
+                         "n_records": 1},
+            "metrics": {"kind": "trial", "record": {"outcome": outcome, "condition": "baseline_benign",
+                                                    "evaluation": {"canary": False},
+                                                    "model": {"digest": "deadbeef" * 8}}}}
+    return rstore.persist_run(db, researcher_id=researcher_id, campaign=camp)
+
+
+def test_provenance_taxonomy_does_not_call_poc_a_finding(seeded, monkeypatch):
+    """A real-model but inconclusive run on a NON-validated model is an infrastructure-backed
+    measurement, never a validated finding. A measured outcome on a VALIDATED model is finding-eligible."""
+    import app as A
+    from models import db
+    from parallax.research import store as rstore
+    rid = "taxonomy-researcher"
+    monkeypatch.delenv("RANGER_RESEARCH_VALIDATED_MODELS", raising=False)
+    with A.app.app_context():
+        _persist_trial(rid, is_real=True, outcome="inconclusive")   # real, not validated, inconclusive
+        _persist_trial(rid, is_real=True, outcome="boundary_preserved")  # real, measured
+        _persist_trial(rid, is_real=False, outcome="boundary_preserved")  # simulated stub
+        items = rstore.overview_for(db, authenticated_researcher_id=rid)
+    by_outcome = {}
+    for i in items:
+        by_outcome.setdefault((i["execution"], i.get("outcome")), i)
+    real_incon = by_outcome[("real-model", "inconclusive")]
+    assert real_incon["infrastructure_backed"] is True
+    assert real_incon["measurement"] == "inconclusive"
+    assert real_incon["model_validated"] is False
+    assert real_incon["finding_status"] == "proof-of-concept"      # NOT a finding
+    real_measured = by_outcome[("real-model", "boundary_preserved")]
+    assert real_measured["measurement"] == "measured"
+    assert real_measured["finding_status"] == "proof-of-concept"   # measured but model not validated
+    sim = by_outcome[("simulated", "boundary_preserved")]
+    assert sim["execution"] == "simulated" and sim["infrastructure_backed"] is False
+
+    # once the model is approved as validated, a measured outcome becomes finding-eligible
+    monkeypatch.setenv("RANGER_RESEARCH_VALIDATED_MODELS", "cap-model")
+    with A.app.app_context():
+        items2 = rstore.overview_for(db, authenticated_researcher_id=rid)
+    fm = [i for i in items2 if i["execution"] == "real-model" and i.get("outcome") == "boundary_preserved"][0]
+    assert fm["model_validated"] is True and fm["finding_status"] == "finding-eligible"
+    fi = [i for i in items2 if i["execution"] == "real-model" and i.get("outcome") == "inconclusive"][0]
+    assert fi["finding_status"] == "validated-model"   # validated model, but no scorable measurement
