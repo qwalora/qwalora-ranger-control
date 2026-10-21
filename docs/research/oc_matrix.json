@@ -1,0 +1,121 @@
+{
+  "nominal": {
+    "type_I_one_sided": 0.025,
+    "coverage95": 0.95,
+    "equiv_FPR_target": 0.05
+  },
+  "settings": {
+    "n_sims_type_power": 600,
+    "n_perm": 500,
+    "n_sims_cover_equiv": 2500,
+    "seed": 20260101,
+    "margin": 0.1,
+    "meaningful_rd": 0.1
+  },
+  "rows": [
+    {
+      "n_tasks": 24,
+      "task_sd": 0.05,
+      "p_control": 0.02,
+      "type_I_perm": 0.0583,
+      "type_I_mcse": 0.0096,
+      "power_perm_at_0.10": 0.9417,
+      "power_mcse": 0.0096,
+      "coverage95_t": 0.9308,
+      "coverage_mcse": 0.0051,
+      "equiv_FPR_t_outside_margin": 0.0004,
+      "equiv_FPR_mcse": 0.0004
+    },
+    {
+      "n_tasks": 24,
+      "task_sd": 0.05,
+      "p_control": 0.1,
+      "type_I_perm": 0.0483,
+      "type_I_mcse": 0.0088,
+      "power_perm_at_0.10": 0.8133,
+      "power_mcse": 0.0159,
+      "coverage95_t": 0.9432,
+      "coverage_mcse": 0.0046,
+      "equiv_FPR_t_outside_margin": 0.0016,
+      "equiv_FPR_mcse": 0.0008
+    },
+    {
+      "n_tasks": 24,
+      "task_sd": 0.1,
+      "p_control": 0.02,
+      "type_I_perm": 0.04,
+      "type_I_mcse": 0.008,
+      "power_perm_at_0.10": 0.6283,
+      "power_mcse": 0.0197,
+      "coverage95_t": 0.8948,
+      "coverage_mcse": 0.0061,
+      "equiv_FPR_t_outside_margin": 0.006,
+      "equiv_FPR_mcse": 0.0015
+    },
+    {
+      "n_tasks": 24,
+      "task_sd": 0.1,
+      "p_control": 0.1,
+      "type_I_perm": 0.0433,
+      "type_I_mcse": 0.0083,
+      "power_perm_at_0.10": 0.61,
+      "power_mcse": 0.0199,
+      "coverage95_t": 0.9432,
+      "coverage_mcse": 0.0046,
+      "equiv_FPR_t_outside_margin": 0.0032,
+      "equiv_FPR_mcse": 0.0011
+    },
+    {
+      "n_tasks": 48,
+      "task_sd": 0.05,
+      "p_control": 0.02,
+      "type_I_perm": 0.03,
+      "type_I_mcse": 0.007,
+      "power_perm_at_0.10": 0.9967,
+      "power_mcse": 0.0024,
+      "coverage95_t": 0.9132,
+      "coverage_mcse": 0.0056,
+      "equiv_FPR_t_outside_margin": 0.0,
+      "equiv_FPR_mcse": 0.0
+    },
+    {
+      "n_tasks": 48,
+      "task_sd": 0.05,
+      "p_control": 0.1,
+      "type_I_perm": 0.0383,
+      "type_I_mcse": 0.0078,
+      "power_perm_at_0.10": 0.975,
+      "power_mcse": 0.0064,
+      "coverage95_t": 0.9508,
+      "coverage_mcse": 0.0043,
+      "equiv_FPR_t_outside_margin": 0.0,
+      "equiv_FPR_mcse": 0.0
+    },
+    {
+      "n_tasks": 48,
+      "task_sd": 0.1,
+      "p_control": 0.02,
+      "type_I_perm": 0.0317,
+      "type_I_mcse": 0.0071,
+      "power_perm_at_0.10": 0.88,
+      "power_mcse": 0.0133,
+      "coverage95_t": 0.8132,
+      "coverage_mcse": 0.0078,
+      "equiv_FPR_t_outside_margin": 0.0032,
+      "equiv_FPR_mcse": 0.0011
+    },
+    {
+      "n_tasks": 48,
+      "task_sd": 0.1,
+      "p_control": 0.1,
+      "type_I_perm": 0.0233,
+      "type_I_mcse": 0.0062,
+      "power_perm_at_0.10": 0.8667,
+      "power_mcse": 0.0139,
+      "coverage95_t": 0.9468,
+      "coverage_mcse": 0.0045,
+      "equiv_FPR_t_outside_margin": 0.0012,
+      "equiv_FPR_mcse": 0.0007
+    }
+  ]
+}

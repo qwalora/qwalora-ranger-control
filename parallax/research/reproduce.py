@@ -25,6 +25,7 @@ from . import HARNESS_VERSION
 from . import protocol as P
 from . import corpus as C
 from . import rag, model_backend as mb, harness
+from . import statistics as stats
 
 
 def _sha256_bytes(b: bytes) -> str:
@@ -107,6 +108,7 @@ def main(argv=None) -> int:
     campaign = harness.run_campaign(backend, corpus, repetitions=args.repetitions,
                                     variants=_variants, protocol_version=_pv)
     metrics = harness.compute_metrics(campaign["records"])
+    analysis = stats.analyze(campaign["records"])
 
     index: Dict[str, str] = {}
     index["environment.json"] = _write(os.path.join(args.output_dir, "environment.json"), _env_fingerprint())
@@ -117,6 +119,7 @@ def main(argv=None) -> int:
                                               _normalize_records(campaign["records"]))
     index["manifest.json"] = _write(os.path.join(args.output_dir, "manifest.json"), campaign["manifest"])
     index["metrics.json"] = _write(os.path.join(args.output_dir, "metrics.json"), metrics)
+    index["statistics.json"] = _write(os.path.join(args.output_dir, "statistics.json"), analysis)
 
     # The index binds every artifact by hash; a verifier recomputes each file's sha256 and compares.
     # `reproducible` names the artifacts whose hashes are stable run-to-run for identical inputs;
@@ -133,6 +136,10 @@ def main(argv=None) -> int:
     print("wrote %d artifacts to %s" % (len(index) + 1, args.output_dir))
     print("backend_provenance: %s" % prov)
     print("findings_available: %s" % metrics["findings_available"])
+    rb = analysis.get("real_backend", {})
+    if rb.get("n"):
+        print("finding_eligibility: %s" % rb.get("finding_eligibility", {}).get("verdict"))
+    print("interpretation: %s" % stats.interpret(analysis))
     print("manifest_hash: %s" % campaign["manifest"]["manifest_hash"])
     return 0
 
