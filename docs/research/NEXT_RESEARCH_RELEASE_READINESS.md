@@ -100,3 +100,42 @@ authorization:
   readiness assessment and PR #4 integration plan.
 - No fabricated experiments, findings, or measurements; no infrastructure; no signing/baseline/
   historical changes; PR #4 left open and unmerged.
+
+## 6. v2 revision: scientific-validation gate (addressing peer-review critique)
+
+The first implementation was reclassified from "promising" to "not yet publication-ready" and
+revised (analysis version `px-stats-v2`, `parallax/research/statistics.py`). Each raised issue is
+addressed; see `PARALLAX_STATISTICAL_ANALYSIS_PLAN.md` for the full plan.
+
+1. negative_result corrected. Failure to reject H0 is no longer read as "defense held." Three cases
+   are distinguished: `inconclusive` (interval admits negligible and meaningful effects),
+   `bounded_small_effect` (effect bounded below the meaningful size, incl. the exact zero-event
+   bound), and `equivalence_supported` (TOST: 90% CI within the margin, from a real variance).
+2. Cell estimand fixed. The primary estimand is the per-ATTEMPT rate, not "any repetition succeeds"
+   (which grows with repetition count R). Per-cell proportions are reported separately as an R-aware
+   secondary, with a nondeterminism flag on within-cell disagreement.
+3. Dependence handled. Attack and control are paired by task; the primary analysis is task-blocked
+   (tasks are the replicate units). Unstratified Fisher/Newcombe is demoted to a flagged secondary
+   sensitivity analysis.
+4. Power replaces the arbitrary count. The `MIN_CELLS=10` gate is removed; eligibility is driven by a
+   precision target (CI half-width) plus a two-proportion power/sample-size calculation with
+   documented delta, alpha, and power. Degenerate zero-variance intervals do not count as precise.
+5. Exclusions, ambiguity, multiplicity, CI interpretation, reproducibility: exclusion rate + worst/
+   best-case sensitivity bounds; inconclusive-as-success sensitivity; Holm-Bonferroni across
+   categories; frequentist CI interpretation stated; nondeterminism and digest assumptions surfaced.
+6. Stimulus expansion is preregistered from the power calculation, never tuned on observed results.
+7. Independent validation added: cross-checks vs `scipy.stats` (Fisher, t.ppf, norm.ppf, Wilson via
+   binomtest) plus hand-computed references. 19 statistics tests; research regression 60 passed.
+8. Reviewer-ready SAP delivered (`PARALLAX_STATISTICAL_ANALYSIS_PLAN.md`): outcomes, units,
+   hypotheses, estimand, effect sizes, stopping rules, exclusions, multiplicity, equivalence, limits.
+
+Scientific-readiness: analysis methodology is reviewer-defensible and cross-validated (READY); no
+empirical finding is claimed (NOT ESTABLISHED) pending a validated capable model and a preregistered
+expanded stimulus pool. Passing software tests is explicitly not treated as scientific validation.
+
+## 7. Draft pull request
+
+`feature/parallax-research-statistics` is to be opened as a DRAFT PR into
+`integration/parallax-research-platform` (no merge, no deploy). It touches only
+`parallax/research/*`, `tests/`, and `docs/research/*`; it changes no signing, per-record taxonomy,
+historical evidence, entitlement, or infrastructure. It is independent of PR #4 and can land first.

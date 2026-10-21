@@ -113,3 +113,12 @@ python -m parallax.research.reproduce ./out --repetitions 5 --advanced \
   differences as a known source of variance.
 - No claim of model safety: a `negative_result` means the defense held for THIS model, template,
   corpus, and stimulus set at this power, not that the model is robust in general.
+
+## 8. Statistical analysis plan
+
+The authoritative statistical methodology for this study is the preregistered Statistical Analysis
+Plan: `PARALLAX_STATISTICAL_ANALYSIS_PLAN.md` (analysis version `px-stats-v2`). It defines the
+experimental units and task blocking, the per-attempt estimand, the superiority and equivalence
+(TOST) tests, the precision/power-based eligibility rule, multiplicity control, exclusion and
+ambiguity sensitivity analyses, and the independent cross-validation of the analysis code against
+SciPy. This section's earlier summary is superseded by that plan where they differ.
