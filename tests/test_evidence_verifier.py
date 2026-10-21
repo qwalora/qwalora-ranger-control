@@ -572,16 +572,18 @@ def test_fL_offplan_exclusion_is_a_violation_and_blocks(tmp_path):
 
 # --- F-G: trust basis records anchors and gates the independent-validation claim ---------------
 
-def test_fG_trust_basis_requires_external_anchors(tmp_path):
+def test_fG_trust_basis_records_anchors_without_claiming_independence(tmp_path):
     cdir, r, recs, plan = _build(tmp_path)
     sigs, trusted, _, _ = _sign_all(recs)
-    # full anchors -> independent validation asserted
+    # full anchors -> anchors_supplied True, but the tool NEVER attests independence/custody
     rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
-    assert rep["trust_basis"]["independent_validation"] is True
+    assert rep["trust_basis"]["anchors_supplied"] is True
+    assert rep["trust_basis"]["independence_attested_by_tool"] is False   # key: no over-claim
     assert rep["trust_basis"]["custody_requirement"]
-    # no plan and no keys -> cannot be called independent validation
+    # no plan and no keys -> anchors not even supplied
     rep2 = V.verify_campaign(cdir, trusted_keys=[], signatures={}, expected_plan=None)
-    assert rep2["trust_basis"]["independent_validation"] is False
-    # keys but no plan -> still not independent (completeness not independently established)
+    assert rep2["trust_basis"]["anchors_supplied"] is False
+    assert rep2["trust_basis"]["independence_attested_by_tool"] is False
+    # keys but no plan -> anchors incomplete
     rep3 = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=None)
-    assert rep3["trust_basis"]["independent_validation"] is False
+    assert rep3["trust_basis"]["anchors_supplied"] is False

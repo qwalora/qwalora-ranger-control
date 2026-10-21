@@ -84,8 +84,9 @@ def main(argv=None) -> int:
     print("config_consistency:    distinct=%d homogeneous=%s matches_expected=%s"
           % (cc["distinct_configs"], cc["homogeneous"], cc["matches_expected"]))
     tb = report["trust_basis"]
-    print("trust_basis:           independent_validation=%s (keys=%s plan=%s)"
-          % (tb["independent_validation"], tb["trusted_keys_supplied"], tb["plan_supplied"]))
+    print("trust_basis:           anchors_supplied=%s (keys=%s plan=%s); independence_attested_by_tool=%s"
+          % (tb["anchors_supplied"], tb["trusted_keys_supplied"], tb["plan_supplied"],
+             tb["independence_attested_by_tool"]))
     print("committed_state:       %s" % report.get("committed_state"))
     if v["campaign_complete"].get("state_disagreement"):
         print("    ! %s" % v["campaign_complete"]["state_disagreement"])

@@ -365,21 +365,25 @@ def verify_campaign(evidence_dir: str, *,
     eligibility = _assess_eligibility(records, ev["manifest"], completion, integrity_ok,
                                       reconciliation, exclusion_rate_ceiling, config_consistency)
 
-    # Trust basis (F-G): record which anchors the caller supplied. The tool cannot verify their
-    # CUSTODY; it states the requirement. A run is only an INDEPENDENT validation when both a trusted
-    # key set and a preregistered plan were supplied from a source independent of the evidence. Absent
-    # those, the result is self-attested or partial and must not be read as independent validation.
+    # Trust basis (F-G): record which anchors the caller SUPPLIED. The tool CANNOT verify their custody
+    # or source, so it never claims the run was independently validated: `anchors_supplied` means only
+    # that a key set and a plan were provided, not that they came from an independent source.
+    # `independence_attested_by_tool` is always False by construction, because establishing that the
+    # anchors are independent of the evidence is an external control the tool has no way to check (keys
+    # and a plan regenerated from the same untrusted evidence would set `anchors_supplied` True too).
     trust_basis = {
         "trusted_keys_supplied": bool(trusted),
         "plan_supplied": expected_plan is not None,
         "commitments_supplied": bool(committed_commitments),
         "expected_config_identity_supplied": expected_config_identity is not None,
-        "independent_validation": bool(trusted) and expected_plan is not None,
+        "anchors_supplied": bool(trusted) and expected_plan is not None,
+        "independence_attested_by_tool": False,
         "custody_requirement": ("trusted_keys, expected_plan, committed_commitments and "
                                 "expected_config_identity MUST be supplied from a source controlled "
                                 "independently of this evidence directory (e.g. preregistered/escrowed "
-                                "at campaign time). A manifest generated solely from the same evidence "
-                                "is NOT an independent trust anchor."),
+                                "at campaign time). A manifest or anchors generated from the same "
+                                "evidence are NOT independent; the tool records that anchors were "
+                                "supplied but cannot and does not attest that they are independent."),
     }
 
     # An off-plan exclusion means the failure ledger references a trial that is not in the preregistered
