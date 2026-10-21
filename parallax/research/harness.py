@@ -19,6 +19,7 @@ import signing
 from . import HARNESS_VERSION
 from . import protocol as P
 from . import rag, evaluator as E
+from . import provenance
 from .corpus import Corpus
 from .model_backend import Backend, ModelBackendError, PROMPT_TEMPLATE_VERSION
 
@@ -109,6 +110,18 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
         "repetition": repetition,
         "timing": {"started": t0, "duration_s": round(time.time() - t0, 3)},
     }
+    # Comprehensive, honest run metadata. A NEW field only: historical records and their signatures
+    # are unaffected; the decode params the harness set are marked configured, the rest honest-null.
+    finished = time.time()
+    record["provenance"] = provenance.build_provenance(
+        backend_identity=ident, gen_meta=gen_meta,
+        configured_decoding={"temperature": gen_meta.get("temperature"),
+                             "max_tokens": gen_meta.get("max_tokens")},
+        study_versions={"protocol_version": protocol_version, "harness_version": HARNESS_VERSION,
+                        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+                        "corpus_version": corpus.version, "corpus_hash": corpus.content_hash()},
+        experiment_id=exp_id, started=t0, finished=finished,
+        outcome=ev["outcome"], infra_error=infra_error)
     record["evidence_hash"] = _hash({k: record[k] for k in record if k != "evidence_hash"})
     return record
 

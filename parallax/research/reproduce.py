@@ -76,7 +76,12 @@ def _corpus_snapshot(corpus: C.Corpus) -> Dict[str, Any]:
 # a fresh experiment_id (uuid) and wall-clock timing differ on every execution by design. The
 # normalized projection strips them so the SCIENTIFIC content of a run is byte-for-byte reproducible,
 # while the raw records.json retains them as unique per-trial evidence.
-_VOLATILE_RECORD_FIELDS = ("experiment_id", "timing", "evidence_hash")
+# `provenance` is per-run instance metadata (timestamps, runtime/library versions, hardware) that
+# varies run-to-run and across machines, so it is excluded from the byte-for-byte-reproducible
+# normalized projection, exactly like experiment_id and timing. The raw records.json retains the full
+# provenance block as per-trial evidence; the scientifically reproducible fields (model digest,
+# inference params, protocol/corpus/prompt versions) remain in the normalized record.
+_VOLATILE_RECORD_FIELDS = ("experiment_id", "timing", "evidence_hash", "provenance")
 
 
 def _normalize_records(records):
