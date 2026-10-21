@@ -50,6 +50,8 @@ def main(argv=None) -> int:
     ap.add_argument("--signatures")
     ap.add_argument("--plan")
     ap.add_argument("--commitments")
+    ap.add_argument("--expected-config-identity",
+                    help="preregistered config_identity_sha256 every record must match")
     ap.add_argument("--export")
     ap.add_argument("--report-out")
     ap.add_argument("--require-eligible", action="store_true")
@@ -61,7 +63,8 @@ def main(argv=None) -> int:
     commitments = _load_json(args.commitments)
 
     report = V.verify_campaign(args.evidence_dir, trusted_keys=trusted, signatures=signatures,
-                               expected_plan=plan, committed_commitments=commitments)
+                               expected_plan=plan, committed_commitments=commitments,
+                               expected_config_identity=args.expected_config_identity)
 
     if args.report_out:
         with open(args.report_out, "w", encoding="utf-8") as fh:
@@ -77,16 +80,23 @@ def main(argv=None) -> int:
     for r in v["result_eligible"]["reasons"]:
         print("    - %s" % r)
     print("signatures:            %s" % report["signatures"]["summary"])
+    cc = report["config_consistency"]
+    print("config_consistency:    distinct=%d homogeneous=%s matches_expected=%s"
+          % (cc["distinct_configs"], cc["homogeneous"], cc["matches_expected"]))
+    print("committed_state:       %s" % report.get("committed_state"))
+    if v["campaign_complete"].get("state_disagreement"):
+        print("    ! %s" % v["campaign_complete"]["state_disagreement"])
     rec = report["reconciliation"]
-    print("reconciliation:        planned=%s with_record=%s excluded=%s unaccounted=%d double=%d"
+    print("reconciliation:        planned=%s with_record=%s excluded=%s on_plan=%s unaccounted=%d double=%d"
           % (rec.get("planned"), rec.get("with_record"), rec.get("excluded"),
-             len(rec["unaccounted"]), len(rec["double_counted"])))
+             rec.get("excluded_on_plan"), len(rec["unaccounted"]), len(rec["double_counted"])))
 
     if args.export:
         try:
             man = V.build_sanitized_export(args.evidence_dir, args.export, report=report,
                                            signatures=signatures, trusted_keys=trusted,
-                                           expected_plan=plan, committed_commitments=commitments)
+                                           expected_plan=plan, committed_commitments=commitments,
+                                           expected_config_identity=args.expected_config_identity)
         except (V.UnsafeExportPath, V.RedactionFailure) as e:
             print("EXPORT REFUSED: %s" % e, file=sys.stderr)
             return 2

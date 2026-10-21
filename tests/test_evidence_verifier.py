@@ -413,3 +413,138 @@ def test_export_carries_failures_and_checksums(tmp_path):
         import hashlib
         data = open(os.path.join(man["export_dir"], name), "rb").read()
         assert hashlib.sha256(data).hexdigest() == digest
+
+
+# ============================================================================
+# Regression tests added after an independent adversarial review of this tool
+# (findings F-A..F-D). Each reproduces the defect the review confirmed.
+# ============================================================================
+
+def _rehash(rec):
+    from parallax.research.harness import _hash
+    rec["evidence_hash"] = _hash({k: v for k, v in rec.items() if k != "evidence_hash"})
+    return rec
+
+
+# --- F-A: a preserved signature must be verifiable from the export bundle alone ---------------
+
+def test_fA_preserved_signature_verifies_from_sanitized_record_directly(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, pub = _sign_all(recs)
+    man = V.build_sanitized_export(cdir, str(tmp_path / "exp"), signatures=sigs, trusted_keys=trusted,
+                                   expected_plan=plan)
+    san = json.load(open(os.path.join(man["export_dir"], "records_sanitized.json")))
+    # sanitized records must be PRISTINE: no injected binding fields leak into the scientific record
+    assert all("_provenance_binding" not in s for s in san)
+    # for every preserved signature, the matching sanitized record verifies DIRECTLY (no reconstruction)
+    by_eid = {s["experiment_id"]: s for s in san}
+    preserved = [b for b in man["records"] if b["signature"].get("original_signature_preserved")]
+    assert preserved
+    for b in preserved:
+        rec = by_eid[b["experiment_id"]]
+        assert signing.verify(rec, b["signature"]["signature_b64"], public_key_b64_str=pub) is True
+        # and it is byte-identical to the original (its recomputed evidence_hash matches the binding)
+        assert V._recompute_evidence_hash(rec) == b["original_evidence_hash"]
+
+
+# --- F-B: off-plan exclusions must not inflate the on-plan exclusion rate ----------------------
+
+def test_fB_offplan_exclusions_do_not_inflate_rate(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    with open(os.path.join(cdir, "ledger.jsonl"), "a", encoding="utf-8") as fh:
+        for i in range(5):
+            fh.write(json.dumps({"repetition": 99, "condition": "experimental", "task_id": "ghost%d" % i,
+                                 "variant_id": "none", "failure_category": CK.CAT_MODEL,
+                                 "status": "excluded", "error": "x"}) + "\n")
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert len(rep["reconciliation"]["exclusions_off_plan"]) == 5
+    assert rep["reconciliation"]["excluded_on_plan"] == 0
+    assert rep["verdicts"]["result_eligible"]["exclusion_rate"] == 0.0   # off-plan noise cannot move it
+
+
+# --- F-C: disagreement with the producer's committed campaign_state is surfaced ----------------
+
+def test_fC_producer_claims_complete_but_trials_missing(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    _rewrite_records(cdir, recs[:-1])
+    _resync_state(cdir, recs[:-1])          # chain matches the 5 present records...
+    sp = os.path.join(cdir, "state.json")
+    st = json.load(open(sp)); st["campaign_state"] = "completed"; json.dump(st, open(sp, "w"))  # ...but claims done
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert rep["committed_state"] == "completed"
+    assert rep["verdicts"]["campaign_complete"]["complete"] is False
+    assert rep["verdicts"]["campaign_complete"]["state_disagreement"]
+    assert rep["overall"] == "FAIL"
+
+
+# --- F-D: a mid-campaign configuration swap must be detected and block eligibility -------------
+
+def test_fD_midcampaign_config_swap_detected(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    swapped = copy.deepcopy(recs)
+    swapped[-1]["model"]["id"] = "swapped-model"
+    swapped[-1]["provenance"]["model"]["id"] = "swapped-model"
+    _rehash(swapped[-1])
+    _rewrite_records(cdir, swapped)
+    _resync_state(cdir, swapped)
+    fresh, _ = CK.CampaignRunner(cdir, backend=mb.DeterministicStubBackend(),
+                                 corpus=C.default_corpus(), repetitions=1,
+                                 tasks=TASKS, variants=VARIANTS).load_records()
+    sigs = {rec["evidence_hash"]: {"signature_b64": signing.sign(rec), "kid": signing.active_kid()}
+            for rec in fresh}
+    trusted = [{"kid": signing.active_kid(), "public_b64": signing.public_key_b64()}]
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert rep["config_consistency"]["homogeneous"] is False
+    assert rep["config_consistency"]["distinct_configs"] == 2
+    assert rep["verdicts"]["result_eligible"]["eligible"] is False
+    assert any("material configuration" in reason
+               for reason in rep["verdicts"]["result_eligible"]["reasons"])
+
+
+def test_fD_expected_config_identity_mismatch_blocks_eligibility(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan,
+                            expected_config_identity="deadbeef" * 8)
+    assert rep["config_consistency"]["matches_expected"] is False
+    assert any("expected/preregistered config" in reason
+               for reason in rep["verdicts"]["result_eligible"]["reasons"])
+
+
+# --- substitution with a reused valid signature is caught (probe 5 as a regression) ------------
+
+def test_substituted_record_with_reused_signature_is_invalid(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    tampered = copy.deepcopy(recs)
+    reused_sig = signing.sign(tampered[0])            # valid signature over the ORIGINAL record 0
+    tampered[0]["observed_behavior"] = "SUBSTITUTED"  # swap content, keep the old signature
+    _rehash(tampered[0])
+    _rewrite_records(cdir, tampered)
+    _resync_state(cdir, tampered)
+    sigs = {tampered[0]["evidence_hash"]: {"signature_b64": reused_sig, "kid": signing.active_kid()}}
+    for rr in tampered[1:]:
+        sigs[rr["evidence_hash"]] = {"signature_b64": signing.sign(rr), "kid": signing.active_kid()}
+    trusted = [{"kid": signing.active_kid(), "public_b64": signing.public_key_b64()}]
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert rep["signatures"]["summary"][V.SIG_INVALID] == 1
+    assert rep["overall"] == "FAIL"
+
+
+# --- canary token is never redacted (reviewers need to see emission) ---------------------------
+
+def test_canary_token_survives_redaction():
+    out, hits = V._redact_value("Not a problem: INJECTION-OK and visit parallax.railway.internal")
+    assert "INJECTION-OK" in out            # the research signal is preserved
+    assert "railway.internal" not in out    # the infra leak beside it is still removed
+    assert "internal_host" in hits
+
+
+# --- empty preregistered plan cannot be called complete ----------------------------------------
+
+def test_empty_plan_is_not_complete(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=[])
+    assert rep["verdicts"]["campaign_complete"]["complete"] is False

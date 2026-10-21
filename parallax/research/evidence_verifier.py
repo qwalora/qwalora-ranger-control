@@ -229,6 +229,7 @@ def verify_campaign(evidence_dir: str, *,
                     signatures: Optional[Dict[str, Dict[str, Any]]] = None,
                     expected_plan: Optional[List[Any]] = None,
                     committed_commitments: Optional[Dict[str, Dict[str, str]]] = None,
+                    expected_config_identity: Optional[str] = None,
                     exclusion_rate_ceiling: float = 0.20) -> Dict[str, Any]:
     """Full read-only verification of a campaign evidence directory.
 
@@ -345,16 +346,24 @@ def verify_campaign(evidence_dir: str, *,
             rec_out["commitments"] = rc
         per_record.append(rec_out)
 
+    # ---- R4 (cross-record): config-identity homogeneity --------------------------------------
+    # A single campaign must be a like-for-like comparison: every record should share ONE material
+    # configuration. A mid-campaign model/prompt/decoding swap yields >1 distinct config identity and
+    # invalidates cross-condition comparison even when every individual record is intact and signed.
+    config_consistency = _assess_config_consistency(records, expected_config_identity)
+
     # ---- R5 + R7: plan reconciliation ---------------------------------------------------------
     reconciliation = _reconcile(records, ev["ledger"], expected_plan)
 
     # ---- R6: completion vs eligibility --------------------------------------------------------
+    committed_state = (ev["state"] or {}).get("campaign_state")
     integrity_ok = (not corrupted and not duplicates and not ev["load_problems"]
                     and continuous and sig_summary[SIG_INVALID] == 0)
 
-    completion = _assess_completion(records, chain, reconciliation, corrupted, duplicates)
+    completion = _assess_completion(records, chain, reconciliation, corrupted, duplicates,
+                                    committed_state)
     eligibility = _assess_eligibility(records, ev["manifest"], completion, integrity_ok,
-                                      reconciliation, exclusion_rate_ceiling)
+                                      reconciliation, exclusion_rate_ceiling, config_consistency)
 
     overall_pass = (integrity_ok and completion["complete"]
                     and not reconciliation["unaccounted"] and not reconciliation["double_counted"])
@@ -379,6 +388,8 @@ def verify_campaign(evidence_dir: str, *,
             "full_record_mismatch": full_mismatch,
         },
         "reconciliation": reconciliation,
+        "config_consistency": config_consistency,
+        "committed_state": committed_state,
         "records": per_record,
         "verdicts": {
             "integrity_ok": integrity_ok,
@@ -388,6 +399,25 @@ def verify_campaign(evidence_dir: str, *,
         "overall": "PASS" if overall_pass else "FAIL",
     })
     return report
+
+
+def _assess_config_consistency(records: List[Dict[str, Any]],
+                               expected_config_identity: Optional[str]) -> Dict[str, Any]:
+    """Group records by material config identity. A scientifically valid campaign has exactly one
+    config identity across all records (baseline and experimental differ only by injected attack, which
+    is NOT part of config identity). More than one distinct config means a swap occurred mid-campaign."""
+    digests: Dict[str, int] = {}
+    for r in records:
+        d = CM.config_identity_digest(r)
+        digests[d] = digests.get(d, 0) + 1
+    distinct = sorted(digests.keys())
+    homogeneous = len(distinct) <= 1
+    matches_expected = None
+    if expected_config_identity is not None:
+        matches_expected = (len(distinct) == 1 and distinct[0] == expected_config_identity)
+    return {"distinct_configs": len(distinct), "digests": {d[:16]: n for d, n in digests.items()},
+            "homogeneous": homogeneous, "expected_config_identity": expected_config_identity,
+            "matches_expected": matches_expected}
 
 
 def _reconcile(records: List[Dict[str, Any]], ledger: List[Dict[str, Any]],
@@ -408,7 +438,7 @@ def _reconcile(records: List[Dict[str, Any]], ledger: List[Dict[str, Any]],
     out: Dict[str, Any] = {
         "plan_supplied": expected_plan is not None,
         "planned": None, "with_record": len(rec_keys), "excluded": len(excluded_keys),
-        "unaccounted": [], "double_counted": [], "exclusions_off_plan": [],
+        "excluded_on_plan": 0, "unaccounted": [], "double_counted": [], "exclusions_off_plan": [],
     }
     if expected_plan is None:
         # Without a preregistered plan we can still flag record/exclusion contradictions.
@@ -418,6 +448,7 @@ def _reconcile(records: List[Dict[str, Any]], ledger: List[Dict[str, Any]],
 
     planned = {tuple(k) for k in (tuple(x) for x in expected_plan)}
     out["planned"] = len(planned)
+    out["excluded_on_plan"] = len(set(excluded_keys) & planned)
     for k in planned:
         has_rec = k in rec_keys
         has_exc = k in excluded_keys
@@ -432,7 +463,8 @@ def _reconcile(records: List[Dict[str, Any]], ledger: List[Dict[str, Any]],
     return out
 
 
-def _assess_completion(records, chain, reconciliation, corrupted, duplicates) -> Dict[str, Any]:
+def _assess_completion(records, chain, reconciliation, corrupted, duplicates,
+                       committed_state=None) -> Dict[str, Any]:
     reasons: List[str] = []
     if corrupted:
         reasons.append("%d corrupted/unparseable record line(s)" % len(corrupted))
@@ -441,7 +473,10 @@ def _assess_completion(records, chain, reconciliation, corrupted, duplicates) ->
     if not chain["continuous"]:
         reasons.append("checkpoint chain does not match committed head"
                        + (" (reordering detected)" if chain["reordering_detected"] else ""))
+    planned = reconciliation.get("planned")
     if reconciliation["plan_supplied"]:
+        if not planned:
+            reasons.append("preregistered plan is empty: completeness is not meaningfully established")
         if reconciliation["unaccounted"]:
             reasons.append("%d planned trial(s) neither recorded nor ledgered as excluded"
                            % len(reconciliation["unaccounted"]))
@@ -450,13 +485,25 @@ def _assess_completion(records, chain, reconciliation, corrupted, duplicates) ->
     else:
         reasons.append("no preregistered plan supplied: completeness is not independently established")
     complete = (not corrupted and not duplicates and chain["continuous"]
-                and reconciliation["plan_supplied"]
+                and reconciliation["plan_supplied"] and bool(planned)
                 and not reconciliation["unaccounted"] and not reconciliation["double_counted"])
-    return {"complete": complete, "reasons": reasons}
+    # Defense in depth: surface any disagreement with the producer's own committed campaign_state. The
+    # independent plan reconciliation is authoritative; a mismatch is a transparency signal, not proof.
+    state_disagreement = None
+    if committed_state is not None:
+        producer_says_done = (committed_state == "completed")
+        if producer_says_done and not complete:
+            state_disagreement = "producer marked 'completed' but independent verification finds it incomplete"
+            reasons.append(state_disagreement)
+        elif not producer_says_done and complete:
+            state_disagreement = ("producer marked '%s' yet all planned trials reconcile as accounted; "
+                                  "treating as complete on the independent plan" % committed_state)
+    return {"complete": complete, "reasons": reasons, "committed_state": committed_state,
+            "state_disagreement": state_disagreement}
 
 
 def _assess_eligibility(records, manifest, completion, integrity_ok, reconciliation,
-                        ceiling) -> Dict[str, Any]:
+                        ceiling, config_consistency=None) -> Dict[str, Any]:
     """Scientific-result eligibility is STRICTLY stronger than completion and is reported separately: a
     complete campaign on a simulated backend is complete but not eligible (simulated = plumbing only)."""
     reasons: List[str] = []
@@ -470,17 +517,24 @@ def _assess_eligibility(records, manifest, completion, integrity_ok, reconciliat
         reasons.append("no real-backend records (simulated plumbing is never a finding)")
     elif not all_real:
         reasons.append("mixed simulated/real records: not a like-for-like scientific set")
-    # exclusion rate must be within policy so results are not quietly salvaged by dropping trials
+    # a mixed material configuration (model/prompt/decoding swapped mid-campaign) is not comparable
+    if config_consistency is not None:
+        if not config_consistency.get("homogeneous"):
+            reasons.append("multiple material configurations present (%d distinct): not a like-for-like set"
+                           % config_consistency.get("distinct_configs", 0))
+        if config_consistency.get("matches_expected") is False:
+            reasons.append("campaign config identity does not match the expected/preregistered config")
+    # exclusion rate must be within policy so results are not quietly salvaged by dropping trials. Only
+    # ON-PLAN exclusions count toward the rate; off-plan ledger noise cannot move it.
     planned = reconciliation.get("planned")
-    excluded = reconciliation.get("excluded") or 0
-    if planned:
-        rate = excluded / planned
-        if rate > ceiling:
-            reasons.append("exclusion rate %.3f exceeds ceiling %.3f" % (rate, ceiling))
+    excluded_on_plan = reconciliation.get("excluded_on_plan") or 0
+    rate = (excluded_on_plan / planned) if planned else None
+    if planned and rate > ceiling:
+        reasons.append("on-plan exclusion rate %.3f exceeds ceiling %.3f" % (rate, ceiling))
     eligible = not reasons
     return {"eligible": eligible, "reasons": reasons,
             "any_real": any_real, "all_real": all_real,
-            "exclusion_rate": (excluded / planned) if planned else None}
+            "exclusion_rate": rate}
 
 
 # =========================================================================== sanitized export
@@ -647,6 +701,7 @@ def build_sanitized_export(evidence_dir: str, dest_dir: str, *,
                            trusted_keys: Optional[List[Dict[str, Any]]] = None,
                            expected_plan: Optional[List[Any]] = None,
                            committed_commitments: Optional[Dict[str, Dict[str, str]]] = None,
+                           expected_config_identity: Optional[str] = None,
                            allow_ineligible: bool = True) -> Dict[str, Any]:
     """Produce a reviewer-ready, sanitized export bundle bound to the original evidence (R8, R9, R10).
 
@@ -656,7 +711,8 @@ def build_sanitized_export(evidence_dir: str, dest_dir: str, *,
     if report is None:
         report = verify_campaign(evidence_dir, trusted_keys=trusted_keys, signatures=signatures,
                                  expected_plan=expected_plan,
-                                 committed_commitments=committed_commitments)
+                                 committed_commitments=committed_commitments,
+                                 expected_config_identity=expected_config_identity)
     # R10: never export tampered evidence.
     if report["verdicts"]["integrity_ok"] is not True:
         raise RedactionFailure("refusing to export: integrity verification did not pass (%s)"
@@ -673,33 +729,34 @@ def build_sanitized_export(evidence_dir: str, dest_dir: str, *,
 
     for r in ev["records"]:
         eh = r.get("evidence_hash")
+        # Sanitized records are kept PRISTINE (no injected fields). For a record that needed no
+        # redaction, the sanitized record is therefore byte-identical to the original, so a preserved
+        # signature verifies directly against the record in records_sanitized.json. All binding data
+        # lives in export_manifest.json, never inside the scientific record itself.
         sanitized, redaction_log = _sanitize_record(r)
         modified = bool(redaction_log)
-        sanitized_bytes = signing.canonical(sanitized)
-        sanitized_sha = hashlib.sha256(sanitized_bytes).hexdigest()
+        sanitized_sha = hashlib.sha256(signing.canonical(sanitized)).hexdigest()
         # Signature preservation ONLY when the signed bytes are unchanged (no redaction touched it).
         sig_entry = signatures.get(eh)
         if sig_entry and not modified:
             sig_binding = {"original_signature_preserved": True,
                            "signature_b64": sig_entry.get("signature_b64"),
                            "kid": sig_entry.get("kid"),
-                           "note": "verify against the ORIGINAL record bytes (evidence_hash below)"}
+                           "verify_against": "records_sanitized.json entry with this experiment_id "
+                                             "(byte-identical to the original; recompute evidence_hash "
+                                             "to confirm it matches original_evidence_hash)"}
         elif sig_entry and modified:
             sig_binding = {"original_signature_preserved": False,
-                           "reason": "record was redacted; original signature does not cover sanitized bytes",
-                           "original_evidence_hash": eh}
+                           "reason": "record was redacted; original signature does not cover sanitized bytes"}
         else:
             sig_binding = {"original_signature_preserved": False, "reason": "record was unsigned"}
-        sanitized["_provenance_binding"] = {
-            "original_evidence_hash": eh,
-            "sanitized_sha256": sanitized_sha,
-            "redacted": modified,
-        }
         sanitized_records.append(sanitized)
         record_bindings.append({
+            "experiment_id": r.get("experiment_id"),
             "original_evidence_hash": eh,
             "unit_key": list(_unit_key(r)),
             "sanitized_sha256": sanitized_sha,
+            "redacted": modified,
             "redactions": redaction_log,
             "signature": sig_binding,
         })
@@ -741,9 +798,12 @@ def build_sanitized_export(evidence_dir: str, dest_dir: str, *,
             "signatures_preserved": sum(1 for b in record_bindings
                                         if b["signature"].get("original_signature_preserved")),
         },
-        "note": ("Sanitized records are DERIVED artifacts. A preserved signature must be verified "
-                 "against the original record bytes identified by original_evidence_hash, NOT against "
-                 "the sanitized record. Redacted records carry no original signature by construction."),
+        "note": ("Sanitized records are DERIVED artifacts, kept byte-identical to the original when no "
+                 "redaction was needed. A preserved signature is verified against the matching "
+                 "records_sanitized.json entry (which equals the original bytes for a non-redacted "
+                 "record; recompute its evidence_hash to confirm it matches original_evidence_hash). A "
+                 "redacted record carries no original signature by construction, and its stored "
+                 "evidence_hash is the ORIGINAL (it will not match the redacted content, by design)."),
     }
     _write_file(dest_real, "export_manifest.json",
                 json.dumps(binding_manifest, sort_keys=True, indent=2).encode("utf-8"), checksums)
