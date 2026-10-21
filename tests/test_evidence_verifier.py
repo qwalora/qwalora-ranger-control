@@ -548,3 +548,40 @@ def test_empty_plan_is_not_complete(tmp_path):
     sigs, trusted, _, _ = _sign_all(recs)
     rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=[])
     assert rep["verdicts"]["campaign_complete"]["complete"] is False
+
+
+# --- F-L: off-plan exclusions are a reconciliation violation, not silent noise ----------------
+
+def test_fL_offplan_exclusion_is_a_violation_and_blocks(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    with open(os.path.join(cdir, "ledger.jsonl"), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"repetition": 99, "condition": "experimental", "task_id": "ghost",
+                             "variant_id": "none", "failure_category": CK.CAT_MODEL,
+                             "status": "excluded", "error": "x"}) + "\n")
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert rep["reconciliation"]["exclusions_off_plan"]      # surfaced
+    assert rep["overall"] == "FAIL"                          # fails the run
+    assert rep["verdicts"]["result_eligible"]["eligible"] is False
+    assert any("outside the preregistered plan" in reason     # not silently ignored in eligibility
+               for reason in rep["verdicts"]["result_eligible"]["reasons"])
+    # F-B still holds: the rate itself is unmoved by the off-plan entry
+    assert rep["reconciliation"]["excluded_on_plan"] == 0
+    assert rep["verdicts"]["result_eligible"]["exclusion_rate"] == 0.0
+
+
+# --- F-G: trust basis records anchors and gates the independent-validation claim ---------------
+
+def test_fG_trust_basis_requires_external_anchors(tmp_path):
+    cdir, r, recs, plan = _build(tmp_path)
+    sigs, trusted, _, _ = _sign_all(recs)
+    # full anchors -> independent validation asserted
+    rep = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=plan)
+    assert rep["trust_basis"]["independent_validation"] is True
+    assert rep["trust_basis"]["custody_requirement"]
+    # no plan and no keys -> cannot be called independent validation
+    rep2 = V.verify_campaign(cdir, trusted_keys=[], signatures={}, expected_plan=None)
+    assert rep2["trust_basis"]["independent_validation"] is False
+    # keys but no plan -> still not independent (completeness not independently established)
+    rep3 = V.verify_campaign(cdir, trusted_keys=trusted, signatures=sigs, expected_plan=None)
+    assert rep3["trust_basis"]["independent_validation"] is False

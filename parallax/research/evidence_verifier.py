@@ -365,8 +365,30 @@ def verify_campaign(evidence_dir: str, *,
     eligibility = _assess_eligibility(records, ev["manifest"], completion, integrity_ok,
                                       reconciliation, exclusion_rate_ceiling, config_consistency)
 
+    # Trust basis (F-G): record which anchors the caller supplied. The tool cannot verify their
+    # CUSTODY; it states the requirement. A run is only an INDEPENDENT validation when both a trusted
+    # key set and a preregistered plan were supplied from a source independent of the evidence. Absent
+    # those, the result is self-attested or partial and must not be read as independent validation.
+    trust_basis = {
+        "trusted_keys_supplied": bool(trusted),
+        "plan_supplied": expected_plan is not None,
+        "commitments_supplied": bool(committed_commitments),
+        "expected_config_identity_supplied": expected_config_identity is not None,
+        "independent_validation": bool(trusted) and expected_plan is not None,
+        "custody_requirement": ("trusted_keys, expected_plan, committed_commitments and "
+                                "expected_config_identity MUST be supplied from a source controlled "
+                                "independently of this evidence directory (e.g. preregistered/escrowed "
+                                "at campaign time). A manifest generated solely from the same evidence "
+                                "is NOT an independent trust anchor."),
+    }
+
+    # An off-plan exclusion means the failure ledger references a trial that is not in the preregistered
+    # plan: an accounting-integrity violation, not mere noise. It must fail the run and block eligibility
+    # even though it never moves the exclusion RATE (F-B keeps the rate on-plan only).
+    offplan = reconciliation.get("exclusions_off_plan") or []
     overall_pass = (integrity_ok and completion["complete"]
-                    and not reconciliation["unaccounted"] and not reconciliation["double_counted"])
+                    and not reconciliation["unaccounted"] and not reconciliation["double_counted"]
+                    and not offplan)
 
     report.update({
         "integrity": {
@@ -390,6 +412,7 @@ def verify_campaign(evidence_dir: str, *,
         "reconciliation": reconciliation,
         "config_consistency": config_consistency,
         "committed_state": committed_state,
+        "trust_basis": trust_basis,
         "records": per_record,
         "verdicts": {
             "integrity_ok": integrity_ok,
@@ -531,6 +554,15 @@ def _assess_eligibility(records, manifest, completion, integrity_ok, reconciliat
     rate = (excluded_on_plan / planned) if planned else None
     if planned and rate > ceiling:
         reasons.append("on-plan exclusion rate %.3f exceeds ceiling %.3f" % (rate, ceiling))
+    # off-plan exclusions are a reconciliation violation (the ledger references trials outside the plan)
+    # and are never silently ignored, even though they do not move the rate above.
+    offplan = reconciliation.get("exclusions_off_plan") or []
+    if offplan:
+        reasons.append("%d ledgered exclusion(s) reference trials outside the preregistered plan "
+                       "(reconciliation violation)" % len(offplan))
+    unaccounted = reconciliation.get("unaccounted") or []
+    if unaccounted:
+        reasons.append("%d planned trial(s) unaccounted for" % len(unaccounted))
     eligible = not reasons
     return {"eligible": eligible, "reasons": reasons,
             "any_real": any_real, "all_real": all_real,
