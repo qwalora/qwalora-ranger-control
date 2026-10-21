@@ -278,6 +278,46 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
+def task_studentized_bootstrap_ci(diffs: List[float], level: float = 0.95, n_boot: int = 2000,
+                                  seed: int = 20260101) -> Dict[str, Any]:
+    """Task-level studentized (bootstrap-t) CI for the mean per-task difference. For each task
+    resample it computes the pivot (mean* - mean)/se*, and inverts the empirical pivot quantiles.
+    Studentizing often improves coverage for skewed data vs percentile/BCa. Resamples with a zero
+    resample-SE are skipped (pivot undefined). Returns mean, ci_low, ci_high; None CI when K < 3 or
+    too few usable resamples."""
+    K = len(diffs)
+    if K < 3:
+        return {"mean": (sum(diffs) / K if K else None), "ci_low": None, "ci_high": None,
+                "method": "bootstrap-t", "K": K}
+    theta = sum(diffs) / K
+    sd = math.sqrt(sum((x - theta) ** 2 for x in diffs) / (K - 1))
+    se = sd / math.sqrt(K)
+    if se == 0:
+        return {"mean": theta, "ci_low": None, "ci_high": None, "method": "bootstrap-t",
+                "K": K, "note": "zero between-task variance"}
+    rng = random.Random(seed)
+    pivots = []
+    for _ in range(n_boot):
+        samp = [diffs[rng.randrange(K)] for _ in range(K)]
+        m = sum(samp) / K
+        s = math.sqrt(sum((x - m) ** 2 for x in samp) / (K - 1))
+        seb = s / math.sqrt(K)
+        if seb > 0:
+            pivots.append((m - theta) / seb)
+    if len(pivots) < 50:
+        return {"mean": theta, "ci_low": None, "ci_high": None, "method": "bootstrap-t",
+                "K": K, "note": "too few usable studentized resamples"}
+    pivots.sort()
+    a = (1 - level) / 2
+
+    def _q(p):
+        return pivots[min(len(pivots) - 1, max(0, int(round(p * (len(pivots) - 1)))))]
+
+    # CI: [theta - t_{1-a} se, theta - t_{a} se]  (studentized bootstrap inversion)
+    return {"mean": theta, "ci_low": theta - _q(1 - a) * se, "ci_high": theta - _q(a) * se,
+            "method": "bootstrap-t", "K": K, "n_boot": n_boot, "usable": len(pivots)}
+
+
 def task_permutation_pvalue(diffs: List[float], alternative: str = "greater",
                             n_perm: int = 4000, seed: int = 20260101) -> Optional[float]:
     """One-sided randomization p-value for H0: the mean per-task difference is 0, using within-task
@@ -314,6 +354,9 @@ def _ci_for(diffs, level, inference, n_boot, seed):
     if inference == "t":
         e = task_blocked_estimate(diffs, level)
         return e["ci_low"], e["ci_high"]
+    if inference == "studt":
+        b = task_studentized_bootstrap_ci(diffs, level=level, n_boot=n_boot, seed=seed)
+        return b["ci_low"], b["ci_high"]
     b = task_bootstrap_ci(diffs, level=level, n_boot=n_boot, seed=seed,
                           method=("bca" if inference == "bca" else "percentile"))
     return b["ci_low"], b["ci_high"]

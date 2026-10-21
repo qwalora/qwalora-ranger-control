@@ -316,6 +316,14 @@ def test_bootstrap_ci_covers_mean():
     assert S.task_bootstrap_ci([0.1], n_boot=100)["ci_low"] is None   # K<2
 
 
+def test_studentized_bootstrap_basic():
+    b = S.task_studentized_bootstrap_ci([0.1, 0.2, 0.3, 0.25, 0.15, 0.2], n_boot=800, seed=1)
+    assert b["method"] == "bootstrap-t" and b["ci_low"] < b["mean"] < b["ci_high"]
+    assert S.task_studentized_bootstrap_ci([0.1, 0.2], n_boot=100)["ci_low"] is None   # K<3
+    # zero between-task variance -> no studentized interval (pivot undefined)
+    assert S.task_studentized_bootstrap_ci([0.3, 0.3, 0.3], n_boot=100)["ci_low"] is None
+
+
 def test_oc_reports_monte_carlo_se():
     oc = S.simulate_operating_characteristics(n_tasks=12, n_sims=500, seed=3, inference="t")
     assert oc["coverage_95_mcse"] > 0 and oc["reject_mcse"] > 0
