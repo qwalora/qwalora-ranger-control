@@ -190,3 +190,27 @@ arms; coverage down to 0.813 under high heterogeneity with a low base rate). Req
 a stratified/label permutation exact under unequal arms, and a calibrated interval validated to
 coverage >= 0.93 across the grid. No empirical finding, no publication readiness; passing software
 tests is not scientific validation.
+
+## 10. v2.3 calibration bake-off: explicit FAIL, stopping rule invoked
+
+Final bounded-inference calibration (scripts/research/oc_bakeoff.py, validation seed 777 independent
+of the selection seed; data docs/research/oc_bakeoff.json). Frozen criteria (not redefined after
+results): type-I <= 0.025 (not significantly above) AND coverage >= 0.93 across the grid.
+
+RESULT: FAIL. No method passes. The per-task difference is strongly negatively skewed under H0
+(skewness -0.64 to -1.51) from unequal arms and near-zero boundary-prone rates, so sign-flip is not
+exact; sign-flip type-I 0.035-0.043 and label-perm up to 0.062 exceed 0.025, and interval coverage
+falls to 0.804 (t), 0.760 (studentized bootstrap), 0.731 (BCa). Equivalence FPR is controlled but
+does not satisfy the criteria alone.
+
+STOPPING RULE APPLIED: method modification stops. The task-blocked inference on clustered rare-event
+proportion differences is not adequately calibrated by the standard methods tried. Recommendation:
+(1) report DESCRIPTIVELY (per-task rates and the point estimate, with the exclusion/ambiguity
+accounting) without a validated inferential claim; and (2) obtain independent biostatistical
+consultation to select and preregister a validated method (beta-binomial/GEE mixed model or an exact
+conditional method) before any inferential claim or protocol freeze.
+
+FINAL READINESS: the pipeline (preregistration, deterministic evaluator, provenance, reproducibility,
+honest negative/limitation reporting) is sound; the INFERENCE layer is NOT calibration-validated and
+must not be presented as such. No empirical finding, no protocol freeze, no publication readiness.
+Passing software tests is not scientific validation. PR #5 remains a draft.

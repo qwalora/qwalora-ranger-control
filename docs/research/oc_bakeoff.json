@@ -1,0 +1,118 @@
+{
+  "validation_seed": 777,
+  "criteria": "typeI<=0.025 (not sig above) AND coverage>=0.93",
+  "grid": [
+    {
+      "K": 48,
+      "task_sd": 0.1,
+      "p_control": 0.02,
+      "typeI_signflip": 0.0425,
+      "typeI_signflip_mcse": 0.010086345968684596,
+      "typeI_labelperm": 0.0625,
+      "typeI_labelperm_mcse": 0.012103072956898178,
+      "dt_skewness_under_null": -0.992,
+      "coverage_t": 0.8036,
+      "coverage_t_mcse": 0.007945490293241821,
+      "coverage_studt": 0.76,
+      "coverage_studt_mcse": 0.0150996688705415,
+      "coverage_bca": 0.73125,
+      "coverage_bca_mcse": 0.015673362653719207,
+      "equivFPR_t": 0.0044,
+      "verdict": {
+        "typeI_signflip_pass": false,
+        "typeI_labelperm_pass": false,
+        "coverage_t_pass": false,
+        "coverage_studt_pass": false,
+        "coverage_bca_pass": false
+      }
+    },
+    {
+      "K": 48,
+      "task_sd": 0.05,
+      "p_control": 0.02,
+      "typeI_signflip": 0.04,
+      "typeI_signflip_mcse": 0.009797958971132711,
+      "typeI_labelperm": 0.0275,
+      "typeI_labelperm_mcse": 0.008176758220713145,
+      "dt_skewness_under_null": -1.512,
+      "coverage_t": 0.9116,
+      "coverage_t_mcse": 0.005677514949341834,
+      "coverage_studt": 0.88,
+      "coverage_studt_mcse": 0.011489125293076058,
+      "coverage_bca": 0.8475,
+      "coverage_bca_mcse": 0.012710416495929628,
+      "equivFPR_t": 0.0,
+      "verdict": {
+        "typeI_signflip_pass": false,
+        "typeI_labelperm_pass": true,
+        "coverage_t_pass": false,
+        "coverage_studt_pass": false,
+        "coverage_bca_pass": false
+      }
+    },
+    {
+      "K": 24,
+      "task_sd": 0.05,
+      "p_control": 0.02,
+      "typeI_signflip": 0.04,
+      "typeI_signflip_mcse": 0.009797958971132711,
+      "typeI_labelperm": 0.015,
+      "typeI_labelperm_mcse": 0.006077622890571609,
+      "dt_skewness_under_null": -1.415,
+      "coverage_t": 0.936,
+      "coverage_t_mcse": 0.004895058733049072,
+      "coverage_studt": 0.90875,
+      "coverage_studt_mcse": 0.010181075428214843,
+      "coverage_bca": 0.87625,
+      "coverage_bca_mcse": 0.011642376126676205,
+      "equivFPR_t": 0.0004,
+      "verdict": {
+        "typeI_signflip_pass": false,
+        "typeI_labelperm_pass": true,
+        "coverage_t_pass": true,
+        "coverage_studt_pass": false,
+        "coverage_bca_pass": false
+      }
+    },
+    {
+      "K": 48,
+      "task_sd": 0.1,
+      "p_control": 0.1,
+      "typeI_signflip": 0.035,
+      "typeI_signflip_mcse": 0.009188987974744553,
+      "typeI_labelperm": 0.055,
+      "typeI_labelperm_mcse": 0.011399013115177999,
+      "dt_skewness_under_null": -0.636,
+      "coverage_t": 0.9428,
+      "coverage_t_mcse": 0.004644487485180686,
+      "coverage_studt": 0.93625,
+      "coverage_studt_mcse": 0.008637558791406283,
+      "coverage_bca": 0.92625,
+      "coverage_bca_mcse": 0.009240599108012422,
+      "equivFPR_t": 0.0012,
+      "verdict": {
+        "typeI_signflip_pass": true,
+        "typeI_labelperm_pass": false,
+        "coverage_t_pass": true,
+        "coverage_studt_pass": true,
+        "coverage_bca_pass": true
+      }
+    }
+  ],
+  "frozen_thresholds": {
+    "type_I": 0.025,
+    "coverage": 0.93
+  },
+  "overall": {
+    "typeI_pass": {
+      "signflip": false,
+      "labelperm": false
+    },
+    "coverage_pass": {
+      "t": false,
+      "studt": false,
+      "bca": false
+    }
+  },
+  "freeze_decision": "FAIL"
+}

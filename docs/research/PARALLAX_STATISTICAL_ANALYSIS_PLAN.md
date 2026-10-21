@@ -249,3 +249,51 @@ and the permutation test is the right direction, but the protocol version is NOT
 before freeze: (a) a stratified/label permutation that is exact under unequal arm sizes, and (b) a
 calibrated interval (bootstrap-t or a variance-stabilizing transform) validated to coverage >= 0.93
 across the grid. These are future work; no empirical finding and no publication readiness is claimed.
+
+## 16. v2.3 bounded-inference calibration bake-off: FAIL (stopping rule invoked)
+
+Final calibration iteration. Methods evaluated on a FIXED stress grid with INDEPENDENT validation
+seeds (seed 777, distinct from the selection seed 20260101); reproducible via
+scripts/research/oc_bakeoff.py (data: docs/research/oc_bakeoff.json). Frozen freeze criteria (set
+before running, not redefined after): type-I one-sided <= 0.025 (not significantly above) AND 95% CI
+coverage >= 0.93, across every grid cell.
+
+### 16.1 Assumption verification
+The per-task difference d_t is strongly negatively skewed under H0 (measured skewness -0.64 to -1.51)
+because the attack and control arms have unequal sizes (30 vs 6 cells) and near-zero, boundary-prone
+rates. Therefore the sign-flip permutation's symmetry assumption is VIOLATED; sign-flip is NOT exact.
+Label (within-task) permutation is exact only under the sharp null that attack and control cells are
+exchangeable within a task; the real study does not randomize variant assignment, so this is an
+untestable assumption, not a randomization guarantee.
+
+### 16.2 Results (validation seed 777)
+
+| K | sd | p_control | type-I sign-flip | type-I label-perm | d_t skew | coverage t | coverage studt | coverage BCa | equiv FPR |
+|---|---|---|---|---|---|---|---|---|---|
+| 48 | 0.10 | 0.02 | 0.043 | 0.062 | -0.99 | 0.804 | 0.760 | 0.731 | 0.004 |
+| 48 | 0.05 | 0.02 | 0.040 | 0.028 | -1.51 | 0.912 | 0.880 | 0.848 | 0.000 |
+| 24 | 0.05 | 0.02 | 0.040 | 0.015 | -1.42 | 0.936 | 0.909 | 0.876 | 0.000 |
+| 48 | 0.10 | 0.10 | 0.035 | 0.055 | -0.64 | 0.943 | 0.936 | 0.926 | 0.001 |
+
+### 16.3 Determination: FAIL
+No method meets the frozen criteria across the grid:
+- type-I: sign-flip 0.035-0.043 (> 0.025 everywhere); label-perm up to 0.062 under heterogeneity.
+- coverage: t as low as 0.804; the studentized and BCa bootstraps are WORSE (0.760, 0.731), not better.
+Equivalence FPR is controlled, but that alone does not satisfy the criteria.
+
+### 16.4 Stopping rule applied
+Per the preregistered stopping rule, this was the final calibration iteration; no method passed, so
+method modification STOPS here. Root cause: near-zero base rates with high task heterogeneity,
+unequal arm sizes, and boundary outcomes produce strongly skewed, unstable per-task differences that
+standard task-level t, bootstrap (percentile/studentized/BCa), and permutation procedures do not
+calibrate. Recommendations, not implemented here:
+1. DESCRIPTIVE reporting only: report per-task attack and control rates, the point estimate of the
+   per-attempt risk difference, and the exclusion/ambiguity accounting, WITHOUT a calibrated
+   inferential claim (no p-value or CI presented as validated).
+2. INDEPENDENT methodological consultation: a biostatistician should select and validate a method
+   suited to clustered rare-event data (e.g. a beta-binomial or GEE mixed model, or an exact
+   conditional method), with its own preregistered operating-characteristic validation, before any
+   inferential claim or protocol freeze.
+The production `statistics.py` verdicts that rest on these procedures (finding_supported via
+permutation; the provisional equivalence/bounded labels) are therefore NOT calibration-validated and
+must be treated as DESCRIPTIVE pending the consultation above. No protocol version is frozen.
