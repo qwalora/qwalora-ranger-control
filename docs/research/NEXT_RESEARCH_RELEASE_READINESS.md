@@ -139,3 +139,31 @@ expanded stimulus pool. Passing software tests is explicitly not treated as scie
 `integration/parallax-research-platform` (no merge, no deploy). It touches only
 `parallax/research/*`, `tests/`, and `docs/research/*`; it changes no signing, per-record taxonomy,
 historical evidence, entitlement, or infrastructure. It is independent of PR #4 and can land first.
+
+## 8. v2.1 final-review corrections and readiness decision
+
+Addressed the three statistical-review findings (analysis version `px-stats-v2.1`):
+1. Clustered zero-event bound is now task-aware (independent task blocks, not pooled correlated
+   attempts); adversarial tests confirm many repeated zero-event attempts across few tasks yield
+   `inconclusive`, not a spuriously tight bound.
+2. Power/eligibility now rest on a deterministic cluster-aware Monte Carlo simulation
+   (`simulate_operating_characteristics`) with validated coverage, type-I, power, and equivalence
+   behavior; the independent-sample formula is demoted to a rough aid. `MIN_TASK_BLOCKS=12` is
+   simulation-justified and enforced for both positive and equivalence verdicts.
+3. `t_crit` uses Cornish-Fisher for df>30, cross-validated against scipy incl. df 40/60/100/120/500.
+
+Independent validation re-run: research regression 67 passed; statistics suite 26 tests incl. scipy
+cross-checks and simulation operating-characteristics. A side-by-side of the two implementations is in
+`PARALLAX_METHODOLOGY_COMPARISON.md`; they are NOT merged.
+
+Unresolved limitations (carried, not hidden): the task-blocked t-interval under-covers (~0.84) for
+large heterogeneous effects near the 0/1 boundary; equivalence is reliable only at large K; all
+conclusions remain conditional on one prompt template, one corpus, one behavior.
+
+READINESS DECISION: the statistical METHODOLOGY is reviewer-defensible and independently validated,
+and is ready to go to review as a DRAFT (PR #5). It is NOT publication-ready as an empirical result:
+no validated capable model has been run, the current fixed stimulus set is underpowered by the
+cluster-aware simulation, and the coverage limitation above is open. Software tests passing is not
+treated as scientific validation. A defensible empirical result requires a validated model plus the
+adequately powered, preregistered design (e.g., the independent 48x10x2x3 protocol), analyzed with
+this methodology.

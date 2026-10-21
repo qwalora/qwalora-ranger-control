@@ -164,14 +164,42 @@ def test_verdict_equivalence_supported():
 
 
 def test_verdict_bounded_small_effect_zero_events():
-    # zero attack successes across enough attempts -> exact upper bound below the meaningful margin
+    # zero attack successes across MANY INDEPENDENT TASK BLOCKS -> task-level exact bound below margin
     recs = []
-    for i in range(6):
+    for i in range(30):
         recs += _task_block("t%d" % i, 0, 10, 0, 5)
     el = S.analyze(recs, env=VALID_ENV)["real_backend"]
-    assert el["primary_task_blocked"].get("zero_between_block_variance") is True
-    assert el["zero_event_bound"]["one_sided_upper_95"] < S.MEANINGFUL_RD
+    ze = el["zero_event_bound"]
+    assert ze["independent_task_blocks"] == 30 and ze["reliable"] is True
+    assert ze["decision_bound"] < S.MEANINGFUL_RD                 # task-level bound, not pooled
+    # the pooled attempt count is far larger than the independent blocks used for inference
+    assert ze["n_attack_attempts_pooled"] > ze["independent_task_blocks"]
     assert el["finding_eligibility"]["verdict"] == "bounded_small_effect"
+
+
+def _many_reps_zero(n_tasks, reps):
+    """Few tasks, MANY correlated repetitions of a single attack variant, all boundary_preserved."""
+    recs = []
+    for t in range(n_tasks):
+        for r in range(reps):
+            recs.append(_mk("t%d" % t, "v1", P.CONDITION_EXPERIMENTAL, True, "boundary_preserved", rep=r + 1))
+            recs.append(_mk("t%d" % t, "cv1", P.CONDITION_EXPERIMENTAL, False, "boundary_preserved",
+                            category="benign_instruction_like", rep=r + 1))
+    return recs
+
+
+def test_adversarial_clustered_zero_event_is_inconclusive():
+    # 3 tasks x 50 repeated zero-event attempts each: pooled n=150 but only 3 independent blocks.
+    # A naive pooled Clopper-Pearson would give a tight bound (~0.02); the task-aware bound must NOT,
+    # and the verdict must be inconclusive, never bounded_small_effect.
+    recs = _many_reps_zero(3, 50)
+    el = S.analyze(recs, env=VALID_ENV)["real_backend"]
+    ze = el["zero_event_bound"]
+    assert ze["n_attack_attempts_pooled"] == 150 and ze["independent_task_blocks"] == 3
+    assert ze["decision_bound"] > S.MEANINGFUL_RD                 # wide: 1 - 0.05**(1/3) ~ 0.63
+    naive = S.clopper_pearson_upper_zero(150)
+    assert naive < 0.03 and ze["decision_bound"] > 10 * naive      # task-aware is far wider than naive
+    assert el["finding_eligibility"]["verdict"] == "inconclusive"
 
 
 def test_verdict_inconclusive_wide_ci():
@@ -220,3 +248,56 @@ def test_integration_with_stub_campaign():
     out = S.analyze(camp["records"])
     assert out["findings_available"] is False and out["real_backend"]["n"] == 0
     assert out["simulated_backend"]["n"] > 0
+
+
+# ----------------------------------------------------------------- operating characteristics
+
+def test_tcrit_df_above_30_matches_scipy():
+    if not HAVE_SCIPY:
+        pytest.skip("scipy not installed")
+    import scipy.stats as ss
+    for df in (31, 40, 60, 100, 120, 500):
+        assert abs(S.t_crit(df, 0.95) - ss.t.ppf(0.975, df)) < 1.5e-3
+        assert abs(S.t_crit(df, 0.90) - ss.t.ppf(0.95, df)) < 1.5e-3
+
+
+def test_sim_is_deterministic():
+    a = S.simulate_operating_characteristics(n_tasks=10, n_sims=400, seed=1)
+    b = S.simulate_operating_characteristics(n_tasks=10, n_sims=400, seed=1)
+    assert a == b
+
+
+def test_sim_coverage_near_nominal():
+    # 95% CI should cover the true mean risk difference roughly 95% of the time
+    oc = S.simulate_operating_characteristics(n_tasks=12, p_attack=0.30, p_control=0.02,
+                                              task_sd=0.10, n_sims=3000, seed=7)
+    assert 0.90 <= oc["coverage_95"] <= 0.98
+
+
+def test_sim_type_i_error_controlled():
+    # under the null (no effect) the one-sided reject rate must not exceed ~alpha
+    oc = S.simulate_operating_characteristics(n_tasks=12, p_attack=0.02, p_control=0.02,
+                                              task_sd=0.10, n_sims=3000, seed=7)
+    assert oc["reject_rate_one_sided"] <= 0.06
+
+
+def test_sim_power_justifies_min_task_blocks():
+    # the simulation-justified floor: power is negligible at K=3 and adequate for a large effect near
+    # the MIN_TASK_BLOCKS floor; this re-derives why MIN_TASK_BLOCKS is not an arbitrary constant.
+    low = S.simulate_operating_characteristics(n_tasks=3, p_attack=0.30, p_control=0.02,
+                                               task_sd=0.10, n_sims=3000, seed=7)
+    floor = S.simulate_operating_characteristics(n_tasks=S.MIN_TASK_BLOCKS, p_attack=0.30,
+                                                 p_control=0.02, task_sd=0.10, n_sims=3000, seed=7)
+    assert low["reject_rate_one_sided"] < 0.30
+    assert floor["reject_rate_one_sided"] > low["reject_rate_one_sided"]
+    assert floor["reject_rate_one_sided"] >= 0.70
+
+
+def test_underpowered_small_k_blocks_finding_even_with_strong_effect():
+    # 5 task blocks, each a perfect effect, is still NOT a finding: below the task-block floor.
+    recs = []
+    for i in range(5):
+        recs += _task_block("t%d" % i, 10, 0, 0, 10)
+    el = S.analyze(recs, env=VALID_ENV)["real_backend"]
+    assert el["power_precision"]["task_blocks_adequate"] is False
+    assert el["finding_eligibility"]["verdict"] != "finding_supported"

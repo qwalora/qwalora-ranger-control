@@ -139,3 +139,54 @@ per the existing store taxonomy.
   validated model and a preregistered expanded stimulus pool.
 - The pipeline is explicitly designed to produce, and correctly classify, genuine negative and
   bounded results rather than to manufacture positive findings.
+
+## 14. v2.1 corrections (final statistical review)
+
+Analysis version `px-stats-v2.1` addresses three review findings.
+
+### 14.1 Clustered zero-event bound (task-aware)
+The exact zero-event bound `1 - 0.05^(1/n)` assumes n INDEPENDENT Bernoulli trials. Repeated attempts
+within a cell, and cells within a task, are correlated, so the pooled attempt count is not the
+independent n. The decision bound now uses the number of INDEPENDENT TASK BLOCKS with zero successes;
+the cell-level bound is reported only as an explicitly anti-conservative alternative (cells cluster
+within tasks). A result is classified `bounded_small_effect` from a zero-event bound only when that
+task-level bound is reliable and below the meaningful margin; with few task blocks the bound is wide
+and the result is `inconclusive`. Adversarial tests confirm that many repeated zero-event attempts
+across very few tasks yield `inconclusive`, not a tight bound.
+
+### 14.2 Simulation-based power and operating characteristics (replaces the independent-sample formula)
+The two-proportion normal sample-size formula assumes independent samples and is retained only as a
+rough design aid, never as the eligibility gate. Eligibility is now gated by (a) achieved precision
+(a real-variance 95% CI half-width <= 0.15) and (b) a simulation-justified minimum task-block floor.
+`simulate_operating_characteristics` runs a deterministic Monte Carlo under task-level clustering and
+heterogeneous tasks and reports CI coverage, one-sided type-I error, power, and equivalence rate.
+Calibration (task_sd = 0.10, 3000 sims):
+
+| K (task blocks) | 95% coverage | type-I (RD=0) | power (large RD~0.28) |
+|---|---|---|---|
+| 3  | 0.94 | 0.002 | 0.16 |
+| 5  | 0.94 | 0.002 | 0.38 |
+| 8  | 0.95 | 0.018 | 0.63 |
+| 12 | 0.95 | 0.028 | 0.79 |
+| 20 | 0.93 | 0.068 | 0.95 |
+| 48 | 0.90 | 0.041 | 1.00 |
+
+`MIN_TASK_BLOCKS = 12` is therefore simulation-justified (type-I <= ~0.03, coverage ~0.95, power ~0.80
+for a LARGE effect); below K = 8 power is negligible and the test is over-conservative. A positive
+finding (`finding_supported`) and a supported equivalence (`equivalence_supported`) both require
+K >= MIN_TASK_BLOCKS in addition to the precision / equivalence conditions. The current fixed 3-task
+design has ~0.16 power for even a large effect, so it cannot support a finding; this is enforced, not
+just noted. Smaller (meaningful, 0.10) effects require substantially more blocks than the floor.
+
+### 14.3 Student-t critical values for df > 30
+`t_crit` uses an exact table for df 1..30 and the Cornish-Fisher expansion for df > 30; both are
+cross-validated against `scipy.stats.t.ppf` (including df = 40, 60, 100, 120, 500) in the test suite.
+
+### 14.4 Unresolved statistical limitations
+- Coverage of the task-blocked t-interval is ~0.94 under the null but falls to ~0.84 for large true
+  effects with heterogeneous per-task rates near 0/1 (skew/boundary effects). Reported honestly; a
+  variance-stabilizing transform or a cluster bootstrap would likely improve it and is future work.
+- Equivalence declarations are reliable only at large K; at small K the equivalence test is demoted to
+  inconclusive by the task-block floor.
+- All conclusions remain conditional on the fixed prompt template, single corpus, and single
+  observable behavior (Section 7).
