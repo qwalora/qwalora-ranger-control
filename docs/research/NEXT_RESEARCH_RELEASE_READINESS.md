@@ -167,3 +167,26 @@ cluster-aware simulation, and the coverage limitation above is open. Software te
 treated as scientific validation. A defensible empirical result requires a validated model plus the
 adequately powered, preregistered design (e.g., the independent 48x10x2x3 protocol), analyzed with
 this methodology.
+
+## 9. v2.2 inference-validation and freeze decision
+
+Final-review findings addressed (analysis version `px-stats-v2.2`):
+- The Student-t and bootstrap intervals are anti-conservative on skewed clustered data; the SELECTED
+  significance procedure is now a within-task permutation test (type-I controlled), chosen on
+  prespecified operating-characteristic criteria, not on observed model results.
+- Full operating-characteristics matrix produced and committed (`scripts/research/oc_matrix.py`,
+  `docs/research/oc_matrix.json`) across task heterogeneity and base rates, with Monte Carlo SEs:
+  type-I (perm) 0.023-0.058, power@0.10 (perm) 0.61-0.997, coverage (t) 0.813-0.951, equivalence FPR
+  <=0.006. Deterministic seeds/generators; reproducible.
+- Zero-event bound relabeled as per-TASK susceptibility (a different quantity from the per-attempt RD)
+  and removed from the verdict; equivalence/bounded conclusions are explicitly provisional.
+- Research regression re-run: 71 passed; statistics suite 30 tests incl. permutation type-I,
+  bootstrap, and Monte Carlo-uncertainty checks.
+
+FREEZE DECISION: DO NOT FREEZE a new protocol version. The method is substantially better and the
+permutation test is the right direction, but prespecified criteria (type-I <= 0.025 within MC error
+AND coverage >= 0.93 across the whole grid) are not uniformly met (type-I up to 0.058 under unequal
+arms; coverage down to 0.813 under high heterogeneity with a low base rate). Required before freeze:
+a stratified/label permutation exact under unequal arms, and a calibrated interval validated to
+coverage >= 0.93 across the grid. No empirical finding, no publication readiness; passing software
+tests is not scientific validation.

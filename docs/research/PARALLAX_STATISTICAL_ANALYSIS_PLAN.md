@@ -190,3 +190,62 @@ cross-validated against `scipy.stats.t.ppf` (including df = 40, 60, 100, 120, 50
   inconclusive by the task-block floor.
 - All conclusions remain conditional on the fixed prompt template, single corpus, and single
   observable behavior (Section 7).
+
+## 15. v2.2 final inference validation (do not freeze yet)
+
+Prompted by a review that correctly flagged type-I 0.068 at K=20 and coverage 0.90 at K=48 for the
+Student-t procedure. Those are NOT at nominal (one-sided reject rule = CI95 low > 0 targets 0.025;
+coverage targets 0.95). Investigation and corrections:
+
+### 15.1 Significance procedure: within-task permutation (selected over t and bootstrap)
+The t and the cluster bootstrap (percentile and BCa) are both anti-conservative on skewed, clustered
+per-task proportion differences (bootstrap was worse: type-I ~0.11 at K=20). The SELECTED primary
+significance procedure is a within-task sign-flip PERMUTATION test (exact-ish type-I control by
+randomization, no distributional assumption). The analysis decision (`finding_supported`) now uses the
+permutation p-value, not the CI. The CI is reported for description only, with an explicit coverage
+caveat.
+
+### 15.2 Operating-characteristics matrix (reproducible: scripts/research/oc_matrix.py, seed 20260101)
+Permutation type-I and power (n_sims=600, n_perm=500); t coverage and equivalence FPR (n_sims=2500);
+variants_per_task=30, control_per_task=6; +-MCSE. Nominal: type-I 0.025, coverage 0.95, equiv FPR <=0.05.
+
+| K | task_sd | p_control | type-I (perm) | power@0.10 (perm) | coverage (t) | equiv FPR (t) |
+|---|---|---|---|---|---|---|
+| 24 | 0.05 | 0.02 | 0.058 | 0.942 | 0.931 | 0.000 |
+| 24 | 0.05 | 0.10 | 0.048 | 0.813 | 0.943 | 0.002 |
+| 24 | 0.10 | 0.02 | 0.040 | 0.628 | 0.895 | 0.006 |
+| 24 | 0.10 | 0.10 | 0.043 | 0.610 | 0.943 | 0.003 |
+| 48 | 0.05 | 0.02 | 0.030 | 0.997 | 0.913 | 0.000 |
+| 48 | 0.05 | 0.10 | 0.038 | 0.975 | 0.951 | 0.000 |
+| 48 | 0.10 | 0.02 | 0.032 | 0.880 | 0.813 | 0.003 |
+| 48 | 0.10 | 0.10 | 0.023 | 0.867 | 0.947 | 0.001 |
+
+### 15.3 What passes and what does not
+- Permutation type-I: near nominal at K=48 (0.023-0.038, within MC error) and far better than the t;
+  but anti-conservative where the attack and control arms are very unequal (up to 0.058 at K=24,
+  low heterogeneity, low base rate), because the sign-flip is not exact under unequal arm discreteness.
+- Power: adequate at K=48 for task_sd <= 0.10 (0.87-0.997); marginal at K=24 or high heterogeneity.
+- t-CI coverage: below nominal under high heterogeneity with a low base rate (0.813); otherwise ~0.93-0.95.
+- Equivalence FPR: controlled (<=0.006) everywhere tested.
+
+### 15.4 Estimand mismatch fixed
+The zero-event bound is reported as an upper bound on the per-TASK susceptibility probability, a
+DIFFERENT quantity from the per-attempt risk difference. It no longer drives the verdict; the
+all-zero per-attempt case is `inconclusive` unless a calibrated per-attempt procedure applies.
+`equivalence_provisional` and `bounded_small_effect_provisional` are explicitly provisional because
+their interval procedures are not yet calibration-validated. Insufficient evidence is never reported
+as defense effectiveness.
+
+### 15.5 Error control for equivalence/bounded conclusions
+Equivalence FPR (declaring equivalence when the true effect is outside the margin) is <=0.006 in the
+matrix, i.e. conservative; but equivalence rests on the t 90% CI, which under-covers in adverse
+regimes, so equivalence remains PROVISIONAL pending a permutation/bootstrap equivalence procedure.
+
+### 15.6 Decision: DO NOT FREEZE
+Prespecified freeze criteria (type-I <= 0.025 within MC error AND coverage >= 0.93 across the whole
+stress grid) are NOT uniformly met: type-I reaches 0.058 under unequal arms and coverage falls to
+0.813 under high heterogeneity with a low base rate. The inference method is substantially improved
+and the permutation test is the right direction, but the protocol version is NOT frozen. Required
+before freeze: (a) a stratified/label permutation that is exact under unequal arm sizes, and (b) a
+calibrated interval (bootstrap-t or a variance-stabilizing transform) validated to coverage >= 0.93
+across the grid. These are future work; no empirical finding and no publication readiness is claimed.

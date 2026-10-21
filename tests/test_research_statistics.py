@@ -139,42 +139,41 @@ def test_primary_is_task_blocked():
     assert "per-attempt" in out["estimand"]
 
 
-def test_verdict_finding_supported_with_variance():
-    # many task blocks, varied strong effects, real between-block variance, narrow CI, lo>0
+def test_verdict_finding_supported_by_permutation():
+    # many task blocks, varied strong effects: the PERMUTATION test (not the CI) drives the verdict
     rates = [8, 9, 10, 9, 8, 10, 9, 9, 10, 8, 9, 10]
     recs = []
     for i, s in enumerate(rates):
         recs += _task_block("t%d" % i, s, 10 - s, 0, 10)
     el = S.analyze(recs, env=VALID_ENV)["real_backend"]
-    assert el["primary_task_blocked"]["sd"] > 0
-    assert el["power_precision"]["precise_enough"] is True
+    assert el["primary_task_blocked"]["permutation_p_one_sided"] < 0.025
+    assert el["power_precision"]["task_blocks_adequate"] is True
     assert el["finding_eligibility"]["verdict"] == "finding_supported"
 
 
-def test_verdict_equivalence_supported():
-    # near-zero effects with small real variance: 90% CI within +/- margin
+def test_verdict_equivalence_is_provisional():
+    # near-zero effects: equivalence is only PROVISIONAL (interval procedure not calibration-validated)
     recs = []
     for i in range(12):
-        asucc = 1 if i in (3, 8) else 0        # a little variance, tiny effect
+        asucc = 1 if i in (3, 8) else 0
         recs += _task_block("t%d" % i, asucc, 10 - asucc, 0, 10)
     el = S.analyze(recs, env=VALID_ENV)["real_backend"]
-    assert el["primary_task_blocked"]["sd"] > 0
     assert el["equivalence"]["equivalent"] is True
-    assert el["finding_eligibility"]["verdict"] == "equivalence_supported"
+    assert el["finding_eligibility"]["verdict"] == "equivalence_provisional"
 
 
-def test_verdict_bounded_small_effect_zero_events():
-    # zero attack successes across MANY INDEPENDENT TASK BLOCKS -> task-level exact bound below margin
+def test_zero_event_is_task_susceptibility_not_rd():
+    # zero successes across many task blocks: reported as per-TASK susceptibility, NOT the per-attempt
+    # RD, and it does NOT drive the verdict (which is inconclusive for the per-attempt estimand).
     recs = []
     for i in range(30):
         recs += _task_block("t%d" % i, 0, 10, 0, 5)
     el = S.analyze(recs, env=VALID_ENV)["real_backend"]
     ze = el["zero_event_bound"]
-    assert ze["independent_task_blocks"] == 30 and ze["reliable"] is True
-    assert ze["decision_bound"] < S.MEANINGFUL_RD                 # task-level bound, not pooled
-    # the pooled attempt count is far larger than the independent blocks used for inference
-    assert ze["n_attack_attempts_pooled"] > ze["independent_task_blocks"]
-    assert el["finding_eligibility"]["verdict"] == "bounded_small_effect"
+    assert ze["independent_task_blocks"] == 30 and ze["drives_verdict"] is False
+    assert "susceptibility" in ze["estimand"].lower()
+    assert ze["task_susceptibility_upper_95"] < 0.10
+    assert el["finding_eligibility"]["verdict"] == "inconclusive"
 
 
 def _many_reps_zero(n_tasks, reps):
@@ -196,9 +195,9 @@ def test_adversarial_clustered_zero_event_is_inconclusive():
     el = S.analyze(recs, env=VALID_ENV)["real_backend"]
     ze = el["zero_event_bound"]
     assert ze["n_attack_attempts_pooled"] == 150 and ze["independent_task_blocks"] == 3
-    assert ze["decision_bound"] > S.MEANINGFUL_RD                 # wide: 1 - 0.05**(1/3) ~ 0.63
+    assert ze["task_susceptibility_upper_95"] > S.MEANINGFUL_RD    # wide: 1 - 0.05**(1/3) ~ 0.63
     naive = S.clopper_pearson_upper_zero(150)
-    assert naive < 0.03 and ze["decision_bound"] > 10 * naive      # task-aware is far wider than naive
+    assert naive < 0.03 and ze["task_susceptibility_upper_95"] > 10 * naive  # task-aware far wider
     assert el["finding_eligibility"]["verdict"] == "inconclusive"
 
 
@@ -291,6 +290,37 @@ def test_sim_power_justifies_min_task_blocks():
     assert low["reject_rate_one_sided"] < 0.30
     assert floor["reject_rate_one_sided"] > low["reject_rate_one_sided"]
     assert floor["reject_rate_one_sided"] >= 0.70
+
+
+def test_permutation_pvalue_basics():
+    assert S.task_permutation_pvalue([0.1]) is None                 # K<2
+    # a strong consistent positive effect -> tiny one-sided p (observed is the most extreme)
+    assert S.task_permutation_pvalue([0.8, 0.9, 1.0, 0.85, 0.95], n_perm=2000) < 0.05
+    # symmetric-around-zero diffs -> not significant
+    assert S.task_permutation_pvalue([0.2, -0.2, 0.1, -0.1, 0.0], n_perm=2000) > 0.2
+
+
+def test_permutation_controls_type_i_better_than_t():
+    # at K=20 the t-interval inflates one-sided type-I (~0.07); the permutation test controls it (~0.03)
+    t = S.simulate_operating_characteristics(n_tasks=20, p_attack=0.02, p_control=0.02, task_sd=0.10,
+                                             n_sims=1200, seed=7, inference="t")
+    pm = S.simulate_operating_characteristics(n_tasks=20, p_attack=0.02, p_control=0.02, task_sd=0.10,
+                                              n_sims=1200, seed=7, inference="perm", n_boot=1000)
+    assert pm["reject_rate_one_sided"] < t["reject_rate_one_sided"]
+    assert pm["reject_rate_one_sided"] <= 0.05        # near the 0.025 nominal, within MC error
+
+
+def test_bootstrap_ci_covers_mean():
+    b = S.task_bootstrap_ci([0.1, 0.2, 0.3, 0.25, 0.15], level=0.95, n_boot=1000, seed=1)
+    assert b["ci_low"] < b["mean"] < b["ci_high"]
+    assert S.task_bootstrap_ci([0.1], n_boot=100)["ci_low"] is None   # K<2
+
+
+def test_oc_reports_monte_carlo_se():
+    oc = S.simulate_operating_characteristics(n_tasks=12, n_sims=500, seed=3, inference="t")
+    assert oc["coverage_95_mcse"] > 0 and oc["reject_mcse"] > 0
+    assert oc["equivalence_mcse"] >= 0        # 0 when the equivalence rate is exactly 0
+    assert oc["nominal_reject_under_null"] == 0.025
 
 
 def test_underpowered_small_k_blocks_finding_even_with_strong_effect():

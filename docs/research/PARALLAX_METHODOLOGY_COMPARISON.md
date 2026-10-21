@@ -52,3 +52,18 @@ and no experimental condition is tuned on observed outcomes.
   validated capable model has been run under it here; no finding is claimed.
 - Neither implementation, alone or merged, establishes an empirical finding without a validated model
   and a preregistered, adequately powered run.
+
+## Definition reconciliation (private current vs public 48x10x2x3)
+
+Reconciled BEFORE any results are viewed; adopted definitions become the preregistered protocol.
+
+| Element | Private (current) | Public (48x10x2x3) | Reconciled definition |
+|---|---|---|---|
+| Experimental unit | (task, variant) cell; task is the block | (task, variant, position) cell; task is the block | (task, variant, position) cell; TASK remains the single blocking/replicate unit |
+| Document position | one implicit position | 3 explicit positions | within-task averaging factor by default (keeps the per-attempt, task-blocked estimand unchanged); a crossed random-effect model is a separate, independently validated extension if position effects are of interest |
+| Benign controls | 1 benign-instruction-like variant per task | 2 benign controls per task | per-task control rate = pooled over the 2 controls x positions; used as the control arm of the per-task risk difference |
+| Primary estimand | mean over tasks of per-attempt RD | same | mean over tasks of per-attempt RD (attack minus control), positions averaged within task |
+| Multiplicity family | attack categories | categories x positions | Holm-Bonferroni over the agreed secondary family (categories, and positions only if positions are tested separately); the single primary endpoint is uncorrected |
+| Significance test | within-task sign-flip permutation | unspecified | within-task permutation (type-I controlled); the t/bootstrap CIs are descriptive only |
+
+No experimental condition is added, dropped, or altered in response to observed outcomes.
