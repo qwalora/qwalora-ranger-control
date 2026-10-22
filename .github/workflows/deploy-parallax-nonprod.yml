@@ -1,0 +1,171 @@
+name: Deploy PARALLAX portal (nonprod) - manual
+
+# Manually-triggered, single-purpose deploy of ONE authorized commit to the EXISTING
+# parallax-portal service in the parallax-nonprod environment, via the Railway CLI on a
+# GitHub-hosted runner (which can reach Railway; the Claude container cannot).
+#
+# Safety contract (enforced by the steps below):
+#   - workflow_dispatch ONLY. No push/PR trigger -> never auto-deploys.
+#   - Deploys EXACTLY the authorized commit (AUTHORIZED_SHA), not branch HEAD.
+#   - Targets the EXISTING service + environment by ID. Never passes --new, never creates a service.
+#   - Never changes the service's GitHub-connected branch and never touches production.
+#   - Requires a typed confirmation input to run.
+#   - Uses the RAILWAY_TOKEN GitHub secret (project-scoped). Never echoes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type exactly: DEPLOY fda512e to parallax-nonprod'
+        required: true
+        default: ''
+
+# Least privilege: only read the repo. No write/deploy permissions on GitHub side.
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-parallax-nonprod
+  cancel-in-progress: false
+
+env:
+  AUTHORIZED_SHA: fda512e8b4bea751fb6bdbdc80058022c63a43c3
+  RAILWAY_PROJECT_ID: ee093894-30f7-4c82-ab5d-d7ef4d1a6454
+  RAILWAY_ENVIRONMENT_ID: a7126c4e-a022-4968-8686-a9ea9a3708d7
+  RAILWAY_SERVICE_ID: 8913f277-af3f-48f0-a26a-7f9f71efada4
+  RAILWAY_SERVICE_NAME: parallax-portal
+  RAILWAY_ENVIRONMENT_NAME: parallax-nonprod
+  PRODUCTION_ENVIRONMENT_ID: 10fa3e73-9a53-42dd-84a2-bd9a9f628e55
+  HEALTH_URL: https://parallax-portal-parallax-nonprod.up.railway.app/healthz
+
+jobs:
+  deploy:
+    name: Deploy ${{ env.AUTHORIZED_SHA }} to parallax-nonprod
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Confirm intent
+        run: |
+          set -euo pipefail
+          EXPECTED='DEPLOY fda512e to parallax-nonprod'
+          if [ "${{ github.event.inputs.confirm }}" != "$EXPECTED" ]; then
+            echo "::error::Confirmation string did not match. Expected: $EXPECTED"
+            exit 1
+          fi
+          # Hard guard: never allow the production environment id to be the target.
+          if [ "$RAILWAY_ENVIRONMENT_ID" = "$PRODUCTION_ENVIRONMENT_ID" ]; then
+            echo "::error::Refusing: target environment id equals production."
+            exit 1
+          fi
+          echo "Confirmed. Target: $RAILWAY_SERVICE_NAME / $RAILWAY_ENVIRONMENT_NAME at $AUTHORIZED_SHA"
+
+      - name: Checkout EXACT authorized commit (not branch HEAD)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUTHORIZED_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checked-out SHA
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          echo "HEAD = $HEAD_SHA"
+          if [ "$HEAD_SHA" != "$AUTHORIZED_SHA" ]; then
+            echo "::error::Checked-out SHA $HEAD_SHA != authorized $AUTHORIZED_SHA"
+            exit 1
+          fi
+
+      - name: Inspect the source snapshot (config + unexpected files)
+        run: |
+          set -euo pipefail
+          echo "----- railway.json -----"; cat railway.json
+          echo "----- Procfile -----"; cat Procfile
+          echo "----- top-level entries -----"; ls -a1
+          echo "----- scan for obviously sensitive files (fail if present) -----"
+          if git ls-files | grep -E '(^|/)(\.env$|\.env\.|id_rsa|id_ed25519|.*\.pem$|.*\.p12$|.*\.key$)' ; then
+            echo "::error::Unexpected credential-like file tracked in the snapshot."; exit 1
+          fi
+          echo "snapshot clean of credential-like files"
+
+      - name: Install Railway CLI
+        run: |
+          set -euo pipefail
+          npm i -g @railway/cli
+          railway --version
+
+      - name: Verify Railway auth (token never printed)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set."; exit 1
+          fi
+          railway whoami || { echo "::error::Railway auth failed"; exit 1; }
+
+      - name: Link + VERIFY the resolved target before deploying (hard gate)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          railway link \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --service "$RAILWAY_SERVICE_ID" --json
+          echo "----- railway status -----"
+          STATUS="$(railway status --json)"
+          echo "$STATUS"
+          # The resolved status MUST contain the exact service and environment ids we authorized.
+          echo "$STATUS" | grep -q "$RAILWAY_SERVICE_ID"     || { echo "::error::service id not resolved"; exit 1; }
+          echo "$STATUS" | grep -q "$RAILWAY_ENVIRONMENT_ID" || { echo "::error::environment id not resolved"; exit 1; }
+          echo "$STATUS" | grep -q "$PRODUCTION_ENVIRONMENT_ID" && { echo "::error::production id present in target"; exit 1; } || true
+          echo "Target verified: $RAILWAY_SERVICE_NAME / $RAILWAY_ENVIRONMENT_NAME"
+
+      - name: Deploy the snapshot to the EXISTING service (no --new)
+        id: deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Uploads THIS checkout (exactly AUTHORIZED_SHA) to the existing service+environment.
+          # --ci streams build logs then exits on terminal status. NEVER --new.
+          railway up \
+            --ci \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --message "authorized nonprod deploy ${AUTHORIZED_SHA}"
+
+      - name: Record deployment id + status
+        if: always()
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "----- latest deployments (newest first) -----"
+          railway deployment list --json | head -c 4000 || true
+
+      - name: Health check (/healthz, db connectivity)
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in $(seq 1 20); do
+            code="$(curl -sS -o /tmp/h.json -w '%{http_code}' --max-time 15 "$HEALTH_URL" || echo 000)"
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ] && grep -q '"db"[[:space:]]*:[[:space:]]*true' /tmp/h.json; then
+              echo "healthy:"; cat /tmp/h.json; ok=1; break
+            fi
+            sleep 15
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::/healthz did not report healthy with db:true in time"; cat /tmp/h.json || true; exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Deployed commit : $AUTHORIZED_SHA"
+          echo "Target service  : $RAILWAY_SERVICE_NAME ($RAILWAY_SERVICE_ID)"
+          echo "Target env      : $RAILWAY_ENVIRONMENT_NAME ($RAILWAY_ENVIRONMENT_ID)"
+          echo "Health URL      : $HEALTH_URL"
+          echo "Rollback target : eb9e925e (b0f1588)"
