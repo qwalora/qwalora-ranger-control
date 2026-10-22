@@ -6,7 +6,7 @@ candidate, never confirmed compromise) are all exercised on real assembly logic.
 """
 import pytest
 
-from parallax import strata_trace_view as STV
+from parallax.research import research_trace_view as STV
 from parallax import strata_investigation as SI
 from parallax.research import store as rstore
 from parallax.research import protocol as P

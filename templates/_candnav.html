@@ -29,6 +29,7 @@
       <a class="nav-item {% if active=='mission' %}on{% endif %}" href="/me/mission"><span class="l">{{ ic('flag') }}</span><span class="lbl">Mission brief</span></a>
       {% elif vm and vm.selected_program == 'parallax' and vm.status == 'active' %}
       <a class="nav-item {% if active=='research' %}on{% endif %}" href="/parallax/workspace"><span class="l">{{ ic('cpu') }}</span><span class="lbl">Research console</span></a>
+      <a class="nav-item {% if active=='investigations' %}on{% endif %}" href="/parallax/research/investigations"><span class="l">{{ ic('search') }}</span><span class="lbl">Investigations</span></a>
       <a class="nav-item {% if active=='evidence' %}on{% endif %}" href="/parallax/research/evidence"><span class="l">{{ ic('shield') }}</span><span class="lbl">Evidence &amp; publications</span></a>
       {% endif %}
     </div>
