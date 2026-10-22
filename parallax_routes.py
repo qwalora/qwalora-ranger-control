@@ -464,24 +464,30 @@ def register(app, candidate_model=None, db=None, helpers=None):
         return render_template("parallax_workspace.html", vm=vm)
     app.add_url_rule("/parallax/workspace", "parallax_workspace", parallax_workspace, methods=["GET"])
 
-    def parallax_strata_investigation():
-        """Read-only STRATA investigation page. Reuses the same nonprod gate, authenticated-candidate
-        resolution, and strict PARALLAX entitlement as the workspace; owner-scoped data only."""
+    def _parallax_page_gate():
+        """Shared gate for PARALLAX research pages. Returns (candidate, None) when authorized, else
+        (None, response) with the same safe denial. Used by the research page AND the deprecated
+        /parallax/strata/* alias, so an unauthorized user is never redirected into PARALLAX."""
         if not _nonprod():
-            return ("not found", 404)
+            return None, ("not found", 404)
         c = _resolve_candidate()
         if not c:
             try:
-                return redirect(url_for("gh_login"))
+                return None, redirect(url_for("gh_login"))
             except Exception:  # noqa: BLE001
-                return redirect("/me")
+                return None, redirect("/me")
         if not _parallax_member_cid(c.id):
             try:
-                return redirect(url_for("candidate_me"))
+                return None, redirect(url_for("candidate_me"))
             except Exception:  # noqa: BLE001
-                return redirect("/me")
+                return None, redirect("/me")
+        return c, None
+
+    def _render_research_investigation(run_id):
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
         researcher_id = c.github_id or c.handle
-        run_id = (request.args.get("run_id") or "").strip() or None
         from parallax import strata_investigation as _si
         from parallax.research import strata_view as _sv
         try:
@@ -491,11 +497,33 @@ def register(app, candidate_model=None, db=None, helpers=None):
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001
-            return render_template("parallax_strata_investigation.html", view=None,
+            return render_template("parallax_research_investigation.html", view=None,
                                    error="investigation evidence is temporarily unavailable"), 200
-        return render_template("parallax_strata_investigation.html", view=view, error=None)
+        return render_template("parallax_research_investigation.html", view=view, error=None)
+
+    def parallax_research_investigations():
+        return _render_research_investigation((request.args.get("run_id") or "").strip() or None)
+
+    def parallax_research_investigation_detail(run_id):
+        return _render_research_investigation((run_id or "").strip() or None)
+
+    app.add_url_rule("/parallax/research/investigations", "parallax_research_investigations",
+                     parallax_research_investigations, methods=["GET"])
+    app.add_url_rule("/parallax/research/investigations/<run_id>",
+                     "parallax_research_investigation_detail",
+                     parallax_research_investigation_detail, methods=["GET"])
+
+    def parallax_strata_investigation_alias():
+        """Deprecated alias (legacy /parallax/strata/investigation). Gate FIRST, then redirect an
+        authorized PARALLAX user to the corrected research route. Unauthorized users get the gate's
+        safe denial and are never redirected into PARALLAX."""
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
+        rid = (request.args.get("run_id") or "").strip()
+        return redirect("/parallax/research/investigations" + ("/" + rid if rid else ""), code=302)
     app.add_url_rule("/parallax/strata/investigation", "parallax_strata_investigation",
-                     parallax_strata_investigation, methods=["GET"])
+                     parallax_strata_investigation_alias, methods=["GET"])
 
     def parallax_research_brief():
         if not _nonprod():
