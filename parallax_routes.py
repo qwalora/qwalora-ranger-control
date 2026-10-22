@@ -500,6 +500,44 @@ def register(app, candidate_model=None, db=None, helpers=None):
     app.add_url_rule("/parallax/strata/investigation", "parallax_strata_investigation",
                      parallax_strata_investigation, methods=["GET"])
 
+    def parallax_strata_trace():
+        """Read-only STRATA trace explorer (px-trace-v1 + px-trust-v1). Same nonprod gate, candidate
+        resolution, and strict PARALLAX entitlement as the investigation page; owner-scoped data only,
+        server-side filtering, no parallel store."""
+        if not _nonprod():
+            return ("not found", 404)
+        c = _resolve_candidate()
+        if not c:
+            try:
+                return redirect(url_for("gh_login"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        if not _parallax_member_cid(c.id):
+            try:
+                return redirect(url_for("candidate_me"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        researcher_id = c.github_id or c.handle
+        run_id = (request.args.get("run_id") or "").strip() or None
+        filters = {k: (request.args.get(k) or "").strip()
+                   for k in ("event_type", "trust_zone", "finding", "evidence")}
+        from parallax import strata_trace_view as _stv
+        from parallax import strata_investigation as _si
+        from parallax.research import strata_view as _sv
+        try:
+            view = _stv.assemble_trace_view(db, researcher_id=researcher_id, run_id=run_id,
+                                            filters=filters)
+        except _si.CampaignNotFound:
+            return ("campaign not found", 404)
+        except _sv.EntitlementError:
+            return ("forbidden", 403)
+        except Exception:  # noqa: BLE001 - never leak internals
+            return render_template("parallax_strata_trace.html", v=None,
+                                   error="investigation evidence is temporarily unavailable"), 200
+        return render_template("parallax_strata_trace.html", v=view, error=None)
+    app.add_url_rule("/parallax/strata/trace", "parallax_strata_trace",
+                     parallax_strata_trace, methods=["GET"])
+
     def parallax_research_brief():
         if not _nonprod():
             return ("not found", 404)
