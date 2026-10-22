@@ -63,3 +63,19 @@ def test_evidence_chain_section_from_verifier_report():
     assert view["evidence_chain"]["integrity_ok"] is True
     assert view["evidence_chain"]["result_eligible"] is False
     assert view["evidence_chain"]["trust_basis"]["independence_attested_by_tool"] is False
+
+
+def test_ui_states_rejected_and_inconclusive_are_distinct():
+    recs = [_rec("h1", "successful_unauthorized_behavior"),
+            _rec("h2", "successful_unauthorized_behavior"),
+            _rec("h3", "inconclusive")]
+    adj = {"h1": {"disposition": "rejected", "reviewer_id": "ind", "verified": True, "signed": True},
+           "h3": {"disposition": "inconclusive", "reviewer_id": "ind", "verified": True, "signed": True}}
+    view = SV.build_view(mission=MISSION, records=recs, adjudications=adj, entitled=True,
+                         viewer_scope=["PARALLAX"])
+    by = {r["evidence_hash"]: r for r in view["behavior"]}
+    assert by["h1"]["status"] == M.ST_HUMAN_REJECTED and by["h1"]["is_confirmed_conclusion"] is False
+    assert by["h2"]["status"] == M.ST_AUTOMATED_CANDIDATE and by["h2"]["requires_human_review"] is True
+    assert by["h3"]["status"] == M.ST_INCONCLUSIVE
+    assert view["review"]["rejected"] == 1 and view["review"]["inconclusive"] == 1
+    assert view["review"]["unresolved_candidates"] == 1   # h2 still open

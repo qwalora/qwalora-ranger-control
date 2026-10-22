@@ -155,3 +155,16 @@ def test_augment_metrics_is_additive_and_preserves_frozen_keys():
     assert aug["findings_available"] == frozen["findings_available"]
     assert aug["measurement_integrity"]["candidate_rate"]["candidate_asr"] is not None
     assert aug["measurement_integrity"]["adjudicated"]["confirmed_asr"] == "not_established"
+
+
+def test_duplicate_conflicting_dispositions_resolve_to_single_record_key():
+    # the adjudications map is keyed by record; a later authoritative disposition for the same key is
+    # what the caller supplies. The measurement layer classifies exactly one status per record and
+    # never double-counts a single trial as both confirmed and rejected.
+    recs = [_attack("h1", "successful_unauthorized_behavior")]
+    s_conf = M.summarize(recs, {"h1": _signed("confirmed")})
+    s_rej = M.summarize(recs, {"h1": _signed("rejected")})
+    assert s_conf["adjudicated"]["confirmed"] == 1 and s_conf["adjudicated"]["rejected"] == 0
+    assert s_rej["adjudicated"]["confirmed"] == 0 and s_rej["adjudicated"]["rejected"] == 1
+    # one record contributes exactly one unit to the attack denominator regardless of disposition
+    assert s_conf["candidate_rate"]["denominator_valid_attacks"] == 1
