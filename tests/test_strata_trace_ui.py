@@ -12,7 +12,7 @@ from models import db
 from parallax.research import store as rstore
 from parallax.research import evidence_verifier as _EV
 
-URL = "/parallax/strata/trace"
+URL = "/parallax/research/traces"
 
 
 def _login(client, cid):
@@ -43,14 +43,14 @@ def test_entitled_researcher_gets_trace_explorer(client, seeded):
     r = client.get(URL)
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "STRATA Trace Explorer" in body and "px-trace-v1" in body
+    assert "PARALLAX Research - Trace Explorer" in body and "px-trace-v1" in body
 
 
 def test_non_parallax_user_is_isolated(client, seeded):
     _login(client, seeded["s_id"])                 # sc-strata: NOT a PARALLAX member
     r = client.get(URL)
     assert r.status_code in (302, 303)
-    assert "STRATA Trace Explorer" not in r.get_data(as_text=True)
+    assert "PARALLAX Research - Trace Explorer" not in r.get_data(as_text=True)
 
 
 def test_unauthenticated_is_redirected(client):
@@ -133,7 +133,7 @@ def test_legacy_minimal_record_is_graceful(client, seeded):
         rstore.persist_run(db, researcher_id="rb-researcher", campaign=camp)
     _login(client, seeded["b_id"])
     r = client.get(URL)
-    assert r.status_code == 200 and "STRATA Trace Explorer" in r.get_data(as_text=True)
+    assert r.status_code == 200 and "PARALLAX Research - Trace Explorer" in r.get_data(as_text=True)
 
 
 # --------------------------------------------------------------- export route (document reality)

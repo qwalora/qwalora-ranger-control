@@ -1,4 +1,4 @@
-"""Read-only STRATA trace-explorer view (Workstream C).
+"""Read-only PARALLAX research trace-explorer view.
 
 Layers the new px-trace-v1 normalization, px-trust-v1 trust-boundary analysis, and the deterministic
 investigation summary over the SAME owner-scoped research store the investigation page already uses.

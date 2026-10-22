@@ -464,79 +464,121 @@ def register(app, candidate_model=None, db=None, helpers=None):
         return render_template("parallax_workspace.html", vm=vm)
     app.add_url_rule("/parallax/workspace", "parallax_workspace", parallax_workspace, methods=["GET"])
 
-    def parallax_strata_investigation():
-        """Read-only STRATA investigation page. Reuses the same nonprod gate, authenticated-candidate
-        resolution, and strict PARALLAX entitlement as the workspace; owner-scoped data only."""
+    def _parallax_page_gate():
+        """Shared gate for PARALLAX research pages. Returns (candidate, None) when authorized, else
+        (None, response) carrying the SAME safe denial used before (404 in prod, login redirect when
+        unauthenticated, own-dashboard redirect when not a PARALLAX member). Used by the research pages
+        AND the deprecated /parallax/strata/* aliases, so an unauthorized user is never redirected into
+        the PARALLAX program by an alias."""
         if not _nonprod():
-            return ("not found", 404)
+            return None, ("not found", 404)
         c = _resolve_candidate()
         if not c:
             try:
-                return redirect(url_for("gh_login"))
+                return None, redirect(url_for("gh_login"))
             except Exception:  # noqa: BLE001
-                return redirect("/me")
+                return None, redirect("/me")
         if not _parallax_member_cid(c.id):
             # entitled to no PARALLAX: no leak, send to their own dashboard (cross-program isolation)
             try:
-                return redirect(url_for("candidate_me"))
+                return None, redirect(url_for("candidate_me"))
             except Exception:  # noqa: BLE001
-                return redirect("/me")
+                return None, redirect("/me")
+        return c, None
+
+    def _render_research_investigation(run_id):
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
         researcher_id = c.github_id or c.handle
-        run_id = (request.args.get("run_id") or "").strip() or None
         from parallax import strata_investigation as _si
         from parallax.research import strata_view as _sv
         try:
             view = _si.assemble(db, researcher_id=researcher_id, run_id=run_id)
         except _si.CampaignNotFound:
-            # an explicitly requested campaign not in the user's own set: 404 (identical for a foreign
-            # owner's id and a nonexistent id, so it is not an existence oracle). Never a silent fallback.
+            # a requested campaign not in the user's own set: 404 (identical for a foreign owner's id and
+            # a nonexistent id, so it is not an existence oracle). Never a silent fallback.
             return ("campaign not found", 404)
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001 - a read failure must not leak internals; show a safe error
-            return render_template("parallax_strata_investigation.html", view=None,
+            return render_template("parallax_research_investigation.html", view=None,
                                    error="investigation evidence is temporarily unavailable"), 200
-        return render_template("parallax_strata_investigation.html", view=view, error=None)
-    app.add_url_rule("/parallax/strata/investigation", "parallax_strata_investigation",
-                     parallax_strata_investigation, methods=["GET"])
+        return render_template("parallax_research_investigation.html", view=view, error=None)
 
-    def parallax_strata_trace():
-        """Read-only STRATA trace explorer (px-trace-v1 + px-trust-v1). Same nonprod gate, candidate
-        resolution, and strict PARALLAX entitlement as the investigation page; owner-scoped data only,
-        server-side filtering, no parallel store."""
-        if not _nonprod():
-            return ("not found", 404)
-        c = _resolve_candidate()
-        if not c:
-            try:
-                return redirect(url_for("gh_login"))
-            except Exception:  # noqa: BLE001
-                return redirect("/me")
-        if not _parallax_member_cid(c.id):
-            try:
-                return redirect(url_for("candidate_me"))
-            except Exception:  # noqa: BLE001
-                return redirect("/me")
+    def parallax_research_investigations():
+        return _render_research_investigation((request.args.get("run_id") or "").strip() or None)
+
+    def parallax_research_investigation_detail(run_id):
+        return _render_research_investigation((run_id or "").strip() or None)
+
+    app.add_url_rule("/parallax/research/investigations", "parallax_research_investigations",
+                     parallax_research_investigations, methods=["GET"])
+    app.add_url_rule("/parallax/research/investigations/<run_id>",
+                     "parallax_research_investigation_detail",
+                     parallax_research_investigation_detail, methods=["GET"])
+
+    def parallax_strata_investigation_alias():
+        """Deprecated alias (legacy /parallax/strata/investigation). Gate FIRST, then redirect an
+        authorized PARALLAX user to the correctly named research route. Unauthorized users receive the
+        gate's safe denial and are never redirected into the PARALLAX program."""
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
+        rid = (request.args.get("run_id") or "").strip()
+        return redirect("/parallax/research/investigations" + ("/" + rid if rid else ""), code=302)
+    app.add_url_rule("/parallax/strata/investigation", "parallax_strata_investigation",
+                     parallax_strata_investigation_alias, methods=["GET"])
+
+    def _render_research_trace(run_id):
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
         researcher_id = c.github_id or c.handle
-        run_id = (request.args.get("run_id") or "").strip() or None
         filters = {k: (request.args.get(k) or "").strip()
                    for k in ("event_type", "trust_zone", "finding", "evidence")}
-        from parallax import strata_trace_view as _stv
+        from parallax.research import research_trace_view as _rtv
         from parallax import strata_investigation as _si
         from parallax.research import strata_view as _sv
         try:
-            view = _stv.assemble_trace_view(db, researcher_id=researcher_id, run_id=run_id,
+            view = _rtv.assemble_trace_view(db, researcher_id=researcher_id, run_id=run_id,
                                             filters=filters)
         except _si.CampaignNotFound:
             return ("campaign not found", 404)
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001 - never leak internals
-            return render_template("parallax_strata_trace.html", v=None,
+            return render_template("parallax_research_trace.html", v=None,
                                    error="investigation evidence is temporarily unavailable"), 200
-        return render_template("parallax_strata_trace.html", v=view, error=None)
+        return render_template("parallax_research_trace.html", v=view, error=None)
+
+    def parallax_research_traces():
+        return _render_research_trace((request.args.get("run_id") or "").strip() or None)
+
+    def parallax_research_trace_detail(run_id):
+        return _render_research_trace((run_id or "").strip() or None)
+
+    app.add_url_rule("/parallax/research/traces", "parallax_research_traces",
+                     parallax_research_traces, methods=["GET"])
+    app.add_url_rule("/parallax/research/traces/<run_id>", "parallax_research_trace_detail",
+                     parallax_research_trace_detail, methods=["GET"])
+
+    def parallax_strata_trace_alias():
+        """Deprecated alias (legacy /parallax/strata/trace). Same gated-redirect contract as the
+        investigation alias; preserves filter query params for an authorized user."""
+        c, deny = _parallax_page_gate()
+        if deny is not None:
+            return deny
+        from urllib.parse import urlencode
+        rid = (request.args.get("run_id") or "").strip()
+        base = "/parallax/research/traces" + ("/" + rid if rid else "")
+        qs = {k: request.args.get(k) for k in ("event_type", "trust_zone", "finding", "evidence")
+              if request.args.get(k)}
+        if qs:
+            base += "?" + urlencode(qs)
+        return redirect(base, code=302)
     app.add_url_rule("/parallax/strata/trace", "parallax_strata_trace",
-                     parallax_strata_trace, methods=["GET"])
+                     parallax_strata_trace_alias, methods=["GET"])
 
     def parallax_research_brief():
         if not _nonprod():

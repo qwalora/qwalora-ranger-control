@@ -14,7 +14,7 @@ from parallax.research import agent_trace as AT
 from parallax.research import trust_analysis as TA
 from parallax.research import investigation_bundle as IB
 from parallax.research import evidence_verifier as EV
-from parallax import strata_trace_view as STV
+from parallax.research import research_trace_view as STV
 
 
 # --------------------------------------------------------------- resource exhaustion / malformed input

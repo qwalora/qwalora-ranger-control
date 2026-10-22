@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}STRATA Trace Explorer · Qwalora Ranger{% endblock %}
+{% block title %}PARALLAX Research - Trace Explorer · Qwalora Ranger{% endblock %}
 {% block head %}
 <style>
   .tx-wrap{max-width:1040px;margin:0 auto;padding:24px 16px;color:#1c2330;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
@@ -30,13 +30,13 @@
 {% block body %}
 <div class="tx-wrap">
   <a class="tx-back" href="/parallax/workspace">&larr; PARALLAX workspace</a>
-  <a class="tx-back" href="/parallax/strata/investigation{% if v and v.selected_campaign %}?run_id={{ v.selected_campaign }}{% endif %}">Investigation view</a>
+  <a class="tx-back" href="/parallax/research/investigations{% if v and v.selected_campaign %}/{{ v.selected_campaign }}{% endif %}">Investigation view</a>
   {% if error %}
     <div class="tx-err" role="alert">{{ error }}</div>
   {% elif not v %}
     <div class="tx-err" role="alert">insufficient access</div>
   {% else %}
-  <h1>STRATA Trace Explorer</h1>
+  <h1>PARALLAX Research - Trace Explorer</h1>
   <div class="tx-note">Read-only normalization (px-trace-v1) and trust-boundary analysis (px-trust-v1)
     over your own recorded campaigns. Heuristic observations are candidates for human review, never
     confirmed compromise.</div>
@@ -50,7 +50,7 @@
   {% if v.campaigns|length > 1 %}
   <div style="margin:8px 0">
     {% for c in v.campaigns %}
-      <a class="tx-back" href="/parallax/strata/trace?run_id={{ c.campaign_id }}">
+      <a class="tx-back" href="/parallax/research/traces/{{ c.campaign_id }}">
         {% if c.campaign_id == v.selected_campaign %}&#9679;{% else %}&#9675;{% endif %}
         {{ c.campaign_id }}</a>
     {% endfor %}
@@ -73,7 +73,7 @@
   {% endif %}
 
   <h2>Trace explorer</h2>
-  <form class="tx-filters" method="get" action="/parallax/strata/trace">
+  <form class="tx-filters" method="get" action="/parallax/research/traces">
     <input type="hidden" name="run_id" value="{{ v.selected_campaign }}">
     <div><label>Event type</label>
       <select name="event_type"><option value="">all</option>

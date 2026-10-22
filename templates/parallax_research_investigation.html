@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}STRATA Investigation · Qwalora Ranger{% endblock %}
+{% block title %}PARALLAX Research - Investigation · Qwalora Ranger{% endblock %}
 {% block head %}
 <style>
   .si-wrap{max-width:1040px;margin:0 auto;padding:24px 16px;color:#1c2330;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
@@ -33,7 +33,7 @@
   {% elif not view %}
     <div class="si-err" role="alert">insufficient access</div>
   {% else %}
-  <h1>STRATA Investigation</h1>
+  <h1>PARALLAX Research - Investigation</h1>
   <div class="si-note">{{ view.mission.title }} · program {{ view.mission.program }}</div>
 
   <div class="si-banner si-obs"><div class="lbl">Observed evidence</div>{{ view.integrity_banner.observed }}</div>
@@ -50,7 +50,7 @@
   {% if view.campaign_count == 0 %}
     <div class="si-note">No campaigns are available to you yet.</div>
   {% else %}
-  <form method="get" action="/parallax/strata/investigation" class="si-camp">
+  <form method="get" action="/parallax/research/investigations" class="si-camp">
     <label class="k" for="campsel">Campaign ({{ view.campaign_count }} available)</label>
     <select id="campsel" name="run_id" onchange="this.form.submit()">
       {% for c in view.campaigns %}
