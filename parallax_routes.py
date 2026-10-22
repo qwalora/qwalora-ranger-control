@@ -464,6 +464,42 @@ def register(app, candidate_model=None, db=None, helpers=None):
         return render_template("parallax_workspace.html", vm=vm)
     app.add_url_rule("/parallax/workspace", "parallax_workspace", parallax_workspace, methods=["GET"])
 
+    def parallax_strata_investigation():
+        """Read-only STRATA investigation page. Reuses the same nonprod gate, authenticated-candidate
+        resolution, and strict PARALLAX entitlement as the workspace; owner-scoped data only."""
+        if not _nonprod():
+            return ("not found", 404)
+        c = _resolve_candidate()
+        if not c:
+            try:
+                return redirect(url_for("gh_login"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        if not _parallax_member_cid(c.id):
+            # entitled to no PARALLAX: no leak, send to their own dashboard (cross-program isolation)
+            try:
+                return redirect(url_for("candidate_me"))
+            except Exception:  # noqa: BLE001
+                return redirect("/me")
+        researcher_id = c.github_id or c.handle
+        run_id = (request.args.get("run_id") or "").strip() or None
+        from parallax import strata_investigation as _si
+        from parallax.research import strata_view as _sv
+        try:
+            view = _si.assemble(db, researcher_id=researcher_id, run_id=run_id)
+        except _si.CampaignNotFound:
+            # an explicitly requested campaign not in the user's own set: 404 (identical for a foreign
+            # owner's id and a nonexistent id, so it is not an existence oracle). Never a silent fallback.
+            return ("campaign not found", 404)
+        except _sv.EntitlementError:
+            return ("forbidden", 403)
+        except Exception:  # noqa: BLE001 - a read failure must not leak internals; show a safe error
+            return render_template("parallax_strata_investigation.html", view=None,
+                                   error="investigation evidence is temporarily unavailable"), 200
+        return render_template("parallax_strata_investigation.html", view=view, error=None)
+    app.add_url_rule("/parallax/strata/investigation", "parallax_strata_investigation",
+                     parallax_strata_investigation, methods=["GET"])
+
     def parallax_research_brief():
         if not _nonprod():
             return ("not found", 404)
