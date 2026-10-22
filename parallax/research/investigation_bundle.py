@@ -25,6 +25,32 @@ from . import evidence_verifier as EV
 
 BUNDLE_SCHEMA_VERSION = "px-ibundle-v1"
 
+# Deny-by-default export hardening. A bundle may be shared, so beyond the credential-regex scrub we:
+#  - keep only an explicit allow-list of top-level keys per file (unknown keys are dropped, counted),
+#  - redact the VALUE of any key whose NAME looks sensitive, regardless of what the value is (this is
+#    what catches a token embedded in a tool-argument field the regex would miss),
+#  - bound every string and cap list length / nesting depth so an unknown or hostile structure can
+#    neither leak at length nor exhaust the exporter.
+# Regex redaction is defense-in-depth, NOT a guarantee that every secret is removed; the manifest says so.
+import re as _re
+
+_SENSITIVE_KEY_RE = _re.compile(
+    r"pass(word|wd|phrase)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|"
+    r"authoriz|auth[_-]?header|bearer|cookie|session[_-]?id|ssn|social[_-]?security|"
+    r"credit[_-]?card|card[_-]?number|cvv|routing|iban|account[_-]?number", _re.I)
+
+MAX_EXPORT_STR = 8000
+MAX_EXPORT_DEPTH = 12
+MAX_EXPORT_LIST = 2000
+MAX_EXPORT_KEYS = 200
+
+# explicit per-file top-level allow-lists (deny-by-default: anything not listed is dropped)
+_TRACE_TOP = {"schema_version", "importer_version", "trace_id", "source", "model", "authorization",
+              "event_count", "events", "gaps", "integrity", "trace_hash", "created_at"}
+_EVENT_TOP = {"event_id", "seq", "type", "trust_zone", "observed", "content", "content_sha256",
+              "content_truncated_from", "timestamps", "attrs"}
+_EVENT_ATTRS_TOP = {"tool_name", "role", "source", "doc_id", "heuristic", "note", "status", "outcome"}
+
 
 class BundleError(Exception):
     """Raised on invalid inputs, unsafe destinations, or a bundle that fails verification."""
@@ -36,6 +62,68 @@ def _canon_bytes(obj: Any) -> bytes:
 
 def _sha_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
+
+
+def _sanitize_export(obj: Any, depth: int = 0, _stats: Optional[Dict[str, int]] = None) -> Any:
+    """Recursively make a value safe to export: redact sensitive-named keys, scrub credential-shaped
+    strings (defense in depth), and bound string length, list length and nesting depth. Unknown
+    structures are handled conservatively (dropped past the depth cap) rather than trusted."""
+    if _stats is None:
+        _stats = {}
+    if depth > MAX_EXPORT_DEPTH:
+        _stats["depth_dropped"] = _stats.get("depth_dropped", 0) + 1
+        return "[DROPPED: max export depth exceeded]"
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for i, (k, v) in enumerate(obj.items()):
+            if i >= MAX_EXPORT_KEYS:
+                _stats["keys_dropped"] = _stats.get("keys_dropped", 0) + 1
+                continue
+            if isinstance(k, str) and _SENSITIVE_KEY_RE.search(k):
+                out[k] = "[REDACTED:sensitive-key]"
+                _stats["sensitive_keys_redacted"] = _stats.get("sensitive_keys_redacted", 0) + 1
+            else:
+                out[k] = _sanitize_export(v, depth + 1, _stats)
+        return out
+    if isinstance(obj, (list, tuple)):
+        items = list(obj)[:MAX_EXPORT_LIST]
+        if len(obj) > MAX_EXPORT_LIST:
+            _stats["list_truncated"] = _stats.get("list_truncated", 0) + 1
+        return [_sanitize_export(v, depth + 1, _stats) for v in items]
+    if isinstance(obj, str):
+        s = obj
+        for label, pat in getattr(AT, "_SECRET_RE", []):
+            s = pat.sub("[SCRUBBED:%s]" % label, s)
+        if len(s) > MAX_EXPORT_STR:
+            s = s[:MAX_EXPORT_STR] + "[truncated-for-export]"
+            _stats["strings_truncated"] = _stats.get("strings_truncated", 0) + 1
+        return s
+    if isinstance(obj, (int, float, bool)) or obj is None:
+        return obj
+    return "[DROPPED: unsupported type %s]" % type(obj).__name__
+
+
+def _project(obj: Dict[str, Any], allowed: set, _stats: Dict[str, int]) -> Dict[str, Any]:
+    """Explicit-schema projection: keep only allowed top-level keys; count what was dropped."""
+    out = {k: v for k, v in obj.items() if k in allowed}
+    dropped = [k for k in obj if k not in allowed]
+    if dropped:
+        _stats["top_keys_dropped"] = _stats.get("top_keys_dropped", 0) + len(dropped)
+    return out
+
+
+def _export_trace(trace: Dict[str, Any], _stats: Dict[str, int]) -> Dict[str, Any]:
+    """Deny-by-default projection + sanitization of a trace for export."""
+    t = _project(trace, _TRACE_TOP, _stats)
+    events = []
+    for e in t.get("events", []):
+        ev = _project(e, _EVENT_TOP, _stats)
+        if isinstance(ev.get("attrs"), dict):
+            ev["attrs"] = _project(ev["attrs"], _EVENT_ATTRS_TOP, _stats)
+        events.append(_sanitize_export(ev, 0, _stats))
+    t = _sanitize_export(t, 0, _stats)
+    t["events"] = events
+    return t
 
 
 def _write(dest: str, rel: str, obj: Any, checksums: Dict[str, str]) -> None:
@@ -75,26 +163,29 @@ def build_bundle(dest_dir: str, *, trace: Dict[str, Any], analysis: Optional[Dic
     dest_real = EV.assert_safe_export_dir(dest_dir, sentinel)
     os.makedirs(dest_real, exist_ok=True)
 
-    scrubbed_trace = AT.scrub_for_fixture(trace)
+    export_stats: Dict[str, int] = {}
+    safe_trace = _export_trace(trace, export_stats)
     checksums: Dict[str, str] = {}
 
-    _write(dest_real, "trace.json", scrubbed_trace, checksums)
-    _write(dest_real, "events.json", scrubbed_trace.get("events", []), checksums)
+    _write(dest_real, "trace.json", safe_trace, checksums)
+    _write(dest_real, "events.json", safe_trace.get("events", []), checksums)
     if analysis is not None:
-        _write(dest_real, "analysis.json", AT.scrub_for_fixture(analysis), checksums)
+        _write(dest_real, "analysis.json", _sanitize_export(analysis, 0, export_stats), checksums)
     # human review: provenance preserved, never fabricated. A decision with no verifying signature is
     # carried through with verified=false; a missing decision set is simply empty, not invented.
-    review = {"decisions": AT.scrub_for_fixture(review_decisions or []),
+    review = {"decisions": _sanitize_export(review_decisions or [], 0, export_stats),
               "note": "human-review decisions as recorded; a decision is authoritative only when its "
                       "signature verifies and the reviewer differs from the producer (separation of "
                       "duties); none are invented."}
     _write(dest_real, "review.json", review, checksums)
-    _write(dest_real, "coverage.json", coverage_metrics or {"note": "no coverage metrics supplied"},
+    _write(dest_real, "coverage.json",
+           _sanitize_export(coverage_metrics or {"note": "no coverage metrics supplied"}, 0, export_stats),
            checksums)
-    _write(dest_real, "evidence_refs.json", AT.scrub_for_fixture(evidence_refs or []), checksums)
+    _write(dest_real, "evidence_refs.json", _sanitize_export(evidence_refs or [], 0, export_stats),
+           checksums)
 
     summary = build_summary(trace, analysis, review_decisions or [], coverage_metrics or {})
-    _write(dest_real, "summary.json", summary, checksums)
+    _write(dest_real, "summary.json", _sanitize_export(summary, 0, export_stats), checksums)
 
     _write(dest_real, "VERIFY.json",
            {"how_to_verify": [
@@ -121,6 +212,14 @@ def build_bundle(dest_dir: str, *, trace: Dict[str, Any], analysis: Optional[Dic
         "created_at": time.time(),                 # excluded from bundle_hash so builds stay deterministic
         "files": dict(sorted(checksums.items())),
         "bundle_hash": bundle_hash,
+        "export_redaction": {
+            "method": "explicit per-file schema (deny-by-default) + sensitive-key-name redaction + "
+                      "credential-regex scrub, with bounded strings/lists/depth",
+            "stats": dict(sorted(export_stats.items())),
+            "disclaimer": "Redaction is best-effort defense-in-depth. It is NOT a guarantee that every "
+                          "secret or item of personal data has been removed; a human must review before "
+                          "any wider distribution.",
+        },
         "custody_note": "bundle_hash proves internal consistency only; it does NOT attest independent "
                         "custody of the evidence or independent human validation.",
     }
