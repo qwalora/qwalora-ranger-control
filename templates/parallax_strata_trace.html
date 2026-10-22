@@ -113,6 +113,7 @@
         <td>
           {% if e.excerpt.full_length %}<div class="tx-ex">{{ e.excerpt.text }}{% if e.excerpt.truncated %}&hellip;</div>
             <div class="tx-note">excerpt bounded to {{ v.excerpt_chars }} of {{ e.excerpt.full_length }} chars</div>{% else %}</div>{% endif %}
+            {% if e.excerpt.spoof_chars_neutralized %}<div class="tx-note">&#9888; bidi/zero-width characters made visible for safe display (stored content unchanged)</div>{% endif %}
           {% else %}<span class="tx-note">none recorded</span>{% endif %}
         </td>
       </tr>

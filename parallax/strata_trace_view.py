@@ -29,6 +29,18 @@ from parallax import strata_investigation as SI
 
 EXCERPT_CHARS = 280
 
+# Formatting characters that are invisible or can reverse visible text order. Untrusted evidence may
+# embed them to spoof how an exfiltration URL or instruction reads to a human reviewer. They are
+# neutralized in the DISPLAY excerpt only (made visible), never removed from the stored trace content,
+# so the recorded evidence stays faithful while the reviewer cannot be visually deceived.
+_SPOOF_CHARS = {
+    "‪": "<U+202A LRE>", "‫": "<U+202B RLE>", "‬": "<U+202C PDF>",
+    "‭": "<U+202D LRO>", "‮": "<U+202E RLO>", "⁦": "<U+2066 LRI>",
+    "⁧": "<U+2067 RLI>", "⁨": "<U+2068 FSI>", "⁩": "<U+2069 PDI>",
+    "​": "<U+200B ZWSP>", "‌": "<U+200C ZWNJ>", "‍": "<U+200D ZWJ>",
+    "﻿": "<U+FEFF BOM>",
+}
+
 _EVENT_LABELS = {
     AT.EV_USER_REQUEST: "Authorized request",
     AT.EV_SYSTEM_INSTRUCTION: "System instruction",
@@ -43,12 +55,19 @@ _EVENT_LABELS = {
 
 
 def _excerpt(text: Optional[str]) -> Dict[str, Any]:
-    """Bounded excerpt for display. The template autoescapes; this only length-bounds and reports
-    whether truncation occurred, so a long or hostile payload can never dominate the page."""
+    """Bounded, display-safe excerpt. The template autoescapes HTML; here we additionally length-bound
+    and neutralize bidi/zero-width spoofing characters (made visible, not removed), so a long or hostile
+    payload can neither dominate the page nor visually deceive the reviewer. full_length reflects the
+    original stored content length (the stored trace content itself is never altered)."""
     s = "" if text is None else str(text)
-    if len(s) > EXCERPT_CHARS:
-        return {"text": s[:EXCERPT_CHARS], "truncated": True, "full_length": len(s)}
-    return {"text": s, "truncated": False, "full_length": len(s)}
+    full_length = len(s)
+    spoofed = any(ch in s for ch in _SPOOF_CHARS)
+    if spoofed:
+        for ch, vis in _SPOOF_CHARS.items():
+            s = s.replace(ch, vis)
+    truncated = len(s) > EXCERPT_CHARS
+    return {"text": s[:EXCERPT_CHARS] if truncated else s, "truncated": truncated,
+            "full_length": full_length, "spoof_chars_neutralized": spoofed}
 
 
 def _decisions_for_selected(db, *, researcher_id: str, selected: str) -> List[Dict[str, Any]]:
