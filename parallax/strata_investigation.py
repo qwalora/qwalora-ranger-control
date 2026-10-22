@@ -25,6 +25,11 @@ from parallax.research import evidence_verifier as EV
 
 _SCOPE_NOTE = "Attack only the provided synthetic research corpus. No real PII. No out-of-scope targets."
 
+
+class CampaignNotFound(Exception):
+    """An explicitly requested campaign id is not among the viewer's own campaigns (404, not a silent
+    fallback). Identical for a nonexistent id and another owner's id, so it leaks no existence."""
+
 # A fixed causal order used to sequence events when timestamps are absent or ambiguous. Stable record
 # identifiers break ties within a type so ordering is deterministic and never fabricated.
 _TYPE_ORDER = {
@@ -98,15 +103,18 @@ def verify_record_server_side(full_run: Dict[str, Any], *, is_empirical: Optiona
     independent_finding = "established" if not reasons else "not_established"
 
     return {
+        "scope": "per_record",                  # THIS verification covers one signed run/record only
+        "full_chain_verification": "not_run_inline",  # campaign-chain verification is a separate step
         "crypto": crypto,                       # succeeded | failed | unavailable
         "integrity": integrity,                 # ok | mismatch | absent
         "independent_finding": independent_finding,   # established | not_established
         "independent_finding_reasons": reasons,
         "independence_attested_by_tool": False,  # custody is external; never asserted here
         "trusted_kids": [e["kid"] for e in signing.public_registry()],
-        "note": ("Cryptographic verification and integrity are separate from independent scientific "
-                 "validation; a verified signature never implies independent custody or a correct "
-                 "scientific conclusion."),
+        "trusted_key_source": "server signing registry (active/verify-only keys), not client-supplied",
+        "note": ("PER-RECORD cryptographic verification and integrity only, distinct from full "
+                 "campaign-chain verification (not run here). Neither implies independent custody or a "
+                 "correct scientific conclusion."),
     }
 
 
@@ -187,6 +195,11 @@ def assemble(db, *, researcher_id: str, run_id: Optional[str] = None,
     rejected upstream by the route's entitlement check and here by build_view's scope gate."""
     campaigns = list_campaigns(db, researcher_id=researcher_id)
     campaign_ids = {c["campaign_id"] for c in campaigns}
+    # Access-control hardening: an EXPLICITLY requested campaign that is not in the viewer's own set is
+    # a not-found (404), never a silent selection of a different campaign. The response is identical
+    # whether the id is another owner's or does not exist, so it is not an existence oracle.
+    if run_id and run_id not in campaign_ids:
+        raise CampaignNotFound("campaign %r is not available to this user" % run_id)
     selected = run_id if (run_id in campaign_ids) else (campaigns[0]["campaign_id"] if campaigns else None)
 
     items = rstore.overview_for(db, authenticated_researcher_id=researcher_id)
@@ -228,8 +241,14 @@ def assemble(db, *, researcher_id: str, run_id: Optional[str] = None,
             if disp:
                 adjudications[key_of_run[parent]] = disp
 
+    # Dataset is derived from the selected record's stored corpus_version when present (an
+    # evidence-derived value), otherwise a generic label. Scope/ROE are fixed presentation policy text,
+    # not evidence values.
+    sel_full = full_by_run.get(selected or "", {})
+    sel_tr = ((sel_full.get("record") or {}).get("metrics") or {}).get("record") or {}
+    dataset = sel_tr.get("corpus_version") or "synthetic research corpus (no corpus_version recorded)"
     mission = {"program": "PARALLAX", "title": "Prompt-injection boundary investigation",
-               "campaign_id": selected or "none", "dataset": "synthetic research corpus",
+               "campaign_id": selected or "none", "dataset": dataset,
                "authorized_scope": _SCOPE_NOTE,
                "rules_of_engagement": "Observe recorded behavior and attributed sources only."}
 

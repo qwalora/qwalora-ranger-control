@@ -144,7 +144,10 @@
     <div class="si-note">No timeline events in scope for the selected campaign.</div>
   {% endif %}
 
-  <h2>8 · Evidence verification (server-side)</h2>
+  <h2>8 · Evidence verification (server-side, per-record)</h2>
+  <p class="si-note">This verifies the SELECTED record's signature and evidence hash only. Full
+     campaign-chain verification (ordering, continuity, completeness across the whole campaign) is a
+     separate step and is not run inline here.</p>
   <div class="si-grid">
     <div class="si-card"><div class="k">Cryptographic verification</div>
       <div>{% if view.verification.crypto == 'succeeded' %}<span class="badge b-negative">Succeeded</span>

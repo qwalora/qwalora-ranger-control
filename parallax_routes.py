@@ -487,6 +487,10 @@ def register(app, candidate_model=None, db=None, helpers=None):
         from parallax.research import strata_view as _sv
         try:
             view = _si.assemble(db, researcher_id=researcher_id, run_id=run_id)
+        except _si.CampaignNotFound:
+            # an explicitly requested campaign not in the user's own set: 404 (identical for a foreign
+            # owner's id and a nonexistent id, so it is not an existence oracle). Never a silent fallback.
+            return ("campaign not found", 404)
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001 - a read failure must not leak internals; show a safe error

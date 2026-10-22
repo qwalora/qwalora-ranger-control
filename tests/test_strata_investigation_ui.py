@@ -59,16 +59,27 @@ def test_candidate_is_rendered_as_unreviewed_not_confirmed(client, seeded):
     assert "not_established" in body                   # confirmed ASR withheld
 
 
-def test_cross_owner_run_id_does_not_leak(client, seeded):
-    # researcher B asks to focus another owner's run id; overview is owner-scoped, so no leak and the
-    # page still renders B's own evidence.
+def test_own_run_id_resolves(client, seeded):
     _login(client, seeded["b_id"])
-    r = client.get(URL + "?run_id=" + seeded["b_run"])   # b_run belongs to B here; focus resolves
+    r = client.get(URL + "?run_id=" + seeded["b_run"])   # b_run belongs to B; focus resolves
     assert r.status_code == 200
-    # a foreign/nonexistent run id simply falls back to the owner's own trials, never 500 or leak
-    r2 = client.get(URL + "?run_id=run-does-not-exist")
-    assert r2.status_code == 200
-    assert "STRATA Investigation" in r2.get_data(as_text=True)
+
+
+def test_unknown_run_id_is_404_not_silent_fallback(client, seeded):
+    _login(client, seeded["b_id"])
+    r = client.get(URL + "?run_id=run-does-not-exist")
+    assert r.status_code == 404                            # explicit, not a silent other-campaign select
+    assert "STRATA Investigation" not in r.get_data(as_text=True)
+
+
+def test_cross_owner_run_id_is_404_and_identical_to_unknown(client, seeded):
+    # researcher A (a_id) requests B's real run id -> 404, byte-identical to a nonexistent id, so the
+    # response is not an existence oracle for another owner's campaigns.
+    _login(client, seeded["a_id"])
+    foreign = client.get(URL + "?run_id=" + seeded["b_run"])
+    nonexistent = client.get(URL + "?run_id=run-does-not-exist")
+    assert foreign.status_code == 404 and nonexistent.status_code == 404
+    assert foreign.get_data(as_text=True) == nonexistent.get_data(as_text=True)
 
 
 def test_get_only_and_csrf_rejects_post(client, seeded):
@@ -158,3 +169,40 @@ def test_cross_program_cannot_reach_via_campaign_param(client, seeded):
     r = client.get(URL + "?run_id=run-anything")
     assert r.status_code in (302, 303)
     assert "Investigation timeline" not in r.get_data(as_text=True)
+
+
+def test_verification_is_labeled_per_record(client, seeded):
+    _persist_rich_trial("rb-researcher")
+    _login(client, seeded["b_id"])
+    body = client.get(URL).get_data(as_text=True).lower()
+    assert "per-record" in body
+    assert "campaign-chain verification" in body         # explicitly distinguished, not run inline
+
+
+def test_entitlement_revocation_denies_next_request(client, seeded):
+    from models import ProgramMembership
+    _login(client, seeded["b_id"])
+    assert client.get(URL).status_code == 200
+    with A.app.app_context():
+        pm = ProgramMembership.query.filter_by(candidate_id=seeded["b_id"], program="parallax").first()
+        prev = pm.status
+        pm.status = "revoked"; db.session.commit()
+    try:
+        assert client.get(URL).status_code in (302, 303)   # entitlement re-checked every request
+    finally:
+        with A.app.app_context():
+            pm = ProgramMembership.query.filter_by(candidate_id=seeded["b_id"], program="parallax").first()
+            pm.status = prev; db.session.commit()
+
+
+def test_malformed_stored_record_is_skipped_not_crash(client, seeded):
+    from models import ParallaxResearchRun
+    with A.app.app_context():
+        db.session.add(ParallaxResearchRun(
+            run_id="run-malformed", researcher_id="rb-researcher", backend_provenance="simulated",
+            model_id="m", record_count=1, run_record="{not valid json", record_hash="x",
+            signature="x", signing_kid="x"))
+        db.session.commit()
+    _login(client, seeded["b_id"])
+    r = client.get(URL)
+    assert r.status_code == 200 and "STRATA Investigation" in r.get_data(as_text=True)
