@@ -108,6 +108,7 @@
           {% if e.findings %}{% for f in e.findings %}
             <span class="badge {% if f.severity=='observed-unauthorized' %}b-obs{% elif f.severity=='attempted' %}b-att{% else %}b-sus{% endif %}">{{ f.severity }}</span>
             <div class="tx-mono">{{ f.pattern }}</div>
+            <div class="tx-note">authorization: {{ f.authorization_status }}{% if f.execution_observed and not f.unauthorized_observed %} (execution observed, not a confirmed breach){% endif %}</div>
           {% endfor %}{% else %}<span class="tx-note">&mdash;</span>{% endif %}
         </td>
         <td>

@@ -139,7 +139,10 @@ def assemble_trace_view(db, *, researcher_id: str, run_id: Optional[str] = None,
             "ingestion_time": (e.get("timestamps") or {}).get("ingestion_time"),
             "has_finding": bool(findings),
             "findings": [{"pattern": f["pattern"], "severity": f["severity"],
-                          "unauthorized_observed": f["unauthorized_behavior_observed"]} for f in findings],
+                          "unauthorized_observed": f["unauthorized_behavior_observed"],
+                          "execution_observed": f.get("execution_observed", False),
+                          "authorization_status": f.get("authorization_status", "n/a")}
+                         for f in findings],
         })
 
     facets = {
