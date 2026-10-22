@@ -142,3 +142,15 @@ def test_unauthenticated_legacy_url_goes_to_login_not_research(client):
         r = client.get(url)
         assert r.status_code in (302, 303)
         assert not (r.headers.get("Location") or "").startswith("/parallax/research")
+
+
+def test_legacy_alias_cannot_disclose_another_users_records(client, seeded):
+    # an authorized PARALLAX user hits the legacy alias with a FOREIGN run id. The alias preserves the id
+    # on redirect, but the destination research route enforces ownership -> 404. No cross-owner leak.
+    _login(client, seeded["a_id"])                     # researcher A, requesting B's run id via the alias
+    r = client.get("/parallax/strata/trace?run_id=" + seeded["b_run"])
+    assert r.status_code in (301, 302)
+    loc = r.headers.get("Location") or ""
+    assert loc.startswith("/parallax/research/traces")
+    followed = client.get(loc)
+    assert followed.status_code == 404                 # ownership enforced at the destination, no disclosure
