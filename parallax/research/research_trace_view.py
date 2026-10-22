@@ -85,9 +85,11 @@ def _decisions_for_selected(db, *, researcher_id: str, selected: str) -> List[Di
 
 
 def assemble_trace_view(db, *, researcher_id: str, run_id: Optional[str] = None,
-                        filters: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                        filters: Optional[Dict[str, str]] = None,
+                        selected_event: Optional[str] = None) -> Dict[str, Any]:
     """Build the trace-explorer view for an entitled researcher over their OWN runs. Raises
-    SI.CampaignNotFound for an explicitly requested campaign outside the viewer's own set."""
+    SI.CampaignNotFound for an explicitly requested campaign outside the viewer's own set.
+    `selected_event` (an event_id or seq) picks the master-detail focus event."""
     filters = {k: v for k, v in (filters or {}).items() if v}
     campaigns = SI.list_campaigns(db, researcher_id=researcher_id)
     campaign_ids = {c["campaign_id"] for c in campaigns}
@@ -182,6 +184,15 @@ def assemble_trace_view(db, *, researcher_id: str, run_id: Optional[str] = None,
                          "content caused the later action)",
         })
 
+    # master-detail selection: the requested event (by event_id or seq) if visible, else the first event
+    # carrying a finding, else the first shown event. Never fabricated; always an actual recorded event.
+    selected_row = None
+    if selected_event:
+        selected_row = next((r for r in shown if r["event_id"] == selected_event
+                             or str(r["seq"]) == str(selected_event)), None)
+    if selected_row is None:
+        selected_row = next((r for r in shown if r["has_finding"]), (shown[0] if shown else None))
+
     base.update({
         "trace": {"trace_id": trace["trace_id"], "trace_hash": trace["trace_hash"],
                   "schema_version": trace["schema_version"], "event_count": trace["event_count"],
@@ -191,5 +202,8 @@ def assemble_trace_view(db, *, researcher_id: str, run_id: Optional[str] = None,
         "summary": summary, "events": shown, "all_event_count": len(rows),
         "shown_event_count": len(shown), "facets": facets, "relationships": relationships,
         "limitations": analysis.get("limitations", []),
+        "selected": selected_row,
+        "authorization_status": (analysis.get("confirmation_signals", {})
+                                 .get("egress_authorization", {})),
     })
     return base

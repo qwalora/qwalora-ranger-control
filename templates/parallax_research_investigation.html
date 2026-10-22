@@ -1,174 +1,196 @@
 {% extends "base.html" %}
-{% block title %}PARALLAX Research - Investigation · Qwalora Ranger{% endblock %}
+{% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
+{% block title %}Investigation · PARALLAX Research · Qwalora Ranger{% endblock %}
 {% block head %}
 <style>
-  .si-wrap{max-width:1040px;margin:0 auto;padding:24px 16px;color:#1c2330;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
-  .si-wrap h1{font-size:22px;margin:0 0 4px} .si-wrap h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:#5b6472;margin:26px 0 10px;border-bottom:1px solid #e4e8ef;padding-bottom:6px}
-  .si-banner{border:1px solid #d8dee8;border-radius:10px;padding:14px 16px;margin:14px 0;background:#f7f9fc}
-  .si-banner .lbl{font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#6b7280}
-  .si-obs{border-left:3px solid #2d7d5a} .si-unv{border-left:3px solid #b26b00;margin-top:10px} .si-inf{border-left:3px solid #8a8f98;margin-top:10px}
-  .si-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-  .si-card{border:1px solid #e4e8ef;border-radius:10px;padding:12px 14px;background:#fff}
-  .si-card .n{font-size:24px;font-weight:650} .si-card .k{font-size:12px;color:#6b7280;letter-spacing:.03em}
-  table.si{width:100%;border-collapse:collapse;font-size:14px} table.si th,table.si td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef1f6;vertical-align:top}
-  table.si th{font-size:12px;letter-spacing:.04em;color:#6b7280;text-transform:uppercase}
-  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid}
-  .b-confirmed{color:#8a1f1f;border-color:#e3b4b4;background:#fdf1f1}
-  .b-candidate{color:#8a5a00;border-color:#e8cf9e;background:#fdf6e9}
-  .b-rejected{color:#2d5c8a;border-color:#b4cde3;background:#f1f6fd}
-  .b-inconclusive{color:#5b4b8a;border-color:#cabfe6;background:#f4f1fb}
-  .b-negative{color:#2d7d5a;border-color:#b0d8c4;background:#f0f8f4}
-  .b-excluded{color:#6b7280;border-color:#d4d8df;background:#f3f5f8}
-  .si-src{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#44506a}
-  .si-note{color:#6b7280;font-size:13px} .si-err{border:1px solid #e3b4b4;background:#fdf1f1;color:#8a1f1f;border-radius:10px;padding:14px 16px}
-  .si-obs-text{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;white-space:pre-wrap;color:#2a3042;background:#f7f9fc;border:1px solid #eef1f6;border-radius:6px;padding:6px 8px;max-height:120px;overflow:auto}
-  .si-back{font-size:13px;color:#2d5c8a;text-decoration:none}
+  /* Scoped layout only; colors/typography/controls reuse app.css tokens and shared classes. */
+  .pxi-wrap{padding:0 24px 28px}
+  .pxi-sec{margin:24px 0 10px;font:600 12px/1 var(--f);letter-spacing:.06em;text-transform:uppercase;color:var(--med)}
+  .pxi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .pxi-card{border:1px solid var(--line2);border-radius:12px;background:var(--sub);padding:12px 14px}
+  .pxi-card .n{font:650 22px/1 var(--f);color:var(--ink)} .pxi-card .k{font-size:11.5px;color:var(--mut);letter-spacing:.03em;margin-bottom:5px}
+  .pxi-src{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#44506a}
+  .pxi-obs-text{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;white-space:pre-wrap;color:#2a3042;background:var(--sub);border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-height:160px;overflow:auto}
+  table.pxi{width:100%;border-collapse:collapse;font-size:13.5px;background:#fff;border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+  table.pxi th,table.pxi td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.pxi th{font-size:11px;letter-spacing:.04em;color:var(--mut);text-transform:uppercase;background:var(--sub)}
+  .pxi-note{color:var(--mut);font-size:13px}
+  .pill-red{background:#fdf1f1;color:#8a1f1f;border:1px solid #e3b4b4}
+  .pill-amber{background:var(--orange-50);color:var(--orange-700);border:1px solid #e8cf9e}
+  .pill-green{background:#f0f8f4;color:#2d7d5a;border:1px solid #b0d8c4}
+  .pill-blue{background:#f1f6fd;color:#2d5c8a;border:1px solid #b4cde3}
+  .pill-muted{background:var(--light);color:var(--med);border:1px solid var(--line2)}
+  .pxi-banner{display:flex;gap:9px;align-items:flex-start;padding:12px 14px;border-radius:10px;margin:8px 0;font-size:13px;line-height:1.5}
+  .pxi-b-obs{background:#f0f8f4;border:1px solid #b0d8c4;color:#255c43}
+  .pxi-b-unv{background:var(--orange-50);border:1px solid #e8cf9e;color:var(--orange-700)}
+  .pxi-b-inf{background:var(--sub);border:1px solid var(--line2);color:var(--med)}
+  @media (max-width:900px){ .pxi-wrap{padding:0 14px 22px} table.pxi{display:block;overflow-x:auto} }
 </style>
 {% endblock %}
 {% block body %}
-<div class="si-wrap">
-  <a class="si-back" href="/parallax/workspace">&larr; PARALLAX workspace</a>
-  {% if error %}
-    <div class="si-err" role="alert">{{ error }}</div>
-  {% elif not view %}
-    <div class="si-err" role="alert">insufficient access</div>
-  {% else %}
-  <h1>PARALLAX Research - Investigation</h1>
-  <div class="si-note">{{ view.mission.title }} · program {{ view.mission.program }}</div>
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('investigations', nav) }}
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>PARALLAX · AI Security Research</div>
+          <div class="ttl" style="margin-top:6px">Investigation</div>
+          <div class="rg-sub">{% if view %}{{ view.mission.title }} · program {{ view.mission.program }}{% else %}Read-only investigation workspace over your own recorded research campaigns.{% endif %}</div>
+        </div>
+        <div class="iw-head-side">
+          {% if view and view.selected_campaign %}
+          <div class="muted" style="font-size:11px">Campaign</div>
+          <code class="mono" style="font-size:12px">{{ view.selected_campaign }}</code>
+          <a class="crumb" href="/parallax/research/traces/{{ view.selected_campaign }}">{{ ic('search','ic ic-sm') }} Trace Explorer</a>
+          {% endif %}
+        </div>
+      </div>
 
-  <div class="si-banner si-obs"><div class="lbl">Observed evidence</div>{{ view.integrity_banner.observed }}</div>
-  <div class="si-banner si-unv"><div class="lbl">Unverified conclusions</div>{{ view.integrity_banner.unverified }}</div>
-  <div class="si-banner si-inf"><div class="lbl">Inferential</div>{{ view.integrity_banner.inferential }}</div>
+      <div class="pxi-wrap">
+      {% if error %}
+        <div class="note-err" role="alert" style="margin-top:16px">{{ error }}</div>
+      {% elif not view %}
+        <div class="note-err" role="alert" style="margin-top:16px">insufficient access</div>
+      {% else %}
 
-  <h2>1 · Mission and authorized scope</h2>
-  <div class="si-card">
-    <div><strong>Scope:</strong> {{ view.mission.authorized_scope }}</div>
-    <div class="si-note">Rules of engagement: {{ view.mission.rules_of_engagement }}</div>
+      <div class="pxi-banner pxi-b-obs"><div>{{ ic('shield','ic ic-sm') }}</div><div><b>Observed evidence</b> · {{ view.integrity_banner.observed }}</div></div>
+      <div class="pxi-banner pxi-b-unv"><div>{{ ic('help','ic ic-sm') }}</div><div><b>Unverified conclusions</b> · {{ view.integrity_banner.unverified }}</div></div>
+      <div class="pxi-banner pxi-b-inf"><div>{{ ic('layers','ic ic-sm') }}</div><div><b>Inferential</b> · {{ view.integrity_banner.inferential }}</div></div>
+
+      <div class="pxi-sec">1 · Mission and authorized scope</div>
+      <div class="pxi-card" style="background:#fff">
+        <div><strong>Scope:</strong> {{ view.mission.authorized_scope }}</div>
+        <div class="pxi-note" style="margin-top:4px">Rules of engagement: {{ view.mission.rules_of_engagement }}</div>
+      </div>
+
+      <div class="pxi-sec">2 · Campaign and dataset</div>
+      {% if view.campaign_count == 0 %}
+        <div class="pxi-note">No campaigns are available to you yet. Run a trial in the <a href="/parallax/workspace">Research Console</a>.</div>
+      {% else %}
+      <form method="get" action="/parallax/research/investigations" class="pxi-camp" style="margin-bottom:10px">
+        <label class="k" for="campsel" style="font-size:11px;color:var(--mut)">Campaign ({{ view.campaign_count }} available)</label><br>
+        <select id="campsel" name="run_id" onchange="this.form.submit()" style="height:36px;border:1px solid var(--line2);border-radius:8px;padding:0 8px;margin-top:4px;min-width:280px">
+          {% for c in view.campaigns %}
+            <option value="{{ c.campaign_id }}" {% if c.campaign_id == view.selected_campaign %}selected{% endif %}>
+              {{ c.campaign_id }} · {{ c.outcome or 'n/a' }} · {{ c.backend_provenance }}
+            </option>
+          {% endfor %}
+        </select>
+        <noscript><button class="btn btn-sm" type="submit">Open</button></noscript>
+      </form>
+      {% endif %}
+      <div class="pxi-grid">
+        <div class="pxi-card"><div class="k">Selected campaign</div><div class="pxi-src">{{ view.selected_campaign or '-' }}</div></div>
+        <div class="pxi-card"><div class="k">Dataset</div><div>{{ view.campaign.dataset }}</div></div>
+        <div class="pxi-card"><div class="k">Records in view</div><div class="n">{{ view.campaign.n_records }}</div></div>
+      </div>
+
+      <div class="pxi-sec">6 · Automated candidates vs confirmed findings</div>
+      <div class="pxi-grid">
+        <div class="pxi-card"><div class="k">Automated candidates</div><div class="n">{{ view.measurement.concepts.automated_candidate_detections }}</div></div>
+        <div class="pxi-card"><div class="k">Human-confirmed</div><div class="n">{{ view.review.confirmed }}</div></div>
+        <div class="pxi-card"><div class="k">Human-rejected</div><div class="n">{{ view.review.rejected }}</div></div>
+        <div class="pxi-card"><div class="k">Inconclusive</div><div class="n">{{ view.review.inconclusive }}</div></div>
+        <div class="pxi-card"><div class="k">Unresolved candidates</div><div class="n">{{ view.review.unresolved_candidates }}</div></div>
+      </div>
+      <p class="pxi-note">Candidate ASR (heuristic, not confirmed): {{ view.measurement.candidate_rate.candidate_asr }}
+         · Confirmed ASR: {{ view.measurement.adjudicated.confirmed_asr }}
+         · Provisional (candidate-review-only): {{ view.measurement.adjudicated.provisional_confirmed_rate }}</p>
+
+      <div class="pxi-sec">3 · 4 · 5 · Recorded behavior, source attribution, candidate findings</div>
+      <table class="pxi">
+        <thead><tr><th>Trial</th><th>Condition</th><th>Attributed source</th><th>Machine outcome</th><th>Status</th><th>Reviewer</th></tr></thead>
+        <tbody>
+        {% for r in view.behavior %}
+          <tr>
+            <td class="pxi-src">{{ r.experiment_id }}</td>
+            <td>{{ r.condition }}{% if r.attempts_injection %} · injection{% endif %}</td>
+            <td class="pxi-src">{{ r.retrieved_doc_ids or '-' }}</td>
+            <td>{{ r.machine_outcome }}</td>
+            <td>
+              {% if r.status == 'human_confirmed' %}<span class="pill pill-red">Confirmed unauthorized</span>
+              {% elif r.status == 'human_rejected' %}<span class="pill pill-blue">Rejected candidate</span>
+              {% elif r.status == 'inconclusive' %}<span class="pill pill-muted">Inconclusive</span>
+              {% elif r.status == 'automated_candidate' %}<span class="pill pill-amber">Candidate (unreviewed)</span>
+              {% elif r.status == 'unreviewed_negative' %}<span class="pill pill-green">No behavior observed</span>
+              {% else %}<span class="pill pill-muted">Excluded / invalid evidence</span>{% endif %}
+            </td>
+            <td class="pxi-src">{{ r.reviewer_id or '-' }}</td>
+          </tr>
+          {% if r.observed_behavior %}<tr><td></td><td colspan="5"><div class="pxi-obs-text">{{ r.observed_behavior }}</div></td></tr>{% endif %}
+        {% else %}
+          <tr><td colspan="6" class="pxi-note">No trial evidence in scope.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if view.candidate_findings %}
+      <p class="pxi-note">Each automated candidate is a heuristic detection, not a confirmed success. {{ view.candidate_findings[0].caveat }}</p>
+      {% endif %}
+
+      <div class="pxi-sec">7 · Human review</div>
+      {% if view.review.available %}
+        <div class="pxi-note">Independent review present. Coverage of candidates:
+          {{ view.review.coverage_of_candidates }}. Confirmed dispositions are signed and bound to a reviewer
+          identity distinct from the producer.</div>
+      {% else %}
+        <div class="pxi-note">No independent human review recorded yet. Candidates remain unverified; an
+          authenticated reviewer identity alone is not proof of independent scientific review.</div>
+      {% endif %}
+
+      <div class="pxi-sec">Investigation timeline</div>
+      {% if view.timeline %}
+      <table class="pxi">
+        <thead><tr><th>#</th><th>Event</th><th>Detail</th><th>Event time</th><th>Review time</th><th>Ingested</th></tr></thead>
+        <tbody>
+        {% for e in view.timeline %}
+          <tr>
+            <td>{{ e.seq }}</td>
+            <td>{% if e.confirmed_conclusion %}<span class="pill pill-red">{{ e.label }}</span>{% else %}{{ e.label }}{% endif %}</td>
+            <td><div class="pxi-obs-text">{{ e.detail }}</div></td>
+            <td class="pxi-src">{{ e.event_time or '-' }}</td>
+            <td class="pxi-src">{{ e.review_time or '-' }}</td>
+            <td class="pxi-src">{{ e.ingestion_time or '-' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="pxi-note">Event time is when the step occurred; review time is when a human adjudicated;
+         ingestion time is when the run was persisted. Where timestamps are absent, events are ordered by a
+         fixed causal sequence and stable record ids. Missing tool-calls or results are never fabricated.</p>
+      {% else %}
+        <div class="pxi-note">No timeline events in scope for the selected campaign.</div>
+      {% endif %}
+
+      <div class="pxi-sec">8 · Evidence verification (server-side, per-record)</div>
+      <p class="pxi-note">This verifies the SELECTED record's signature and evidence hash only. Full
+         campaign-chain verification (ordering, continuity, completeness across the whole campaign) is a
+         separate step and is not run inline here.</p>
+      <div class="pxi-grid">
+        <div class="pxi-card" style="background:#fff"><div class="k">Cryptographic verification</div>
+          <div>{% if view.verification.crypto == 'succeeded' %}<span class="pill pill-green">Succeeded</span>
+               {% elif view.verification.crypto == 'failed' %}<span class="pill pill-red">Failed</span>
+               {% else %}<span class="pill pill-muted">Unavailable</span>{% endif %}</div></div>
+        <div class="pxi-card" style="background:#fff"><div class="k">Integrity (hash)</div>
+          <div>{% if view.verification.integrity == 'ok' %}<span class="pill pill-green">OK</span>
+               {% elif view.verification.integrity == 'mismatch' %}<span class="pill pill-red">Mismatch</span>
+               {% else %}<span class="pill pill-muted">Absent</span>{% endif %}</div></div>
+        <div class="pxi-card" style="background:#fff"><div class="k">Independent scientific finding</div>
+          <div>{% if view.verification.independent_finding == 'established' %}<span class="pill pill-red">Established</span>
+               {% else %}<span class="pill pill-amber">Not established</span>{% endif %}</div></div>
+        <div class="pxi-card" style="background:#fff"><div class="k">Independence attested by tool</div>
+          <div><span class="pill pill-muted">No</span></div></div>
+      </div>
+      <p class="pxi-note">These are separate concepts. A verified signature means the bytes are authentic and
+         intact; it does NOT imply independent custody or a correct scientific conclusion. Independent
+         validation requires a real-backend, validated-model, human-confirmed finding under full outcome
+         review. Verification runs server-side; the browser is never the verification engine.
+         {% if view.verification.independent_finding_reasons %}
+           Not established because: {{ view.verification.independent_finding_reasons|join('; ') }}.{% endif %}</p>
+      {% endif %}
+      </div>
+    </section>
   </div>
-
-  <h2>2 · Campaign and dataset</h2>
-  {% if view.campaign_count == 0 %}
-    <div class="si-note">No campaigns are available to you yet.</div>
-  {% else %}
-  <form method="get" action="/parallax/research/investigations" class="si-camp">
-    <label class="k" for="campsel">Campaign ({{ view.campaign_count }} available)</label>
-    <select id="campsel" name="run_id" onchange="this.form.submit()">
-      {% for c in view.campaigns %}
-        <option value="{{ c.campaign_id }}" {% if c.campaign_id == view.selected_campaign %}selected{% endif %}>
-          {{ c.campaign_id }} · {{ c.outcome or 'n/a' }} · {{ c.backend_provenance }}
-        </option>
-      {% endfor %}
-    </select>
-    <noscript><button type="submit">Open</button></noscript>
-  </form>
-  {% endif %}
-  <div class="si-grid">
-    <div class="si-card"><div class="k">Selected campaign</div><div class="si-src">{{ view.selected_campaign or '-' }}</div></div>
-    <div class="si-card"><div class="k">Dataset</div><div>{{ view.campaign.dataset }}</div></div>
-    <div class="si-card"><div class="k">Records in view</div><div class="n">{{ view.campaign.n_records }}</div></div>
-  </div>
-
-  <h2>6 · Automated candidates vs confirmed findings</h2>
-  <div class="si-grid">
-    <div class="si-card"><div class="k">Automated candidates</div><div class="n">{{ view.measurement.concepts.automated_candidate_detections }}</div></div>
-    <div class="si-card"><div class="k">Human-confirmed</div><div class="n">{{ view.review.confirmed }}</div></div>
-    <div class="si-card"><div class="k">Human-rejected</div><div class="n">{{ view.review.rejected }}</div></div>
-    <div class="si-card"><div class="k">Inconclusive</div><div class="n">{{ view.review.inconclusive }}</div></div>
-    <div class="si-card"><div class="k">Unresolved candidates</div><div class="n">{{ view.review.unresolved_candidates }}</div></div>
-  </div>
-  <p class="si-note">Candidate ASR (heuristic, not confirmed): {{ view.measurement.candidate_rate.candidate_asr }}
-     · Confirmed ASR: {{ view.measurement.adjudicated.confirmed_asr }}
-     · Provisional (candidate-review-only): {{ view.measurement.adjudicated.provisional_confirmed_rate }}</p>
-
-  <h2>3 · 4 · 5 · Recorded behavior, source attribution, candidate findings</h2>
-  <table class="si">
-    <thead><tr><th>Trial</th><th>Condition</th><th>Attributed source</th><th>Machine outcome</th><th>Status</th><th>Reviewer</th></tr></thead>
-    <tbody>
-    {% for r in view.behavior %}
-      <tr>
-        <td class="si-src">{{ r.experiment_id }}</td>
-        <td>{{ r.condition }}{% if r.attempts_injection %} · injection{% endif %}</td>
-        <td class="si-src">{{ r.retrieved_doc_ids or '-' }}</td>
-        <td>{{ r.machine_outcome }}</td>
-        <td>
-          {% if r.status == 'human_confirmed' %}<span class="badge b-confirmed">Confirmed unauthorized</span>
-          {% elif r.status == 'human_rejected' %}<span class="badge b-rejected">Rejected candidate</span>
-          {% elif r.status == 'inconclusive' %}<span class="badge b-inconclusive">Inconclusive</span>
-          {% elif r.status == 'automated_candidate' %}<span class="badge b-candidate">Candidate (unreviewed)</span>
-          {% elif r.status == 'unreviewed_negative' %}<span class="badge b-negative">No behavior observed</span>
-          {% else %}<span class="badge b-excluded">Excluded / invalid evidence</span>{% endif %}
-        </td>
-        <td class="si-src">{{ r.reviewer_id or '-' }}</td>
-      </tr>
-      {% if r.observed_behavior %}<tr><td></td><td colspan="5"><div class="si-obs-text">{{ r.observed_behavior }}</div></td></tr>{% endif %}
-    {% else %}
-      <tr><td colspan="6" class="si-note">No trial evidence in scope.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if view.candidate_findings %}
-  <p class="si-note">Each automated candidate is a heuristic detection, not a confirmed success. {{ view.candidate_findings[0].caveat }}</p>
-  {% endif %}
-
-  <h2>7 · Human review</h2>
-  {% if view.review.available %}
-    <div class="si-note">Independent review present. Coverage of candidates:
-      {{ view.review.coverage_of_candidates }}. Confirmed dispositions are signed and bound to a reviewer
-      identity distinct from the producer.</div>
-  {% else %}
-    <div class="si-note">No independent human review recorded yet. Candidates remain unverified; an
-      authenticated reviewer identity alone is not proof of independent scientific review.</div>
-  {% endif %}
-
-  <h2>Investigation timeline</h2>
-  {% if view.timeline %}
-  <table class="si">
-    <thead><tr><th>#</th><th>Event</th><th>Detail</th><th>Event time</th><th>Review time</th><th>Ingested</th></tr></thead>
-    <tbody>
-    {% for e in view.timeline %}
-      <tr>
-        <td>{{ e.seq }}</td>
-        <td>{% if e.confirmed_conclusion %}<span class="badge b-confirmed">{{ e.label }}</span>{% else %}{{ e.label }}{% endif %}</td>
-        <td><div class="si-obs-text">{{ e.detail }}</div></td>
-        <td class="si-src">{{ e.event_time or '-' }}</td>
-        <td class="si-src">{{ e.review_time or '-' }}</td>
-        <td class="si-src">{{ e.ingestion_time or '-' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  <p class="si-note">Event time is when the step occurred; review time is when a human adjudicated;
-     ingestion time is when the run was persisted. Where timestamps are absent, events are ordered by a
-     fixed causal sequence and stable record ids. Missing tool-calls or results are never fabricated.</p>
-  {% else %}
-    <div class="si-note">No timeline events in scope for the selected campaign.</div>
-  {% endif %}
-
-  <h2>8 · Evidence verification (server-side, per-record)</h2>
-  <p class="si-note">This verifies the SELECTED record's signature and evidence hash only. Full
-     campaign-chain verification (ordering, continuity, completeness across the whole campaign) is a
-     separate step and is not run inline here.</p>
-  <div class="si-grid">
-    <div class="si-card"><div class="k">Cryptographic verification</div>
-      <div>{% if view.verification.crypto == 'succeeded' %}<span class="badge b-negative">Succeeded</span>
-           {% elif view.verification.crypto == 'failed' %}<span class="badge b-confirmed">Failed</span>
-           {% else %}<span class="badge b-excluded">Unavailable</span>{% endif %}</div></div>
-    <div class="si-card"><div class="k">Integrity (hash)</div>
-      <div>{% if view.verification.integrity == 'ok' %}<span class="badge b-negative">OK</span>
-           {% elif view.verification.integrity == 'mismatch' %}<span class="badge b-confirmed">Mismatch</span>
-           {% else %}<span class="badge b-excluded">Absent</span>{% endif %}</div></div>
-    <div class="si-card"><div class="k">Independent scientific finding</div>
-      <div>{% if view.verification.independent_finding == 'established' %}<span class="badge b-confirmed">Established</span>
-           {% else %}<span class="badge b-candidate">Not established</span>{% endif %}</div></div>
-    <div class="si-card"><div class="k">Independence attested by tool</div>
-      <div><span class="badge b-excluded">No</span></div></div>
-  </div>
-  <p class="si-note">These are separate concepts. A verified signature means the bytes are authentic and
-     intact; it does NOT imply independent custody or a correct scientific conclusion. Independent
-     validation requires a real-backend, validated-model, human-confirmed finding under full outcome
-     review. Verification runs server-side; the browser is never the verification engine.
-     {% if view.verification.independent_finding_reasons %}
-       Not established because: {{ view.verification.independent_finding_reasons|join('; ') }}.{% endif %}</p>
-  {% endif %}
 </div>
 {% endblock %}

@@ -34,7 +34,7 @@ def test_authorized_parallax_researcher_gets_page(client, seeded):
     r = client.get(URL)
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "PARALLAX Research - Investigation" in body
+    assert "AI Security Research" in body
     assert "Observed evidence" in body and "Unverified conclusions" in body
 
 
@@ -42,7 +42,7 @@ def test_strata_only_user_is_isolated_from_parallax(client, seeded):
     _login(client, seeded["s_id"])                 # sc-strata: NOT a PARALLAX member
     r = client.get(URL)
     assert r.status_code in (302, 303)             # redirected away, no PARALLAX leak
-    assert "PARALLAX Research - Investigation" not in r.get_data(as_text=True)
+    assert "AI Security Research" not in r.get_data(as_text=True)
 
 
 def test_unauthenticated_is_redirected(client):
@@ -69,7 +69,7 @@ def test_unknown_run_id_is_404_not_silent_fallback(client, seeded):
     _login(client, seeded["b_id"])
     r = client.get(URL + "?run_id=run-does-not-exist")
     assert r.status_code == 404                            # explicit, not a silent other-campaign select
-    assert "PARALLAX Research - Investigation" not in r.get_data(as_text=True)
+    assert "AI Security Research" not in r.get_data(as_text=True)
 
 
 def test_cross_owner_run_id_is_404_and_identical_to_unknown(client, seeded):
@@ -142,7 +142,7 @@ def test_legacy_minimal_record_is_graceful(client, seeded):
     _login(client, seeded["b_id"])
     r = client.get(URL)
     assert r.status_code == 200
-    assert "PARALLAX Research - Investigation" in r.get_data(as_text=True)
+    assert "AI Security Research" in r.get_data(as_text=True)
 
 
 def test_campaign_selector_multiple(client, seeded):
@@ -205,4 +205,4 @@ def test_malformed_stored_record_is_skipped_not_crash(client, seeded):
         db.session.commit()
     _login(client, seeded["b_id"])
     r = client.get(URL)
-    assert r.status_code == 200 and "PARALLAX Research - Investigation" in r.get_data(as_text=True)
+    assert r.status_code == 200 and "AI Security Research" in r.get_data(as_text=True)

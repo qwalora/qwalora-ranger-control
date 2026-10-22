@@ -464,6 +464,26 @@ def register(app, candidate_model=None, db=None, helpers=None):
         return render_template("parallax_workspace.html", vm=vm)
     app.add_url_rule("/parallax/workspace", "parallax_workspace", parallax_workspace, methods=["GET"])
 
+    def _parallax_nav_fields(c):
+        """Shared candidate app-shell navigation fields for the PARALLAX program (presentation only;
+        entitlement is enforced separately). Lets the research pages render the SAME sidebar as the
+        Research Console via candnav(), with the program switcher for dual-entitled candidates."""
+        import pathways as _pw
+        from models import ProgramMembership as _PM
+        _active = {m.program for m in _PM.query.filter_by(candidate_id=c.id, status="active").all()}
+        _progs = [p for p in _pw.PATHWAYS if p in _active]
+        if "parallax" not in _progs:
+            _progs.append("parallax")
+        _nm = (c.name or c.handle or "?")
+        _ini = "".join(w[0] for w in _nm.split()[:2]).upper() or _nm[:2].upper()
+        return {
+            "name": c.name, "handle": c.handle, "ini": _ini, "status": c.status,
+            "board": getattr(c, "current_board", 1),
+            "programs": _progs, "selected_program": "parallax",
+            "program_brands": {p: (_pw.branding(p).get("name") or p.upper()) for p in _pw.PATHWAYS},
+            "is_dual": len(_progs) > 1,
+        }
+
     def _parallax_page_gate():
         """Shared gate for PARALLAX research pages. Returns (candidate, None) when authorized, else
         (None, response) carrying the SAME safe denial used before (404 in prod, login redirect when
@@ -491,6 +511,7 @@ def register(app, candidate_model=None, db=None, helpers=None):
         if deny is not None:
             return deny
         researcher_id = c.github_id or c.handle
+        nav = _parallax_nav_fields(c)
         from parallax import strata_investigation as _si
         from parallax.research import strata_view as _sv
         try:
@@ -502,9 +523,9 @@ def register(app, candidate_model=None, db=None, helpers=None):
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001 - a read failure must not leak internals; show a safe error
-            return render_template("parallax_research_investigation.html", view=None,
+            return render_template("parallax_research_investigation.html", view=None, nav=nav,
                                    error="investigation evidence is temporarily unavailable"), 200
-        return render_template("parallax_research_investigation.html", view=view, error=None)
+        return render_template("parallax_research_investigation.html", view=view, nav=nav, error=None)
 
     def parallax_research_investigations():
         return _render_research_investigation((request.args.get("run_id") or "").strip() or None)
@@ -535,22 +556,24 @@ def register(app, candidate_model=None, db=None, helpers=None):
         if deny is not None:
             return deny
         researcher_id = c.github_id or c.handle
+        nav = _parallax_nav_fields(c)
         filters = {k: (request.args.get(k) or "").strip()
                    for k in ("event_type", "trust_zone", "finding", "evidence")}
+        sel_event = (request.args.get("event") or "").strip() or None
         from parallax.research import research_trace_view as _rtv
         from parallax import strata_investigation as _si
         from parallax.research import strata_view as _sv
         try:
             view = _rtv.assemble_trace_view(db, researcher_id=researcher_id, run_id=run_id,
-                                            filters=filters)
+                                            filters=filters, selected_event=sel_event)
         except _si.CampaignNotFound:
             return ("campaign not found", 404)
         except _sv.EntitlementError:
             return ("forbidden", 403)
         except Exception:  # noqa: BLE001 - never leak internals
-            return render_template("parallax_research_trace.html", v=None,
+            return render_template("parallax_research_trace.html", v=None, nav=nav,
                                    error="investigation evidence is temporarily unavailable"), 200
-        return render_template("parallax_research_trace.html", v=view, error=None)
+        return render_template("parallax_research_trace.html", v=view, nav=nav, error=None)
 
     def parallax_research_traces():
         return _render_research_trace((request.args.get("run_id") or "").strip() or None)

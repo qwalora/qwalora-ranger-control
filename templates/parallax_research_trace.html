@@ -1,160 +1,223 @@
 {% extends "base.html" %}
-{% block title %}PARALLAX Research - Trace Explorer · Qwalora Ranger{% endblock %}
+{% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
+{% block title %}Trace Explorer · PARALLAX Research · Qwalora Ranger{% endblock %}
 {% block head %}
 <style>
-  .tx-wrap{max-width:1040px;margin:0 auto;padding:24px 16px;color:#1c2330;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
-  .tx-wrap h1{font-size:22px;margin:0 0 4px} .tx-wrap h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:#5b6472;margin:26px 0 10px;border-bottom:1px solid #e4e8ef;padding-bottom:6px}
-  .tx-note{color:#6b7280;font-size:13px} .tx-back{font-size:13px;color:#2d5c8a;text-decoration:none;margin-right:14px}
-  .tx-err{border:1px solid #e3b4b4;background:#fdf1f1;color:#8a1f1f;border-radius:10px;padding:14px 16px}
-  .tx-banner{border:1px solid #d8dee8;border-radius:10px;padding:12px 14px;margin:12px 0;background:#f7f9fc}
-  .tx-banner .lbl{font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#6b7280}
-  .tx-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-  .tx-card{border:1px solid #e4e8ef;border-radius:10px;padding:12px 14px;background:#fff}
-  .tx-card .n{font-size:22px;font-weight:650} .tx-card .k{font-size:12px;color:#6b7280;letter-spacing:.03em}
-  table.tx{width:100%;border-collapse:collapse;font-size:14px} table.tx th,table.tx td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef1f6;vertical-align:top}
-  table.tx th{font-size:12px;letter-spacing:.04em;color:#6b7280;text-transform:uppercase}
-  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid}
-  .b-obs{color:#8a1f1f;border-color:#e3b4b4;background:#fdf1f1}
-  .b-att{color:#8a5a00;border-color:#e8cf9e;background:#fdf6e9}
-  .b-sus{color:#5b4b8a;border-color:#cabfe6;background:#f4f1fb}
-  .b-zone{color:#2d5c8a;border-color:#b4cde3;background:#f1f6fd}
-  .tx-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#44506a;word-break:break-all}
-  .tx-ex{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;white-space:pre-wrap;color:#2a3042;background:#f7f9fc;border:1px solid #eef1f6;border-radius:6px;padding:6px 8px;max-height:120px;overflow:auto}
-  .tx-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;border:1px solid #e4e8ef;border-radius:10px;padding:12px 14px;background:#fff}
-  .tx-filters label{font-size:12px;color:#6b7280;display:block} .tx-filters select{font-size:13px;padding:4px 6px}
-  .tx-filters button{font-size:13px;padding:5px 12px;border:1px solid #2d5c8a;background:#2d5c8a;color:#fff;border-radius:7px;cursor:pointer}
-  .tx-rel{border-left:3px solid #8a8f98;padding:8px 12px;margin:8px 0;background:#fafbfc;border-radius:0 8px 8px 0}
-  .tx-lim li{color:#6b7280;font-size:13px;margin:3px 0}
+  /* Scoped layout only; colors/typography/controls come from app.css tokens and shared classes. */
+  .trx-wrap{padding:0 24px 28px}
+  .trx-overview{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+  .trx-stat{border:1px solid var(--line2);border-radius:12px;background:var(--sub);padding:12px 14px}
+  .trx-stat .n{font:650 22px/1 var(--f);color:var(--ink)} .trx-stat .k{font-size:11.5px;color:var(--mut);letter-spacing:.03em;margin-top:5px}
+  .trx-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;border:1px solid var(--line2);border-radius:12px;background:#fff;padding:12px 14px;margin:6px 0 14px}
+  .trx-filters label{display:block;font-size:11px;color:var(--mut);margin-bottom:4px}
+  .trx-filters select{height:36px;border:1px solid var(--line2);border-radius:8px;background:#fff;color:var(--ink);font:400 13px/1 var(--f);padding:0 8px}
+  .trx-md{display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(360px,1.4fr);gap:16px;align-items:start}
+  .trx-list{border:1px solid var(--line2);border-radius:12px;background:#fff;overflow:hidden}
+  .trx-ev{display:block;text-decoration:none;color:var(--ink);padding:11px 14px;border-bottom:1px solid var(--line);outline-offset:-2px}
+  .trx-ev:last-child{border-bottom:0} .trx-ev:hover{background:var(--sub)} .trx-ev:focus-visible{outline:2px solid var(--orange)}
+  .trx-ev.on{background:var(--orange-50);box-shadow:inset 3px 0 0 var(--orange)}
+  .trx-ev .r1{display:flex;align-items:center;gap:8px}
+  .trx-ev .seq{font:600 11px/1 var(--f);color:var(--mut);min-width:18px}
+  .trx-ev .lbl{font:600 13px/1.2 var(--f)} .trx-ev .ty{font:400 11px/1 var(--mono-f,ui-monospace);color:var(--mut)}
+  .trx-detail{border:1px solid var(--line2);border-radius:12px;background:#fff;padding:16px 18px}
+  .trx-excerpt{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;color:#2a3042;background:var(--sub);border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:220px;overflow:auto}
+  .trx-kv{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  .trx-finding{border-left:3px solid var(--line2);padding:8px 12px;margin:8px 0;background:var(--sub);border-radius:0 8px 8px 0}
+  .pill-red{background:#fdf1f1;color:#8a1f1f;border:1px solid #e3b4b4}
+  .pill-amber{background:var(--orange-50);color:var(--orange-700);border:1px solid #e8cf9e}
+  .pill-muted{background:var(--light);color:var(--med);border:1px solid var(--line2)}
+  .trx-sec{margin:22px 0 8px;font:600 12px/1 var(--f);letter-spacing:.06em;text-transform:uppercase;color:var(--med)}
+  .trx-rel{border-left:3px solid var(--line2);padding:8px 12px;margin:8px 0;background:var(--sub);border-radius:0 8px 8px 0;font-size:13px}
+  .trx-empty{border:1px dashed var(--line2);border-radius:12px;background:var(--sub);padding:28px;text-align:center;color:var(--mut)}
+  @media (max-width:900px){ .trx-md{grid-template-columns:1fr} .trx-wrap{padding:0 14px 22px} }
 </style>
 {% endblock %}
 {% block body %}
-<div class="tx-wrap">
-  <a class="tx-back" href="/parallax/workspace">&larr; PARALLAX workspace</a>
-  <a class="tx-back" href="/parallax/research/investigations{% if v and v.selected_campaign %}/{{ v.selected_campaign }}{% endif %}">Investigation view</a>
-  {% if error %}
-    <div class="tx-err" role="alert">{{ error }}</div>
-  {% elif not v %}
-    <div class="tx-err" role="alert">insufficient access</div>
-  {% else %}
-  <h1>PARALLAX Research - Trace Explorer</h1>
-  <div class="tx-note">Read-only normalization (px-trace-v1) and trust-boundary analysis (px-trust-v1)
-    over your own recorded campaigns. Heuristic observations are candidates for human review, never
-    confirmed compromise.</div>
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('investigations', nav) }}
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>PARALLAX · AI Security Research</div>
+          <div class="ttl" style="margin-top:6px">Trace Explorer</div>
+          <div class="rg-sub">Read-only normalization (px-trace-v1) and trust-boundary analysis
+            (px-trust-v1.1) over your own recorded research campaigns. Heuristic observations are
+            candidates for human review, never confirmed compromise.</div>
+        </div>
+        <div class="iw-head-side">
+          {% if v and v.selected_campaign %}
+          <div class="muted" style="font-size:11px">Campaign</div>
+          <code class="mono" style="font-size:12px">{{ v.selected_campaign }}</code>
+          <a class="crumb" href="/parallax/research/investigations{% if v.selected_campaign %}/{{ v.selected_campaign }}{% endif %}">{{ ic('reply','ic ic-sm') }} Investigation</a>
+          {% endif %}
+        </div>
+      </div>
 
-  {% if v.campaign_count == 0 %}
-    <div class="tx-banner">No campaigns are available to your account yet.</div>
-  {% else %}
-  <h2>Campaign</h2>
-  <div class="tx-note">Showing campaign <span class="tx-mono">{{ v.selected_campaign }}</span>
-    ({{ v.campaign_count }} available to you).</div>
-  {% if v.campaigns|length > 1 %}
-  <div style="margin:8px 0">
-    {% for c in v.campaigns %}
-      <a class="tx-back" href="/parallax/research/traces/{{ c.campaign_id }}">
-        {% if c.campaign_id == v.selected_campaign %}&#9679;{% else %}&#9675;{% endif %}
-        {{ c.campaign_id }}</a>
-    {% endfor %}
+      <div class="trx-wrap">
+      {% if error %}
+        <div class="note-err" role="alert" style="margin-top:16px">{{ error }}</div>
+      {% elif not v %}
+        <div class="trx-empty" role="alert" style="margin-top:16px">Insufficient access.</div>
+      {% elif v.campaign_count == 0 %}
+        <div class="trx-empty" style="margin-top:16px">
+          <div style="font-weight:600;color:var(--ink)">No campaigns yet</div>
+          <div style="margin-top:6px">Run a trial in the <a href="/parallax/workspace">Research Console</a> to produce a trace to analyze.</div>
+        </div>
+      {% else %}
+
+      {% if v.campaigns|length > 1 %}
+      <div class="trx-filters" aria-label="Campaign selector">
+        <div style="width:100%"><label>Campaign ({{ v.campaign_count }} available)</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+          {% for c in v.campaigns %}
+            <a class="crumb {% if c.campaign_id == v.selected_campaign %}on{% endif %}" href="/parallax/research/traces/{{ c.campaign_id }}"
+               style="{% if c.campaign_id == v.selected_campaign %}border-color:var(--orange);color:var(--orange-700){% endif %}">{{ c.campaign_id }}</a>
+          {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if v.trace %}
+      <!-- trace overview -->
+      <div class="trx-overview">
+        <div class="trx-stat"><div class="n">{{ v.trace.event_count }}</div><div class="k">EVENTS</div></div>
+        <div class="trx-stat"><div class="n">{{ v.analysis.summary.n_observations }}</div><div class="k">OBSERVATIONS</div></div>
+        <div class="trx-stat"><div class="n">{% if v.analysis.summary.observed_unauthorized %}Yes{% else %}No{% endif %}</div><div class="k">OBSERVED-UNAUTHORIZED</div></div>
+        <div class="trx-stat"><div class="n" style="text-transform:capitalize">{{ v.summary.review_status }}</div><div class="k">REVIEW STATUS</div></div>
+      </div>
+      <div class="muted" style="font-size:12px">schema {{ v.trace.schema_version }} · analysis {{ v.analysis.analysis_version }} · trace_hash <code class="mono">{{ v.trace.trace_hash[:16] }}&hellip;</code></div>
+
+      <!-- filters -->
+      <form class="trx-filters" method="get" action="/parallax/research/traces" role="search" aria-label="Filter events">
+        <input type="hidden" name="run_id" value="{{ v.selected_campaign }}">
+        <div><label for="f-ety">Event type</label>
+          <select id="f-ety" name="event_type"><option value="">all</option>
+          {% for t in v.facets.event_types %}<option value="{{ t }}" {% if v.filters.event_type==t %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
+        <div><label for="f-tz">Trust zone</label>
+          <select id="f-tz" name="trust_zone"><option value="">all</option>
+          {% for z in v.facets.trust_zones %}<option value="{{ z }}" {% if v.filters.trust_zone==z %}selected{% endif %}>{{ z }}</option>{% endfor %}</select></div>
+        <div><label for="f-fi">Finding</label>
+          <select id="f-fi" name="finding"><option value="">any</option>
+            <option value="with" {% if v.filters.finding=='with' %}selected{% endif %}>with finding</option>
+            <option value="without" {% if v.filters.finding=='without' %}selected{% endif %}>without finding</option></select></div>
+        <div><label for="f-ev">Evidence</label>
+          <select id="f-ev" name="evidence"><option value="">any</option>
+            <option value="available" {% if v.filters.evidence=='available' %}selected{% endif %}>available</option>
+            <option value="missing" {% if v.filters.evidence=='missing' %}selected{% endif %}>missing</option></select></div>
+        <button class="btn btn-sm" type="submit">Filter</button>
+      </form>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">Showing {{ v.shown_event_count }} of {{ v.all_event_count }} events.</div>
+
+      <!-- master-detail -->
+      <div class="trx-md">
+        <!-- event list (master) -->
+        <div class="trx-list" role="list" aria-label="Trace events">
+          {% for e in v.events %}
+          <a class="trx-ev {% if v.selected and e.event_id == v.selected.event_id %}on{% endif %}" role="listitem"
+             href="/parallax/research/traces/{{ v.selected_campaign }}?event={{ e.event_id }}{% for k,val in v.filters.items() %}&{{ k }}={{ val }}{% endfor %}"
+             aria-current="{{ 'true' if v.selected and e.event_id == v.selected.event_id else 'false' }}">
+            <div class="r1">
+              <span class="seq">#{{ e.seq }}</span>
+              <span class="lbl">{{ e.type_label }}</span>
+              {% if e.has_finding %}{% for f in e.findings %}<span class="pill {% if f.severity=='observed-unauthorized' %}pill-red{% elif f.severity=='attempted' %}pill-amber{% else %}pill-muted{% endif %}" style="font-size:10.5px">{{ f.severity }}</span>{% endfor %}{% endif %}
+            </div>
+            <div class="r1" style="margin-top:5px">
+              <span class="ty">{{ e.type }}</span>
+              <span class="pill pill-violet" style="font-size:10.5px">{{ e.trust_zone }}</span>
+            </div>
+          </a>
+          {% else %}
+          <div style="padding:16px" class="muted">No events match the current filter.</div>
+          {% endfor %}
+        </div>
+
+        <!-- selected event detail -->
+        <div class="trx-detail" aria-live="polite">
+          {% if v.selected %}
+          {% set s = v.selected %}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <div><div class="eyebrow" style="color:var(--med)"><span class="d" style="background:var(--med)"></span>Event #{{ s.seq }}</div>
+              <div style="font:650 16px/1.2 var(--f);color:var(--ink);margin-top:4px">{{ s.type_label }}</div></div>
+            <span class="pill pill-violet">{{ s.trust_zone }}</span>
+          </div>
+          <div class="trx-kv">
+            <span class="crumb">type <code class="mono" style="margin-left:5px">{{ s.type }}</code></span>
+            {% if s.event_time %}<span class="crumb">event time: {{ s.event_time }}</span>{% endif %}
+            {% if s.ingestion_time %}<span class="crumb">ingested: {{ s.ingestion_time }}</span>{% endif %}
+          </div>
+
+          <div class="trx-sec">Evidence excerpt</div>
+          {% if s.excerpt.full_length %}
+            <div class="trx-excerpt">{{ s.excerpt.text }}{% if s.excerpt.truncated %}&hellip;{% endif %}</div>
+            {% if s.excerpt.truncated %}<div class="muted" style="font-size:11px;margin-top:4px">bounded to {{ v.excerpt_chars }} of {{ s.excerpt.full_length }} chars</div>{% endif %}
+            {% if s.excerpt.spoof_chars_neutralized %}<div class="muted" style="font-size:11px;margin-top:4px">&#9888; bidi/zero-width characters made visible for safe display (stored content unchanged)</div>{% endif %}
+          {% else %}
+            <div class="muted">No evidence content recorded for this event.</div>
+          {% endif %}
+
+          <div class="trx-sec">Candidate findings &amp; authorization</div>
+          {% if s.findings %}
+            {% for f in s.findings %}
+            <div class="trx-finding" style="border-left-color:{% if f.severity=='observed-unauthorized' %}#8a1f1f{% elif f.severity=='attempted' %}var(--orange){% else %}var(--med){% endif %}">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span class="pill {% if f.severity=='observed-unauthorized' %}pill-red{% elif f.severity=='attempted' %}pill-amber{% else %}pill-muted{% endif %}">{{ f.severity }}</span>
+                <code class="mono" style="font-size:12px">{{ f.pattern }}</code>
+              </div>
+              <div class="muted" style="font-size:12px;margin-top:6px">authorization: <b>{{ f.authorization_status }}</b>{% if f.execution_observed and not f.unauthorized_observed %} · execution observed, not a confirmed breach{% endif %}</div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="muted">No candidate findings reference this event.</div>
+          {% endif %}
+          {% else %}
+          <div class="trx-empty">Select an event to inspect its evidence and findings.</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- relationships -->
+      <div class="trx-sec">Investigation relationships</div>
+      {% if v.relationships %}
+        {% for r in v.relationships %}
+        <div class="trx-rel"><b>{{ r.kind }}</b>: {{ r.from_label }} <code class="mono">({{ r.from_event }})</code> &rarr; {{ r.to_label }} <code class="mono">({{ r.to_event }})</code>
+          <div class="muted" style="font-size:12px;margin-top:3px">basis: {{ r.basis }}</div>
+          <div class="muted" style="font-size:12px">causation: {{ r.causation }}</div></div>
+        {% endfor %}
+      {% else %}
+        <div class="muted" style="font-size:13px">No boundary crossings linked an untrusted event to a later action in this trace.</div>
+      {% endif %}
+
+      <!-- investigation summary -->
+      <div class="trx-sec">Deterministic investigation summary</div>
+      <div class="rg-note" style="margin-left:0;margin-right:0">
+        <div>{{ ic('shield','ic ic-sm') }}</div>
+        <div><b>Authorized task:</b> {{ v.summary.authorized_task or 'not recorded' }}
+          <div class="muted" style="margin-top:4px">{{ v.summary.scientific_status.candidate_vs_confirmed }}</div>
+          <div class="muted">independent validation: {{ v.summary.scientific_status.independent_validation }} · inferential findings: {{ v.summary.scientific_status.inferential_findings }}</div></div>
+      </div>
+      <div class="trx-overview" style="margin-top:12px">
+        <div class="trx-stat"><div class="n">{{ v.summary.suspicious_events|length }}</div><div class="k">SUSPICIOUS EVENTS</div></div>
+        <div class="trx-stat"><div class="n">{{ v.summary.confirmed_observations|length }}</div><div class="k">OBSERVED-UNAUTHORIZED (CANDIDATE)</div></div>
+        <div class="trx-stat"><div class="n">{{ v.summary.unresolved_questions|length }}</div><div class="k">UNRESOLVED QUESTIONS</div></div>
+      </div>
+
+      {% if v.trace.gaps %}
+      <div class="trx-sec">Recorded gaps (absent, not inferred)</div>
+      <ul class="muted" style="font-size:13px;margin:0;padding-left:18px">{% for g in v.trace.gaps %}<li>{{ g }}</li>{% endfor %}</ul>
+      {% endif %}
+
+      <div class="trx-sec">Known limitations</div>
+      <ul class="muted" style="font-size:13px;margin:0 0 4px;padding-left:18px">{% for l in v.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+
+      {% else %}
+      <div class="trx-empty" style="margin-top:16px">No trace is available for this campaign yet.</div>
+      {% endif %}{# v.trace #}
+      {% endif %}{# campaign_count / error / v #}
+      </div>
+    </section>
   </div>
-  {% endif %}
-
-  {% if v.trace %}
-  <h2>Trace</h2>
-  <div class="tx-grid">
-    <div class="tx-card"><div class="n">{{ v.trace.event_count }}</div><div class="k">events</div></div>
-    <div class="tx-card"><div class="n">{{ v.analysis.summary.n_observations }}</div><div class="k">observations</div></div>
-    <div class="tx-card"><div class="n">{% if v.analysis.summary.observed_unauthorized %}yes{% else %}no{% endif %}</div><div class="k">observed-unauthorized</div></div>
-    <div class="tx-card"><div class="n">{{ v.summary.review_status }}</div><div class="k">review status</div></div>
-  </div>
-  <div class="tx-note" style="margin-top:8px">schema {{ v.trace.schema_version }} · analysis {{ v.analysis.analysis_version }} ·
-    trace_hash <span class="tx-mono">{{ v.trace.trace_hash[:16] }}&hellip;</span></div>
-  {% if v.trace.gaps %}
-  <div class="tx-banner"><div class="lbl">Recorded gaps (absent, not inferred)</div>
-    <ul class="tx-lim" style="margin:6px 0 0">{% for g in v.trace.gaps %}<li>{{ g }}</li>{% endfor %}</ul></div>
-  {% endif %}
-
-  <h2>Trace explorer</h2>
-  <form class="tx-filters" method="get" action="/parallax/research/traces">
-    <input type="hidden" name="run_id" value="{{ v.selected_campaign }}">
-    <div><label>Event type</label>
-      <select name="event_type"><option value="">all</option>
-      {% for t in v.facets.event_types %}<option value="{{ t }}" {% if v.filters.event_type==t %}selected{% endif %}>{{ t }}</option>{% endfor %}
-      </select></div>
-    <div><label>Trust zone</label>
-      <select name="trust_zone"><option value="">all</option>
-      {% for z in v.facets.trust_zones %}<option value="{{ z }}" {% if v.filters.trust_zone==z %}selected{% endif %}>{{ z }}</option>{% endfor %}
-      </select></div>
-    <div><label>Finding</label>
-      <select name="finding"><option value="">any</option>
-        <option value="with" {% if v.filters.finding=='with' %}selected{% endif %}>with finding</option>
-        <option value="without" {% if v.filters.finding=='without' %}selected{% endif %}>without finding</option>
-      </select></div>
-    <div><label>Evidence</label>
-      <select name="evidence"><option value="">any</option>
-        <option value="available" {% if v.filters.evidence=='available' %}selected{% endif %}>available</option>
-        <option value="missing" {% if v.filters.evidence=='missing' %}selected{% endif %}>missing</option>
-      </select></div>
-    <button type="submit">Filter</button>
-  </form>
-  <div class="tx-note" style="margin:8px 0">Showing {{ v.shown_event_count }} of {{ v.all_event_count }} events.</div>
-  <table class="tx">
-    <thead><tr><th>#</th><th>Event</th><th>Trust zone</th><th>Finding</th><th>Evidence excerpt</th></tr></thead>
-    <tbody>
-    {% for e in v.events %}
-      <tr>
-        <td>{{ e.seq }}</td>
-        <td>{{ e.type_label }}<div class="tx-mono">{{ e.type }}</div></td>
-        <td><span class="badge b-zone">{{ e.trust_zone }}</span></td>
-        <td>
-          {% if e.findings %}{% for f in e.findings %}
-            <span class="badge {% if f.severity=='observed-unauthorized' %}b-obs{% elif f.severity=='attempted' %}b-att{% else %}b-sus{% endif %}">{{ f.severity }}</span>
-            <div class="tx-mono">{{ f.pattern }}</div>
-            <div class="tx-note">authorization: {{ f.authorization_status }}{% if f.execution_observed and not f.unauthorized_observed %} (execution observed, not a confirmed breach){% endif %}</div>
-          {% endfor %}{% else %}<span class="tx-note">&mdash;</span>{% endif %}
-        </td>
-        <td>
-          {% if e.excerpt.full_length %}<div class="tx-ex">{{ e.excerpt.text }}{% if e.excerpt.truncated %}&hellip;</div>
-            <div class="tx-note">excerpt bounded to {{ v.excerpt_chars }} of {{ e.excerpt.full_length }} chars</div>{% else %}</div>{% endif %}
-            {% if e.excerpt.spoof_chars_neutralized %}<div class="tx-note">&#9888; bidi/zero-width characters made visible for safe display (stored content unchanged)</div>{% endif %}
-          {% else %}<span class="tx-note">none recorded</span>{% endif %}
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="5" class="tx-note">No events match the current filter.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-
-  <h2>Investigation relationships</h2>
-  {% if v.relationships %}
-    {% for r in v.relationships %}
-    <div class="tx-rel">
-      <div><strong>{{ r.kind }}</strong>: {{ r.from_label }} <span class="tx-mono">({{ r.from_event }})</span>
-        &rarr; {{ r.to_label }} <span class="tx-mono">({{ r.to_event }})</span></div>
-      <div class="tx-note">basis: {{ r.basis }}</div>
-      <div class="tx-note">causation: {{ r.causation }}</div>
-    </div>
-    {% endfor %}
-  {% else %}
-    <div class="tx-note">No boundary crossings linked an untrusted event to a later action in this trace.</div>
-  {% endif %}
-
-  <h2>Deterministic investigation summary</h2>
-  <div class="tx-banner">
-    <div><strong>Authorized task:</strong> {{ v.summary.authorized_task or 'not recorded' }}</div>
-    <div class="tx-note">{{ v.summary.scientific_status.candidate_vs_confirmed }}</div>
-    <div class="tx-note">independent validation: {{ v.summary.scientific_status.independent_validation }} ·
-      inferential findings: {{ v.summary.scientific_status.inferential_findings }}</div>
-  </div>
-  <div class="tx-grid">
-    <div class="tx-card"><div class="n">{{ v.summary.suspicious_events|length }}</div><div class="k">suspicious events</div></div>
-    <div class="tx-card"><div class="n">{{ v.summary.confirmed_observations|length }}</div><div class="k">observed-unauthorized (candidate)</div></div>
-    <div class="tx-card"><div class="n">{{ v.summary.unresolved_questions|length }}</div><div class="k">unresolved questions</div></div>
-  </div>
-
-  <h2>Known limitations</h2>
-  <ul class="tx-lim">{% for l in v.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
-  {% endif %}{# v.trace #}
-  {% endif %}{# campaign_count #}
-  {% endif %}{# error/v #}
 </div>
 {% endblock %}
