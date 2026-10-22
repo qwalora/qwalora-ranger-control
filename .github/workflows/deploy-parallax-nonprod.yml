@@ -9,8 +9,12 @@ name: Deploy PARALLAX portal (nonprod) - manual
 #   - Deploys EXACTLY the authorized commit (AUTHORIZED_SHA), not branch HEAD.
 #   - Targets the EXISTING service + environment by ID. Never passes --new, never creates a service.
 #   - Never changes the service's GitHub-connected branch and never touches production.
-#   - Requires a typed confirmation input to run.
-#   - Uses the RAILWAY_TOKEN GitHub secret (project-scoped). Never echoes it.
+#   - Requires a typed confirmation input to run (passed via env, never inlined into the shell).
+#   - Runs in the GitHub `parallax-nonprod` environment; RAILWAY_TOKEN is an ENVIRONMENT secret
+#     (project-scoped) gated by that environment's required-reviewer rule. Never echoed.
+#   - The token is exposed only to the Railway steps that need it, never to the steps that touch the
+#     checked-out application source; the source is UPLOADED to Railway, never executed on the runner.
+#   - Third-party actions are pinned to a full commit SHA (supply-chain integrity).
 
 on:
   workflow_dispatch:
@@ -42,13 +46,20 @@ jobs:
   deploy:
     name: Deploy ${{ env.AUTHORIZED_SHA }} to parallax-nonprod
     runs-on: ubuntu-latest
+    # Bind to the GitHub environment so its required-reviewer protection gates this run and the
+    # environment-scoped RAILWAY_TOKEN secret is used. Configure reviewers in repo Settings.
+    environment: parallax-nonprod
     timeout-minutes: 25
     steps:
       - name: Confirm intent
+        # User-controlled input is passed via env and compared as a quoted shell variable; it is
+        # NEVER interpolated with ${{ }} directly into the script (prevents shell injection).
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
           set -euo pipefail
           EXPECTED='DEPLOY fda512e to parallax-nonprod'
-          if [ "${{ github.event.inputs.confirm }}" != "$EXPECTED" ]; then
+          if [ "$CONFIRM" != "$EXPECTED" ]; then
             echo "::error::Confirmation string did not match. Expected: $EXPECTED"
             exit 1
           fi
@@ -60,7 +71,7 @@ jobs:
           echo "Confirmed. Target: $RAILWAY_SERVICE_NAME / $RAILWAY_ENVIRONMENT_NAME at $AUTHORIZED_SHA"
 
       - name: Checkout EXACT authorized commit (not branch HEAD)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.AUTHORIZED_SHA }}
           fetch-depth: 1
