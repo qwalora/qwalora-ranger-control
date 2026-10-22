@@ -76,3 +76,85 @@ def test_get_only_and_csrf_rejects_post(client, seeded):
     # the route is GET-only and app-wide CSRF protection rejects an untokened POST before routing;
     # either way a POST is refused (no state-change path exists on this page).
     assert client.post(URL).status_code in (400, 404, 405)   # 400 = CSRF rejection (active)
+
+
+def _persist_rich_trial(researcher_id, *, observed="INJECTION-OK", outcome="successful_unauthorized_behavior",
+                        task="summarize the provided document", eh_suffix=""):
+    import time as _t
+    rec = {"outcome": outcome, "condition": "experimental_attack", "attempts_injection": True,
+           "observed_behavior": observed, "adversarial_input_id": "a-direct",
+           "retrieved_doc_ids": ["doc-1"], "legitimate_task": task,
+           "legitimate_task_id": "t-storage", "evaluation": {"canary": outcome.startswith("success")},
+           "model": {"id": "val-model"}, "timing": {"started": 1000.0 + len(eh_suffix)}}
+    from parallax.research import evidence_verifier as _EV
+    rec["evidence_hash"] = _EV._recompute_evidence_hash(rec)
+    camp = {"manifest": {"kind": "trial", "backend": {"is_real": True, "model_id": "val-model"},
+                         "n_records": 1},
+            "metrics": {"kind": "trial", "record": rec}}
+    with A.app.app_context():
+        return rstore.persist_run(db, researcher_id=researcher_id, campaign=camp)
+
+
+def test_timeline_and_verification_render(client, seeded):
+    _persist_rich_trial("rb-researcher")
+    _login(client, seeded["b_id"])
+    body = client.get(URL).get_data(as_text=True)
+    assert "Investigation timeline" in body
+    assert "Authorized task" in body and "Model response" in body
+    assert "Evidence verification (server-side)" in body
+    assert "Cryptographic verification" in body and "Independent scientific finding" in body
+    assert "Not established" in body                    # crypto ok but not an independent finding
+
+
+def test_output_is_escaped(client, seeded):
+    _persist_rich_trial("rb-researcher", observed="<script>alert('xss')</script> then INJECTION-OK")
+    _login(client, seeded["b_id"])
+    body = client.get(URL).get_data(as_text=True)
+    assert "<script>alert('xss')</script>" not in body   # not rendered raw
+    assert "&lt;script&gt;" in body                        # escaped
+
+
+def test_large_payload_renders(client, seeded):
+    _persist_rich_trial("rb-researcher", observed="A" * 40000)
+    _login(client, seeded["b_id"])
+    r = client.get(URL)
+    assert r.status_code == 200
+
+
+def test_legacy_minimal_record_is_graceful(client, seeded):
+    # a legacy trial with only outcome/condition (no evidence_hash, timing, task) must not crash
+    camp = {"manifest": {"kind": "trial", "backend": {"is_real": False, "model_id": "stub"}, "n_records": 1},
+            "metrics": {"kind": "trial", "record": {"outcome": "boundary_preserved",
+                                                    "condition": "experimental_attack"}}}
+    with A.app.app_context():
+        rstore.persist_run(db, researcher_id="rb-researcher", campaign=camp)
+    _login(client, seeded["b_id"])
+    r = client.get(URL)
+    assert r.status_code == 200
+    assert "STRATA Investigation" in r.get_data(as_text=True)
+
+
+def test_campaign_selector_multiple(client, seeded):
+    _persist_rich_trial("rb-researcher", eh_suffix="x")
+    _persist_rich_trial("rb-researcher", eh_suffix="yy")
+    _login(client, seeded["b_id"])
+    body = client.get(URL).get_data(as_text=True)
+    assert 'name="run_id"' in body                      # campaign selector present
+    assert "available)" in body
+    # selecting a specific campaign preserves it
+    cams = None
+    with A.app.app_context():
+        from parallax import strata_investigation as SI
+        cams = SI.list_campaigns(db, researcher_id="rb-researcher")
+    assert len(cams) >= 2
+    chosen = cams[1]["campaign_id"]
+    body2 = client.get(URL + "?run_id=" + chosen).get_data(as_text=True)
+    assert chosen in body2
+
+
+def test_cross_program_cannot_reach_via_campaign_param(client, seeded):
+    # a STRATA-only user cannot reach PARALLAX evidence even with a crafted run_id
+    _login(client, seeded["s_id"])
+    r = client.get(URL + "?run_id=run-anything")
+    assert r.status_code in (302, 303)
+    assert "Investigation timeline" not in r.get_data(as_text=True)

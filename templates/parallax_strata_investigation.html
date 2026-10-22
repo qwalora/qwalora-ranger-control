@@ -47,10 +47,25 @@
   </div>
 
   <h2>2 · Campaign and dataset</h2>
+  {% if view.campaign_count == 0 %}
+    <div class="si-note">No campaigns are available to you yet.</div>
+  {% else %}
+  <form method="get" action="/parallax/strata/investigation" class="si-camp">
+    <label class="k" for="campsel">Campaign ({{ view.campaign_count }} available)</label>
+    <select id="campsel" name="run_id" onchange="this.form.submit()">
+      {% for c in view.campaigns %}
+        <option value="{{ c.campaign_id }}" {% if c.campaign_id == view.selected_campaign %}selected{% endif %}>
+          {{ c.campaign_id }} · {{ c.outcome or 'n/a' }} · {{ c.backend_provenance }}
+        </option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit">Open</button></noscript>
+  </form>
+  {% endif %}
   <div class="si-grid">
-    <div class="si-card"><div class="k">Campaign</div><div>{{ view.campaign.campaign_id }}</div></div>
+    <div class="si-card"><div class="k">Selected campaign</div><div class="si-src">{{ view.selected_campaign or '-' }}</div></div>
     <div class="si-card"><div class="k">Dataset</div><div>{{ view.campaign.dataset }}</div></div>
-    <div class="si-card"><div class="k">Records</div><div class="n">{{ view.campaign.n_records }}</div></div>
+    <div class="si-card"><div class="k">Records in view</div><div class="n">{{ view.campaign.n_records }}</div></div>
   </div>
 
   <h2>6 · Automated candidates vs confirmed findings</h2>
@@ -105,18 +120,52 @@
       authenticated reviewer identity alone is not proof of independent scientific review.</div>
   {% endif %}
 
-  <h2>8 · Evidence chain and reproducibility</h2>
-  {% if view.evidence_chain %}
-    <div class="si-grid">
-      <div class="si-card"><div class="k">Overall</div><div>{{ view.evidence_chain.overall }}</div></div>
-      <div class="si-card"><div class="k">Integrity</div><div>{{ view.evidence_chain.integrity_ok }}</div></div>
-      <div class="si-card"><div class="k">Chain continuous</div><div>{{ view.evidence_chain.chain_continuous }}</div></div>
-      <div class="si-card"><div class="k">Result eligible</div><div>{{ view.evidence_chain.result_eligible }}</div></div>
-    </div>
+  <h2>Investigation timeline</h2>
+  {% if view.timeline %}
+  <table class="si">
+    <thead><tr><th>#</th><th>Event</th><th>Detail</th><th>Event time</th><th>Review time</th><th>Ingested</th></tr></thead>
+    <tbody>
+    {% for e in view.timeline %}
+      <tr>
+        <td>{{ e.seq }}</td>
+        <td>{% if e.confirmed_conclusion %}<span class="badge b-confirmed">{{ e.label }}</span>{% else %}{{ e.label }}{% endif %}</td>
+        <td><div class="si-obs-text">{{ e.detail }}</div></td>
+        <td class="si-src">{{ e.event_time or '-' }}</td>
+        <td class="si-src">{{ e.review_time or '-' }}</td>
+        <td class="si-src">{{ e.ingestion_time or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="si-note">Event time is when the step occurred; review time is when a human adjudicated;
+     ingestion time is when the run was persisted. Where timestamps are absent, events are ordered by a
+     fixed causal sequence and stable record ids. Missing tool-calls or results are never fabricated.</p>
   {% else %}
-    <div class="si-note">Evidence-chain verification is attached per campaign from the standalone
-      verifier; not provided for this view.</div>
+    <div class="si-note">No timeline events in scope for the selected campaign.</div>
   {% endif %}
+
+  <h2>8 · Evidence verification (server-side)</h2>
+  <div class="si-grid">
+    <div class="si-card"><div class="k">Cryptographic verification</div>
+      <div>{% if view.verification.crypto == 'succeeded' %}<span class="badge b-negative">Succeeded</span>
+           {% elif view.verification.crypto == 'failed' %}<span class="badge b-confirmed">Failed</span>
+           {% else %}<span class="badge b-excluded">Unavailable</span>{% endif %}</div></div>
+    <div class="si-card"><div class="k">Integrity (hash)</div>
+      <div>{% if view.verification.integrity == 'ok' %}<span class="badge b-negative">OK</span>
+           {% elif view.verification.integrity == 'mismatch' %}<span class="badge b-confirmed">Mismatch</span>
+           {% else %}<span class="badge b-excluded">Absent</span>{% endif %}</div></div>
+    <div class="si-card"><div class="k">Independent scientific finding</div>
+      <div>{% if view.verification.independent_finding == 'established' %}<span class="badge b-confirmed">Established</span>
+           {% else %}<span class="badge b-candidate">Not established</span>{% endif %}</div></div>
+    <div class="si-card"><div class="k">Independence attested by tool</div>
+      <div><span class="badge b-excluded">No</span></div></div>
+  </div>
+  <p class="si-note">These are separate concepts. A verified signature means the bytes are authentic and
+     intact; it does NOT imply independent custody or a correct scientific conclusion. Independent
+     validation requires a real-backend, validated-model, human-confirmed finding under full outcome
+     review. Verification runs server-side; the browser is never the verification engine.
+     {% if view.verification.independent_finding_reasons %}
+       Not established because: {{ view.verification.independent_finding_reasons|join('; ') }}.{% endif %}</p>
   {% endif %}
 </div>
 {% endblock %}
