@@ -466,6 +466,8 @@ def register(app, candidate_model, db, helpers=None):
             c = candidate_model.query.filter_by(handle=handle).first()
             if not c:
                 c = candidate_model(handle=handle, github_id="test-" + handle,
+                                    name="SOC Test " + handle,
+                                    email=handle + "@synthetic.ranger.local",
                                     status="active", current_board=SIEM_BOARD,
                                     cohort=os.environ.get("DEFAULT_COHORT", "2026-A"))
                 db.session.add(c)
