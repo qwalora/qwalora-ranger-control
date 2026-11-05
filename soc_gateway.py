@@ -363,6 +363,7 @@ def register(app, candidate_model, db, helpers=None):
         if not c:
             c = candidate_model(handle=handle, github_id=_ACTAS_MARKER,
                                 name="Board 2 Test (synthetic)",
+                                email="board2-test@synthetic.ranger.local",
                                 status="active", current_board=SIEM_BOARD, cohort=_DEFCO)
             db.session.add(c)
             db.session.commit()
