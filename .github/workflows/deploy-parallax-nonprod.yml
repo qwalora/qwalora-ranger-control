@@ -94,10 +94,19 @@ jobs:
           echo "----- Procfile -----"; cat Procfile
           echo "----- top-level entries -----"; ls -a1
           echo "----- scan for obviously sensitive files (fail if present) -----"
-          if git ls-files | grep -E '(^|/)(\.env$|\.env\.|id_rsa|id_ed25519|.*\.pem$|.*\.p12$|.*\.key$)' ; then
+          # Secret-bearing FILENAMES: private keys, keystores, env files. Public
+          # certificates (.pem/.crt holding only CERTIFICATE blocks) are allowed.
+          if git ls-files | grep -E '(^|/)(\.env$|\.env\.|id_rsa|id_ed25519|.*\.p12$|.*\.key$)' ; then
             echo "::error::Unexpected credential-like file tracked in the snapshot."; exit 1
           fi
-          echo "snapshot clean of credential-like files"
+          # Content guard: fail on actual PRIVATE KEY material in ANY tracked file
+          # (covers a .pem/.crt that secretly carries a key), independent of name.
+          while IFS= read -r f; do
+            if grep -aqE -- '-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----' "$f" 2>/dev/null; then
+              echo "::error::Tracked file contains private key material: $f"; exit 1
+            fi
+          done < <(git ls-files)
+          echo "snapshot clean of credential-like files (public certs allowed; no private keys)"
 
       - name: Install Railway CLI
         run: |
