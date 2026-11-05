@@ -44,7 +44,7 @@ env:
 
 jobs:
   deploy:
-    name: Deploy ${{ env.AUTHORIZED_SHA }} to parallax-nonprod
+    name: Deploy fda512e to parallax-nonprod
     runs-on: ubuntu-latest
     # Bind to the GitHub environment so its required-reviewer protection gates this run and the
     # environment-scoped RAILWAY_TOKEN secret is used. Configure reviewers in repo Settings.
