@@ -8,12 +8,18 @@
 set -euo pipefail
 
 CFG=/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
-# Per-environment managed CA: write the trusted CA from RANGER_CA_B64 at runtime
-# when provided, so this image is not pinned to a single baked CA. Falls back to
-# the baked ca.pem when unset (prod leaves RANGER_CA_B64 unset and keeps it).
+
+# Per-environment managed CA: when RANGER_CA_B64 is provided, write it to a NEW
+# runtime file (the image runs as uid 1000, which can create files in the config
+# dir but cannot overwrite the root-owned baked ca.pem), and point Dashboards at
+# it. When unset (prod), fall back to the baked ca.pem so prod is unchanged. This
+# is what frees the image from being pinned to a single baked CA.
+CA_PATH=/usr/share/opensearch-dashboards/config/ranger-ca.pem
 if [ -n "${RANGER_CA_B64:-}" ]; then
-  echo "$RANGER_CA_B64" | base64 -d > /usr/share/opensearch-dashboards/config/ranger-ca.pem
+  CA_PATH=/usr/share/opensearch-dashboards/config/ranger-ca-runtime.pem
+  echo "$RANGER_CA_B64" | base64 -d > "$CA_PATH"
 fi
+
 cat > "$CFG" <<EOF
 server.host: "0.0.0.0"
 server.port: 5601
@@ -22,7 +28,7 @@ server.basePath: "/soc"
 server.rewriteBasePath: true
 opensearch.hosts: ["https://opensearch.railway.internal:9200"]
 opensearch.ssl.verificationMode: full
-opensearch.ssl.certificateAuthorities: ["/usr/share/opensearch-dashboards/config/ranger-ca.pem"]
+opensearch.ssl.certificateAuthorities: ["${CA_PATH}"]
 opensearch.username: "kibanaserver"
 opensearch.password: "${KIBANASERVER_PW}"
 opensearch.requestHeadersAllowlist: ["authorization", "securitytenant"]
