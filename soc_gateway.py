@@ -346,6 +346,8 @@ def register(app, candidate_model, db):
             abort(409)
         if not c:
             c = candidate_model(handle=handle, github_id=_ACTAS_MARKER,
+                                name="Board 2 Test (synthetic)",
+                                email="board2-test@synthetic.ranger.local",
                                 status="active", current_board=SIEM_BOARD, cohort=_DEFCO)
             db.session.add(c)
             db.session.commit()
@@ -448,6 +450,8 @@ def register(app, candidate_model, db):
             c = candidate_model.query.filter_by(handle=handle).first()
             if not c:
                 c = candidate_model(handle=handle, github_id="test-" + handle,
+                                    name="SOC Test " + handle,
+                                    email=handle + "@synthetic.ranger.local",
                                     status="active", current_board=SIEM_BOARD,
                                     cohort=os.environ.get("DEFAULT_COHORT", "2026-A"))
                 db.session.add(c)
