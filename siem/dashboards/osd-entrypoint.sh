@@ -8,6 +8,12 @@
 set -euo pipefail
 
 CFG=/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+# Per-environment managed CA: write the trusted CA from RANGER_CA_B64 at runtime
+# when provided, so this image is not pinned to a single baked CA. Falls back to
+# the baked ca.pem when unset (prod leaves RANGER_CA_B64 unset and keeps it).
+if [ -n "${RANGER_CA_B64:-}" ]; then
+  echo "$RANGER_CA_B64" | base64 -d > /usr/share/opensearch-dashboards/config/ranger-ca.pem
+fi
 cat > "$CFG" <<EOF
 server.host: "0.0.0.0"
 server.port: 5601
