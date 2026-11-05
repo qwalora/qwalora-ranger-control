@@ -142,21 +142,6 @@ jobs:
           fi
           echo "Token verified: project ${RAILWAY_PROJECT_ID} / environment parallax-nonprod"
 
-      - name: Link the authorized project + environment
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Establish project+environment context for `railway up`. The token is already
-          # verified (above) to be scoped to exactly this project+environment, so this link
-          # cannot point anywhere else. The service is pinned explicitly on `railway up
-          # --service` below (a project token does not reliably resolve a single service via
-          # `railway status`, so it is selected rather than grep-asserted).
-          railway link \
-            --project "$RAILWAY_PROJECT_ID" \
-            --environment "$RAILWAY_ENVIRONMENT_ID"
-          echo "Linked project ${RAILWAY_PROJECT_ID} / environment parallax-nonprod"
-
       - name: Deploy the snapshot to the EXISTING service (no --new)
         id: deploy
         env:
