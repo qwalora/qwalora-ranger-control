@@ -504,12 +504,13 @@ def register(app, candidate_model, db, helpers=None):
                 m.status = "active"
                 db.session.commit()
             session["cand"] = c.id
-            _csrf = None
-            try:
-                from flask_wtf.csrf import generate_csrf
-                _csrf = generate_csrf()
-            except Exception:
-                _csrf = None
+            # Mirror the portal's own _csrf_token(): the browser CSRF guard checks
+            # X-CSRF-Token against session["csrf"], so mint/return that same token.
+            _csrf = session.get("csrf")
+            if not _csrf:
+                import secrets as _secrets
+                _csrf = _secrets.token_urlsafe(24)
+                session["csrf"] = _csrf
             _log("test_login", cand=c.id, handle=handle)
             return jsonify(ok=True, cand=c.id, csrf=_csrf)
 
