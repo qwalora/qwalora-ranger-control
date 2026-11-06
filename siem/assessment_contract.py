@@ -276,8 +276,13 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
                               "scoring_mode": scoring_mode, "assessment_only": True})
         reason = "assessment_met" if assessment_met else (
             "objective_gate_unmet" if not eligible else "below_rubric_threshold")
+        # Honesty: AI is "involved" only when the model rubric actually carries weight in the score.
+        # A board with rubric weight 0 (e.g. a purely deterministic code-execution board) is scored with
+        # no model in any path, so it is stamped ai_involved=False and carries no judge provenance.
+        ai_used = w_rub > 0.0
         return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown,
-                   ai_involved=True, extra={"model_scoring": _judge_provenance(model_scoring)})
+                   ai_involved=ai_used,
+                   extra={"model_scoring": _judge_provenance(model_scoring) if ai_used else None})
 
     return _fail(blueprint, pw, "BAD_POLICY", [_err("BAD_POLICY", f"unknown policy {ptype!r}")],
                  breakdown)

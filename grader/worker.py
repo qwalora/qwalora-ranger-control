@@ -137,6 +137,11 @@ def _is_pid(workload_id):
     return wl.startswith("parallax-pi") or wl.startswith("parallax-code")
 
 
+def _is_apisec(workload_id):
+    # PX-A1 (Board 3) API object-level authorization board: candidate submits a sandboxed authz.py.
+    return str(workload_id or "").startswith("parallax-apisec")
+
+
 def _is_code_board(workload_id, spec=None):
     # Board selection is authoritative from the portal-set workload_id ONLY. The candidate's own
     # submission spec is never trusted to pick the code-execution path (`spec` kept for signature
@@ -248,7 +253,40 @@ def _grade_pid(job, workload_id):
     return out
 
 
+def _grade_apisec(job, workload_id):
+    """PX-A1 (Board 3): run the candidate's authorization handler in the sandbox against the sealed,
+    per-instance request battery and measure allow/deny behavior. Deterministic; no model. Posts
+    {measurement, code_sha256}; the PORTAL runs the objective gate (ai_involved=False) and signs."""
+    import hashlib
+    from parallax import apisec_evaluator as APE, apisec_content as AC
+    from parallax import pid_submission as PS, pid_sandbox as SB
+
+    raw = _snapshot_bytes(job)                          # digest-verified
+    code = PS.read_file(raw, "authz.py") or ""
+    errs = SB.static_check(code, interface=("handle",))
+    if errs:
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-A1",
+                "error": "unsafe_code: " + "; ".join(errs[:4]), "grader_version": GRADER_VERSION}
+    code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    seed = int(job.get("instance_seed") or 0)
+    instance = AC.generate_instance(seed, n_notes=10)
+    try:
+        measurement = APE.measure_authz(code, instance, defense_hash=code_sha)
+    except Exception as e:  # noqa: BLE001 - a sandbox failure fails closed, never a silent pass
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-A1",
+                "error": "sandbox_runtime: " + str(e)[:200], "grader_version": GRADER_VERSION}
+    m = measurement["metrics"]
+    _log("apisec_measured", sub=job.get("submission_id"), board="PX-A1",
+         allow=m.get("allow_rate"), deny=m.get("deny_rate"), leaks=m.get("leaks"))
+    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-A1",
+            "workload_id": workload_id,
+            "measurement": {"metrics": m, "defense_hash": measurement["defense_hash"]},
+            "code_sha256": code_sha, "grader_version": GRADER_VERSION}
+
+
 def _grade(job):
+    if _is_apisec(job.get("workload_id")):
+        return _grade_apisec(job, job.get("workload_id"))
     if _is_pid(job.get("workload_id")):
         return _grade_pid(job, job.get("workload_id"))
     from parallax.research import corpus as C, model_backend as mb, harness

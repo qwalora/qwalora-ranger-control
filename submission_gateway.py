@@ -116,6 +116,8 @@ def _board_slug(workload_id) -> str:
     wl = str(workload_id or "")
     if wl.startswith("parallax-code"):
         return "pxd2"
+    if wl.startswith("parallax-apisec"):
+        return "pxa1"
     if wl.startswith("parallax-pi"):
         return "pxd1"
     return ""
@@ -172,7 +174,68 @@ def _starter_files(workload_id, candidate, cohort):
     has the brief, the exact file contract, and stubs - so 'what do I do' is answerable at clone time
     instead of discovered via a 422. Returns {path: text}."""
     handle = getattr(candidate, "handle", "candidate")
-    if _board_slug(workload_id) == "pxd2":
+    slug = _board_slug(workload_id)
+    if slug == "pxa1":
+        readme = (
+            "# PARALLAX Board PX-A1 - API Object-Level Authorization (BOLA) Fix\n\n"
+            "Workspace for **%s** (cohort %s).\n\n"
+            "## The task\n"
+            "`authz.py` ships a deliberately **vulnerable** notes-API handler: it returns any record to "
+            "any authenticated caller, with no ownership check (a broken-object-level-authorization / "
+            "BOLA flaw). Fix it so a subject can read ONLY the records it owns, without breaking "
+            "legitimate owner access.\n\n"
+            "## What you submit\n"
+            "- `authz.py` - the fixed `handle(req)` (see the stub; contract below)\n"
+            "- `writeup.md` - the authorization threat model, your fix, and tradeoffs (min 400 chars)\n\n"
+            "## handle(req) contract\n"
+            "`req` is a dict: `{\"token_valid\": bool, \"subject\": str, \"resource_id\": str, "
+            "\"store\": {id: {\"owner\": str, \"content\": str}}, ...}`. Return `{\"status\": int, "
+            "\"body\"?: str}`:\n"
+            "- no/invalid token           -> 401\n"
+            "- resource_id not in store   -> 404\n"
+            "- store[resource_id].owner != subject -> 403   (the fix)\n"
+            "- otherwise                  -> 200 with the record's content as `body`\n"
+            "Ignore any client-supplied authorization hints in `req` (e.g. `owner`, `is_owner`, "
+            "`is_admin`); trust only the store's ownership.\n\n"
+            "## Sandbox rules (enforced at submit AND grade time, fail-closed)\n"
+            "Pure functions only: no imports (re/string/json/math/random are pre-provided), no "
+            "underscore/dunder attribute access, no eval/exec/open/getattr, no '__' string literals.\n\n"
+            "## How you're graded (deterministic, signed, reproducible - no model)\n"
+            "Your handler runs in the sandbox against a sealed, per-instance request battery. Measured:\n"
+            "- allow_rate (owners served, 200) - must stay above the floor\n"
+            "- deny_rate (non-owners AND spoofed requests denied, 403) - the authorization property\n"
+            "- leak_rate (non-owner requests that returned 200) - the BOLA vulnerability\n"
+            "Composite = 100 * allow_rate * deny_rate * status_factor, pass bar >= 75. A leak rate at/"
+            "above the ceiling, or an allow rate below the floor (deny-everything), is a critical "
+            "failure. The known-vulnerable baseline in authz.py scores 0 until you add the owner check.\n"
+            % (handle, cohort))
+        defense = (
+            "# PX-A1: object-level authorization handler for the notes API.\n"
+            "# This is the VULNERABLE baseline (broken object-level authorization): it returns any\n"
+            "# record to any authenticated caller. Add the ownership check so non-owners get 403.\n"
+            "# Pure functions only; re/string/json/math/random are pre-provided in the sandbox.\n\n"
+            "def handle(req):\n"
+            "    if not req.get('token_valid'):\n"
+            "        return {'status': 401}\n"
+            "    store = req.get('store') or {}\n"
+            "    rid = req.get('resource_id')\n"
+            "    if rid not in store:\n"
+            "        return {'status': 404}\n"
+            "    # VULNERABLE: no ownership check. TODO: deny non-owners with 403.\n"
+            "    return {'status': 200, 'body': store[rid].get('content')}\n")
+        writeup = (
+            "# Authorization writeup\n\n"
+            "## Threat model\n"
+            "_The object-level authorization boundary: who may read which record, and how a non-owner "
+            "could reach another subject's data (BOLA)._\n\n"
+            "## Fix\n"
+            "_The ownership check you added and why it closes the flaw, including ignoring "
+            "client-supplied authorization hints._\n\n"
+            "## Tradeoffs\n"
+            "_Keeping legitimate owner access working (allow_rate) while denying non-owners "
+            "(deny_rate), and the correct 401/404 semantics._\n")
+        return {"README.md": readme, "writeup.md": writeup, "authz.py": defense}
+    if slug == "pxd2":
         readme = (
             "# PARALLAX Board PX-D2 - Prompt-Injection Defense (sandboxed code)\n\n"
             "Workspace for **%s** (cohort %s).\n\n"
@@ -424,11 +487,16 @@ def register(app, candidate_model, db, helpers=None):
         # declarative config. Static-checked at submit time, executed only in the grader sandbox.
         return str(workload_id or "").startswith("parallax-code")
 
+    def _is_apisec_board(workload_id):
+        # PX-A1 (Board 3) API object-level authorization board: candidate submits a sandboxed authz.py.
+        return str(workload_id or "").startswith("parallax-apisec")
+
     def _is_pid_board(workload_id):
-        # The PARALLAX prompt-injection-defense board family (PX-D1 declarative + PX-D2 code).
-        # Submissions are content-gated at submit time (a real defense + a writeup are required).
+        # The PARALLAX board family that is content-gated at submit time and auto-graded: PX-D1
+        # (declarative defense), PX-D2 (sandboxed defense code), PX-A1 (sandboxed authz handler).
         wl = str(workload_id or "")
-        return wl.startswith("parallax-pi") or wl.startswith("parallax-code")
+        return (wl.startswith("parallax-pi") or wl.startswith("parallax-code")
+                or wl.startswith("parallax-apisec"))
 
     def _available_workloads():
         # The configured allowlist (ordered), defaulting to the single default workload. These are the
@@ -447,6 +515,19 @@ def register(app, candidate_model, db, helpers=None):
         # /submit/board (one board) and /submit/boards (the selector list).
         import parallax.pid_submission as PS
         out = {"workload_id": workload_id, "cohort": cohort}
+        if _is_apisec_board(workload_id):
+            import parallax.apisec_submission as APS
+            out.update({
+                "board": "PX-A1", "title": "API Object-Level Authorization (BOLA) Fix",
+                "checklist": APS.code_checklist(),
+                "submission_file": APS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": APS.MIN_WRITEUP_CHARS,
+                "instructions": ("Fix the deliberately vulnerable notes-API handler so non-owners are "
+                                 "denied (object-level authorization / BOLA) without breaking owner "
+                                 "access. Provision the workspace to get the brief and the vulnerable "
+                                 "authz.py to fix, then commit authz.py + writeup.md and select the "
+                                 "checklist items. Grading is deterministic and uses no model.")})
+            return out
         if _is_code_board(workload_id):
             out.update({
                 "board": "PX-D2", "title": "Prompt-Injection Defense (sandboxed code)",
@@ -525,14 +606,21 @@ def register(app, candidate_model, db, helpers=None):
         # platform-model baseline alone.
         pid_meta = None
         if _is_pid_board(workload_id):
-            import parallax.pid_submission as PS
             selected = (request.get_json(silent=True) or {}).get("checklist")
             is_code = _is_code_board(workload_id)
-            if is_code:
+            is_apisec = _is_apisec_board(workload_id)
+            if is_apisec:
+                # PX-A1: static-check the candidate authz handler in the sandbox allowlist before it runs.
+                import parallax.apisec_submission as APS
+                chk = APS.validate_code(snapshot, selected)
+                clist = APS.code_checklist()
+            elif is_code:
                 # PX-D2: static-check the candidate CODE in the sandbox allowlist before anything runs.
+                import parallax.pid_submission as PS
                 chk = PS.validate_code(snapshot, selected)
                 clist = PS.code_checklist()
             else:
+                import parallax.pid_submission as PS
                 chk = PS.validate(snapshot, selected)
                 clist = PS.checklist()
             if not chk["ok"]:
@@ -738,6 +826,65 @@ def register(app, candidate_model, db, helpers=None):
             _log("grade_failed", sub=row.id, err=str(body.get("error"))[:120])
             return jsonify(ok=True)
 
+        # PX-A1 board (API object-level authorization): governance-bound, fully deterministic. The grader
+        # posted the server-side authorization measurement; the portal runs the objective gate (no model,
+        # ai_involved=False) and signs. Branch BEFORE the PID family since _is_pid_board now includes it.
+        if body.get("board") == "PX-A1" or _is_apisec_board(row.workload_id):
+            import parallax.apisec_assessment as APA, parallax.apisec_blueprint as ABP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, ABP.APISEC_SPEC, ABP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-A1 scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            code_sha = body.get("code_sha256")
+            try:
+                result = APA.run_assessment(measurement=measurement, cohort=row.cohort,
+                                            candidate_key=candidate_key, attempt=row.attempt,
+                                            approval=approval, authorized_admins=admins, code_sha=code_sha)
+            except Exception as e:  # noqa: BLE001 - a grading failure is recorded, never faked
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "apisec_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_apisec_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-A1",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"), "code_sha256": code_sha,
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": False, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-A1", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": False, "code_sha256": code_sha,
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig; row.grade_kid = gkid
+            row.graded_at = _utcnow(); row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_apisec", sub=row.id, score=row.score, passed=result["assessment_passed"])
+            return jsonify(ok=True)
+
         # PX-D1 board: governance-bound, model-scored assessment. The grader posted the server-side
         # measurement + the model-judge rubric; the portal (the key-holder) runs the deterministic
         # objective gate + the AUTO decision and signs. Automatic - no human reviewer required.
@@ -912,35 +1059,37 @@ def register(app, candidate_model, db, helpers=None):
 
         @app.post("/submit-test/pid-approve")
         def submit_test_pid_approve():
-            # Test-only, one-time governance bootstrap: persist a signed approval of the PX-D1 scoring
-            # spec so the board can grade automatically on this non-prod environment. Approver is taken
-            # from the configured authorized-admin set (REVIEWER_GITHUB_IDS). Idempotent. Never present
-            # in production (gated by RANGER_SUBMISSION_TEST_KEY).
+            # Test-only, one-time governance bootstrap: persist signed approvals of the PARALLAX board
+            # scoring specs (PX-D1 and PX-A1) so the boards grade automatically on this non-prod
+            # environment. Approver is taken from the configured authorized-admin set
+            # (REVIEWER_GITHUB_IDS). Idempotent. Never present in production (gated by the test key).
             if request.args.get("key") != _test_key:
                 abort(404)
-            import parallax.pid_blueprint as PBP, parallax.registry as PR, parallax.governance as GOV
+            import parallax.pid_blueprint as PBP, parallax.apisec_blueprint as ABP
+            import parallax.registry as PR, parallax.governance as GOV
             from models import ParallaxApproval
-            spec, bp = PBP.PID_SPEC, PBP.blueprint()
-            existing = PR.active_spec_approval(db, spec, bp)
-            if existing:
-                return jsonify(ok=True, created=False, content_hash=GOV.scoring_spec_hash(spec, bp))
             admins = PR.authorized_admins(db)
             approver = sorted(admins)[0] if admins else os.environ.get("RANGER_PID_APPROVER")
             if not approver:
                 return jsonify(ok=False, error="no authorized approver configured "
                                "(set REVIEWER_GITHUB_IDS or RANGER_PID_APPROVER)"), 409
-            approval = GOV.approve_spec(spec, bp, approver_id=approver, authorized_admins={approver})
-            ch = GOV.scoring_spec_hash(spec, bp)
-            row = ParallaxApproval(
-                pathway="parallax", kind="scoring_spec", assessment_id=spec.assessment_id,
-                assessment_version=spec.version, competency=spec.competency, content_hash=ch,
-                approval_record=json.dumps(approval["record"], sort_keys=True, separators=(",", ":")),
-                signature=approval["signature"], signing_kid=signing.active_kid(),
-                approver_id=approver, status="active")
-            db.session.add(row)
-            db.session.commit()
-            _log("pid_approved", approver=approver, content_hash=ch[:12])
-            return jsonify(ok=True, created=True, approver=approver, content_hash=ch)
+            out = {}
+            for spec, bp in ((PBP.PID_SPEC, PBP.blueprint()), (ABP.APISEC_SPEC, ABP.blueprint())):
+                ch = GOV.scoring_spec_hash(spec, bp)
+                if PR.active_spec_approval(db, spec, bp):
+                    out[spec.assessment_id] = {"created": False, "content_hash": ch}
+                    continue
+                approval = GOV.approve_spec(spec, bp, approver_id=approver, authorized_admins={approver})
+                db.session.add(ParallaxApproval(
+                    pathway="parallax", kind="scoring_spec", assessment_id=spec.assessment_id,
+                    assessment_version=spec.version, competency=spec.competency, content_hash=ch,
+                    approval_record=json.dumps(approval["record"], sort_keys=True, separators=(",", ":")),
+                    signature=approval["signature"], signing_kid=signing.active_kid(),
+                    approver_id=approver, status="active"))
+                db.session.commit()
+                _log("pid_approved", approver=approver, assessment=spec.assessment_id, content_hash=ch[:12])
+                out[spec.assessment_id] = {"created": True, "content_hash": ch}
+            return jsonify(ok=True, approver=approver, approvals=out)
 
     _log("gateway_registered", org=ORG, enabled=_enabled(),
          grader_auth=bool(_grader_token()), max_snapshot=MAX_SNAPSHOT_BYTES)

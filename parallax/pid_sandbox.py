@@ -54,10 +54,12 @@ _FORBIDDEN_CALLS = {"eval", "exec", "compile", "open", "__import__", "globals", 
                     "exit", "quit", "object"}
 
 
-def static_check(code: str) -> List[str]:
+def static_check(code: str, interface=INTERFACE) -> List[str]:
     """AST allowlist screen. Returns [] if the code is acceptable, else a list of reasons. This is the
     primary safety layer: it blocks imports, any attribute access and any dunder name (which together
-    prevent the usual pure-Python sandbox escapes), and dangerous builtin calls."""
+    prevent the usual pure-Python sandbox escapes), and dangerous builtin calls. `interface` is the set
+    of entry-point names the submission must define at least one of (PX-D2 defense by default; other
+    code boards pass their own, e.g. ("handle",))."""
     errs: List[str] = []
     if not isinstance(code, str) or not code.strip():
         return ["defense.py is empty"]
@@ -92,8 +94,8 @@ def static_check(code: str) -> List[str]:
     syms = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     syms |= {t.id for n in ast.walk(tree) if isinstance(n, ast.Assign)
              for t in n.targets if isinstance(t, ast.Name)}
-    if not (set(INTERFACE) & syms):
-        errs.append("defense.py must define at least one of: SYSTEM, sanitize(doc), screen(answer)")
+    if not (set(interface) & syms):
+        errs.append("submission must define at least one of: " + ", ".join(interface))
     # de-dup, keep order
     seen, out = set(), []
     for e in errs:
@@ -136,7 +138,14 @@ for line in sys.stdin:
     line=line.strip()
     if not line: continue
     try:
-        req=json.loads(line); out=call(req["op"], req.get("payload"))
+        req=json.loads(line); op=req["op"]
+        if op=="invoke":                       # generic: call a named function, return raw JSON
+            f=ns.get(req.get("fn"))
+            if not callable(f):
+                sys.stdout.write(json.dumps({"ok":False,"error":"uncallable"})+"\n"); sys.stdout.flush(); continue
+            out=f(req.get("payload"))
+        else:
+            out=call(op, req.get("payload"))
         sys.stdout.write(json.dumps({"ok":True,"result":out})+"\n")
     except Exception as e:
         sys.stdout.write(json.dumps({"ok":False,"error":type(e).__name__})+"\n")
@@ -152,8 +161,8 @@ class SandboxSession:
     """A persistent sandboxed child serving sanitize/screen/system requests for one campaign."""
 
     def __init__(self, code: str, *, cpu_s: int = DEFAULT_CPU_S, mem_mb: int = DEFAULT_MEM_MB,
-                 req_timeout_s: float = DEFAULT_REQ_TIMEOUT_S):
-        errs = static_check(code)
+                 req_timeout_s: float = DEFAULT_REQ_TIMEOUT_S, interface=INTERFACE):
+        errs = static_check(code, interface=interface)
         if errs:
             raise SandboxError("static_check: " + "; ".join(errs))
         self.req_timeout_s = req_timeout_s
@@ -200,6 +209,18 @@ class SandboxSession:
         resp = self._recv()
         if not resp or not resp.get("ok"):
             raise SandboxError("op %s failed: %s" % (op, (resp or {}).get("error")))
+        return resp.get("result")
+
+    def invoke(self, fn: str, arg: Any) -> Any:
+        """Call a named candidate function with a JSON-serializable argument and return its raw
+        JSON-serializable result. Fail-closed: a crash, timeout, non-serializable return, or missing
+        function raises SandboxError. Used by code boards beyond PX-D2 (e.g. the API-security handler)."""
+        if self.failed:
+            raise SandboxError("sandbox already failed: %s" % self.failed)
+        self._send({"op": "invoke", "fn": fn, "payload": arg})
+        resp = self._recv()
+        if not resp or not resp.get("ok"):
+            raise SandboxError("invoke %s failed: %s" % (fn, (resp or {}).get("error")))
         return resp.get("result")
 
     def system(self) -> Optional[str]:
