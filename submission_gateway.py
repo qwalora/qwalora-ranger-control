@@ -631,7 +631,7 @@ def register(app, candidate_model, db, helpers=None):
             # For PX-D2 the binding hash is the code hash; for PX-D1 it is the declarative defense hash.
             pid_meta = {"defense_hash": chk.get("defense_hash") or chk.get("code_sha256"),
                         "code_sha256": chk.get("code_sha256"),
-                        "addresses": chk["addresses"],
+                        "addresses": chk.get("addresses"),   # absent for PX-A1 (no declared families)
                         "checklist": chk["checklist_selected"], "writeup_chars": chk["writeup_chars"]}
 
         tag = f"submit-a{attempt}-{sha[:12]}"
