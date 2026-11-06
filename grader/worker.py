@@ -142,6 +142,11 @@ def _is_apisec(workload_id):
     return str(workload_id or "").startswith("parallax-apisec")
 
 
+def _is_devsecops(workload_id):
+    # PX-S1 (Board 4) secure-release-gate board: candidate submits a sandboxed gates.py.
+    return str(workload_id or "").startswith("parallax-devsecops")
+
+
 def _is_code_board(workload_id, spec=None):
     # Board selection is authoritative from the portal-set workload_id ONLY. The candidate's own
     # submission spec is never trusted to pick the code-execution path (`spec` kept for signature
@@ -284,7 +289,40 @@ def _grade_apisec(job, workload_id):
             "code_sha256": code_sha, "grader_version": GRADER_VERSION}
 
 
+def _grade_devsecops(job, workload_id):
+    """PX-S1 (Board 4): run the candidate's CI/CD security gates in the sandbox against the sealed,
+    per-instance battery and measure block/allow behavior. Deterministic; no model. Posts
+    {measurement, code_sha256}; the PORTAL runs the objective gate (ai_involved=False) and signs."""
+    import hashlib
+    from parallax import devsecops_evaluator as DE, devsecops_content as DC
+    from parallax import pid_submission as PS, pid_sandbox as SB
+
+    raw = _snapshot_bytes(job)
+    code = PS.read_file(raw, "gates.py") or ""
+    errs = SB.static_check(code, interface=("scan_secrets", "allow_merge", "allow_release"))
+    if errs:
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-S1",
+                "error": "unsafe_code: " + "; ".join(errs[:4]), "grader_version": GRADER_VERSION}
+    code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    seed = int(job.get("instance_seed") or 0)
+    instance = DC.generate_instance(seed)
+    try:
+        measurement = DE.measure_gates(code, instance, defense_hash=code_sha)
+    except Exception as e:  # noqa: BLE001 - a sandbox failure fails closed, never a silent pass
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-S1",
+                "error": "sandbox_runtime: " + str(e)[:200], "grader_version": GRADER_VERSION}
+    m = measurement["metrics"]
+    _log("devsecops_measured", sub=job.get("submission_id"), board="PX-S1",
+         security=m.get("security_rate"), task=m.get("task_rate"))
+    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-S1",
+            "workload_id": workload_id,
+            "measurement": {"metrics": m, "defense_hash": measurement["defense_hash"]},
+            "code_sha256": code_sha, "grader_version": GRADER_VERSION}
+
+
 def _grade(job):
+    if _is_devsecops(job.get("workload_id")):
+        return _grade_devsecops(job, job.get("workload_id"))
     if _is_apisec(job.get("workload_id")):
         return _grade_apisec(job, job.get("workload_id"))
     if _is_pid(job.get("workload_id")):

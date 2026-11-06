@@ -118,6 +118,8 @@ def _board_slug(workload_id) -> str:
         return "pxd2"
     if wl.startswith("parallax-apisec"):
         return "pxa1"
+    if wl.startswith("parallax-devsecops"):
+        return "pxs1"
     if wl.startswith("parallax-pi"):
         return "pxd1"
     return ""
@@ -175,6 +177,52 @@ def _starter_files(workload_id, candidate, cohort):
     instead of discovered via a 422. Returns {path: text}."""
     handle = getattr(candidate, "handle", "candidate")
     slug = _board_slug(workload_id)
+    if slug == "pxs1":
+        readme = (
+            "# PARALLAX Board PX-S1 - Secure Release Gate (CI/CD DevSecOps)\n\n"
+            "Workspace for **%s** (cohort %s).\n\n"
+            "## The task\n"
+            "`gates.py` ships PERMISSIVE stub gates that wave everything through. Implement three CI/CD "
+            "security gates so threats are blocked while legitimate releases still pass.\n\n"
+            "## What you submit\n"
+            "- `gates.py` - the three gates (see the stub; contract below)\n"
+            "- `writeup.md` - the release-security threat model, your gate policies, and tradeoffs "
+            "(min 400 chars)\n\n"
+            "## gates.py contract (pure functions)\n"
+            "- `scan_secrets(text: str) -> list` : return a non-empty list of findings when `text` "
+            "contains a secret; return [] for clean text. A secret is: an AWS key id (AKIA + 16 "
+            "upper/digits), a GitHub token (ghp_ + 36), a PEM private-key header, or an assignment of "
+            "password/api_key/secret/token to a quoted literal.\n"
+            "- `allow_merge(ci: dict) -> bool` : return True to allow a merge, False to block. Allow "
+            "IFF `ci['tests']['failed'] == 0` AND `ci['lint_errors'] == 0`.\n"
+            "- `allow_release(sbom: list) -> bool` : return True to allow a release, False to block. "
+            "Block if any dependency has severity in {high, critical} OR license in {GPL-3.0, AGPL-3.0}."
+            "\n\n## Sandbox rules (enforced at submit AND grade time, fail-closed)\n"
+            "Pure functions only: no imports (re/string/json/math/random are pre-provided), no "
+            "underscore/dunder attribute access, no eval/exec/open/getattr, no '__' string literals.\n\n"
+            "## How you're graded (deterministic, signed, reproducible - no model)\n"
+            "Each gate runs against a sealed battery of must-block positives and must-allow negative "
+            "controls. Measured: security_rate (threats correctly blocked) and task_rate (legitimate "
+            "cases correctly allowed). Composite = 100 * security_rate * task_rate, pass bar >= 75. "
+            "Security below the floor (threats pass) or task below the floor (blocks legitimate "
+            "releases) is a critical failure. The permissive baseline scores 0 until you implement the "
+            "gates.\n" % (handle, cohort))
+        from parallax import devsecops_content as _DC
+        defense = (
+            "# PX-S1: CI/CD secure release gates. These are PERMISSIVE stubs (they wave everything\n"
+            "# through) and score 0 until you implement them. Pure functions only; re/string/json/\n"
+            "# math/random are pre-provided in the sandbox.\n\n" + _DC.PERMISSIVE_BASELINE)
+        writeup = (
+            "# Secure release gate writeup\n\n"
+            "## Threat model\n"
+            "_What each gate defends against: secrets reaching the repo, a red build merging, a "
+            "vulnerable or disallowed-license dependency shipping._\n\n"
+            "## Gate policies\n"
+            "_How each of scan_secrets / allow_merge / allow_release decides, and why._\n\n"
+            "## Tradeoffs\n"
+            "_Catching threats (security) without blocking legitimate green releases (false "
+            "positives)._\n")
+        return {"README.md": readme, "writeup.md": writeup, "gates.py": defense}
     if slug == "pxa1":
         readme = (
             "# PARALLAX Board PX-A1 - API Object-Level Authorization (BOLA) Fix\n\n"
@@ -491,12 +539,16 @@ def register(app, candidate_model, db, helpers=None):
         # PX-A1 (Board 3) API object-level authorization board: candidate submits a sandboxed authz.py.
         return str(workload_id or "").startswith("parallax-apisec")
 
+    def _is_devsecops_board(workload_id):
+        # PX-S1 (Board 4) secure-release-gate board: candidate submits a sandboxed gates.py.
+        return str(workload_id or "").startswith("parallax-devsecops")
+
     def _is_pid_board(workload_id):
         # The PARALLAX board family that is content-gated at submit time and auto-graded: PX-D1
-        # (declarative defense), PX-D2 (sandboxed defense code), PX-A1 (sandboxed authz handler).
+        # (declarative), PX-D2 (defense code), PX-A1 (authz handler), PX-S1 (CI/CD gates).
         wl = str(workload_id or "")
         return (wl.startswith("parallax-pi") or wl.startswith("parallax-code")
-                or wl.startswith("parallax-apisec"))
+                or wl.startswith("parallax-apisec") or wl.startswith("parallax-devsecops"))
 
     def _available_workloads():
         # The configured allowlist (ordered), defaulting to the single default workload. These are the
@@ -515,6 +567,20 @@ def register(app, candidate_model, db, helpers=None):
         # /submit/board (one board) and /submit/boards (the selector list).
         import parallax.pid_submission as PS
         out = {"workload_id": workload_id, "cohort": cohort}
+        if _is_devsecops_board(workload_id):
+            import parallax.devsecops_submission as DSS
+            out.update({
+                "board": "PX-S1", "title": "Secure Release Gate (CI/CD DevSecOps)",
+                "checklist": DSS.code_checklist(),
+                "submission_file": DSS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": DSS.MIN_WRITEUP_CHARS,
+                "instructions": ("Implement three CI/CD security gates in gates.py (secret-scan, CI "
+                                 "merge gate, dependency/SBOM release gate) so threats are blocked and "
+                                 "legitimate releases pass. Provision the workspace to get the brief, "
+                                 "the gate contract, and permissive stubs to harden, then commit "
+                                 "gates.py + writeup.md and select the checklist items. Grading is "
+                                 "deterministic and uses no model.")})
+            return out
         if _is_apisec_board(workload_id):
             import parallax.apisec_submission as APS
             out.update({
@@ -609,7 +675,13 @@ def register(app, candidate_model, db, helpers=None):
             selected = (request.get_json(silent=True) or {}).get("checklist")
             is_code = _is_code_board(workload_id)
             is_apisec = _is_apisec_board(workload_id)
-            if is_apisec:
+            is_devsecops = _is_devsecops_board(workload_id)
+            if is_devsecops:
+                # PX-S1: static-check the candidate gates in the sandbox allowlist before anything runs.
+                import parallax.devsecops_submission as DSS
+                chk = DSS.validate_code(snapshot, selected)
+                clist = DSS.code_checklist()
+            elif is_apisec:
                 # PX-A1: static-check the candidate authz handler in the sandbox allowlist before it runs.
                 import parallax.apisec_submission as APS
                 chk = APS.validate_code(snapshot, selected)
@@ -824,6 +896,64 @@ def register(app, candidate_model, db, helpers=None):
             row.snapshot_b64 = None
             db.session.commit()
             _log("grade_failed", sub=row.id, err=str(body.get("error"))[:120])
+            return jsonify(ok=True)
+
+        # PX-S1 board (secure release gate): governance-bound, fully deterministic. Branch BEFORE the
+        # PID family since _is_pid_board now includes it.
+        if body.get("board") == "PX-S1" or _is_devsecops_board(row.workload_id):
+            import parallax.devsecops_assessment as DSA, parallax.devsecops_blueprint as DBP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, DBP.DEVSECOPS_SPEC, DBP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-S1 scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            code_sha = body.get("code_sha256")
+            try:
+                result = DSA.run_assessment(measurement=measurement, cohort=row.cohort,
+                                            candidate_key=candidate_key, attempt=row.attempt,
+                                            approval=approval, authorized_admins=admins, code_sha=code_sha)
+            except Exception as e:  # noqa: BLE001
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "devsecops_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_devsecops_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-S1",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"), "code_sha256": code_sha,
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": False, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-S1", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": False, "code_sha256": code_sha,
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig; row.grade_kid = gkid
+            row.graded_at = _utcnow(); row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_devsecops", sub=row.id, score=row.score, passed=result["assessment_passed"])
             return jsonify(ok=True)
 
         # PX-A1 board (API object-level authorization): governance-bound, fully deterministic. The grader
@@ -1066,6 +1196,7 @@ def register(app, candidate_model, db, helpers=None):
             if request.args.get("key") != _test_key:
                 abort(404)
             import parallax.pid_blueprint as PBP, parallax.apisec_blueprint as ABP
+            import parallax.devsecops_blueprint as DBP
             import parallax.registry as PR, parallax.governance as GOV
             from models import ParallaxApproval
             admins = PR.authorized_admins(db)
@@ -1074,7 +1205,8 @@ def register(app, candidate_model, db, helpers=None):
                 return jsonify(ok=False, error="no authorized approver configured "
                                "(set REVIEWER_GITHUB_IDS or RANGER_PID_APPROVER)"), 409
             out = {}
-            for spec, bp in ((PBP.PID_SPEC, PBP.blueprint()), (ABP.APISEC_SPEC, ABP.blueprint())):
+            for spec, bp in ((PBP.PID_SPEC, PBP.blueprint()), (ABP.APISEC_SPEC, ABP.blueprint()),
+                             (DBP.DEVSECOPS_SPEC, DBP.blueprint())):
                 ch = GOV.scoring_spec_hash(spec, bp)
                 if PR.active_spec_approval(db, spec, bp):
                     out[spec.assessment_id] = {"created": False, "content_hash": ch}
