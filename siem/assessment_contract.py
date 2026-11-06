@@ -248,11 +248,15 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
                          breakdown)
         # Eligibility gate (deterministic + reproducible): the objective measurement must pass its
         # required checks and clear its evidence, and the critical veto above must not have fired. The
-        # model-judge rubric is the PRIMARY qualitative score but can never rescue a submission that
-        # fails the reproducible objective gate or trips the critical-failure veto.
+        # rubric can never rescue a submission that fails the objective gate or trips the critical veto.
+        # Under measurement-primary (rubric_gates=False) the rubric is ADVISORY: it is recorded and
+        # blended into the score but does not gate the pass, so a flaky/unavailable judge cannot sink a
+        # submission that clears the reproducible objective bar. Under model-primary (rubric_gates=True)
+        # the rubric must also clear its threshold.
+        rubric_gates = bool(policy.get("rubric_gates", True))
         rubric_ok = (rubric_agg is not None) and (rubric_agg >= threshold)
         eligible = bool(all_required_passed and evidence_ok)
-        assessment_met = bool(eligible and rubric_ok)
+        assessment_met = bool(eligible and (rubric_ok or not rubric_gates))
         # Blended final score (objective composite + model rubric), weights from the blueprint policy.
         weights = policy.get("weights") or {"objective": 0.4, "rubric": 0.6}
         w_obj = float(weights.get("objective", 0.0))
@@ -264,11 +268,12 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
             parts += w_rub * float(rubric_agg); wsum += w_rub
         final_score = round(parts / wsum, 2) if wsum else None
         qualified = False   # a single PARALLAX assessment is never a pathway qualification
+        scoring_mode = policy.get("scoring_mode") or (model_scoring or {}).get("scoring_mode", "model_primary")
         policy_detail.update({"rubric_threshold": threshold, "rubric_aggregate": rubric_agg,
+                              "rubric_gates": rubric_gates, "rubric_advisory": not rubric_gates,
                               "objective_score": objective_score, "eligible": eligible,
                               "final_score": final_score, "weights": {"objective": w_obj, "rubric": w_rub},
-                              "scoring_mode": (model_scoring or {}).get("scoring_mode", "model_primary"),
-                              "assessment_only": True})
+                              "scoring_mode": scoring_mode, "assessment_only": True})
         reason = "assessment_met" if assessment_met else (
             "objective_gate_unmet" if not eligible else "below_rubric_threshold")
         return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown,
