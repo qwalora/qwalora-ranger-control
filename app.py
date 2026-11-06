@@ -1,3 +1,15 @@
+    # PARALLAX one-click submission gateway (/submit). Inert unless RANGER_SUBMISSION
+    # is enabled AND the platform GitHub org token is configured; candidate routes also
+    # require an active PARALLAX membership, and are refused in a production-marked env.
+    # Server holds every token (GitHub org, optional HF, signing key); the candidate
+    # holds none, so a submission artifact is immutable and independently verifiable.
+    try:
+        import submission_gateway
+        submission_gateway.register(app, Candidate, db, {"program_active": _program_active})
+        app.logger.info("submission gateway registered at /submit")
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("submission gateway not registered: %s", e)
+
 """Qwalora Ranger - control plane.
 
 Minimal, honest launch surface:
