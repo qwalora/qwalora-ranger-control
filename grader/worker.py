@@ -38,7 +38,7 @@ from . import GRADER_VERSION
 
 PORTAL = os.environ.get("RANGER_PORTAL_INTERNAL_URL", "").rstrip("/")
 TOKEN = os.environ.get("RANGER_GRADER_TOKEN", "")
-POLL_L = float(os.environ.get("GRADER_POLL_INTERVAL_S", "10"))
+POLL_S = float(os.environ.get("GRADER_POLL_INTERVAL_S", "10"))
 HTTP_TIMEOUT = int(os.environ.get("GRADER_HTTP_TIMEOUT", "60"))
 REPETITIONS = int(os.environ.get("GRADER_REPETITIONS", "1"))
 _UA = "qwalora-ranger-grader"
