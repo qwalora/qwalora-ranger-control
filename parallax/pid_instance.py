@@ -55,9 +55,13 @@ def select(inst_seed: int, coh_seed: Optional[int], workload_id: str
            ) -> Tuple[List[Any], List[Any], int, str]:
     """Derive (tasks, variants, repetitions, protocol_version) from the integer seeds. Pure; keyless;
     deterministic. Grader-side."""
+    from . import pid_content as PC
     advanced = str(workload_id).endswith("advanced")
-    variants = list(P.ADVANCED_ATTACK_VARIANTS if advanced else P.ATTACK_VARIANTS)
-    tasks = list(P.LEGIT_TASKS)
+    # The board uses the comprehensive PX-D1 suite (broader + harder) for both tiers; advanced simply
+    # runs more repetitions. Per-cohort subsetting (below) now activates because these pools exceed the
+    # floors, so two cohorts get different subsets of the approved pool.
+    variants = PC.attack_variants()
+    tasks = PC.legit_tasks()
 
     # per-cohort subset of the approved pool, active only once the pool is large enough to keep the
     # measurement comparable (floors above). Until then every cohort sees the full pool.
@@ -73,7 +77,7 @@ def select(inst_seed: int, coh_seed: Optional[int], workload_id: str
     r.shuffle(tasks)
     r.shuffle(variants)
 
-    # repetitions grow the ASR/TCR denominators for statistical stability (more trials, less luck)
-    reps = 3 if advanced else 2
-    pv = P.ADVANCED_PROTOCOL_VERSION if advanced else P.PROTOCOL_VERSION
+    # the comprehensive suite already provides large denominators; advanced adds repetitions
+    reps = 2 if advanced else 1
+    pv = "pid-content-advanced-v1" if advanced else "pid-content-v1"
     return tasks, variants, reps, pv

@@ -23,6 +23,7 @@ import siem.evaluator as ev
 from siem.evaluator import EvaluatorScope
 
 from . import contracts, pid_blueprint as BP
+from .research import defense as D
 from .pid_evaluator import make_truth_handle, KIND as PID_CHECK  # importing registers the evaluator
 
 PID_INDEX = "parallax-pxd1"
@@ -71,6 +72,7 @@ def _feedback(decision: Dict[str, Any], result: Dict[str, Any],
 def run_assessment(*, measurement: Dict[str, Any], defense: Optional[Dict[str, Any]],
                    rubric: Dict[str, Any], cohort: str, candidate_key: str, attempt: int = 1,
                    approval: Dict[str, Any], authorized_admins,
+                   code_sha: Optional[str] = None,
                    blueprint_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Grade one PX-D1 submission from a server-side measurement + model-judge rubric. `measurement` is
     {metrics, defense_hash, ...} from the grader; `rubric` is {rubric_scores|None, feedback, provenance,
@@ -86,7 +88,9 @@ def run_assessment(*, measurement: Dict[str, Any], defense: Optional[Dict[str, A
     scope = EvaluatorScope(allowed_index=PID_INDEX,
                            truth_handle=make_truth_handle(measurement, objective_pass=objective_pass,
                                                           asr_ceiling=asr_ceiling, min_tcr=min_tcr))
-    result = ev.get_evaluator(PID_CHECK).verify({"defense": defense}, scope, reader=None)
+    eval_submission = {"defense": defense, "code": bool(code_sha),
+                       "defense_hash": code_sha or D.defense_hash(defense)}
+    result = ev.get_evaluator(PID_CHECK).verify(eval_submission, scope, reader=None)
 
     critical_findings = ([{"id": BP.CRITICAL_BREACH, "present": True, "remediated": False}]
                          if result.get("critical") else [])

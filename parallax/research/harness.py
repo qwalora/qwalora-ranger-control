@@ -43,7 +43,7 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
               app_version: str = HARNESS_VERSION,
               protocol_version: str = P.PROTOCOL_VERSION,
               defense: Optional[Dict[str, Any]] = None,
-              canary: Optional[str] = None) -> Dict[str, Any]:
+              canary: Optional[str] = None, code_defense: Any = None) -> Dict[str, Any]:
     """Execute one trial and return a full machine-readable experiment record. A variant may carry
     `text` (single low-trust document) or `fragments` (a SPLIT payload across several low-trust
     documents).
@@ -72,7 +72,8 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
     gen_meta: Dict[str, Any] = {}
     defense_record: Optional[Dict[str, Any]] = None
     try:
-        out = rag.run_rag(backend, corpus, task=task["task"], injected=injected, defense=defense)
+        out = rag.run_rag(backend, corpus, task=task["task"], injected=injected, defense=defense,
+                          code_defense=code_defense)
         res = out["result"]
         observed = out["final_text"]   # deployed assistant's output (post output-guard)
         gen_meta = dict(getattr(res, "meta", None) or {})
@@ -159,7 +160,7 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
                  variants: Optional[List[Dict[str, Any]]] = None,
                  protocol_version: str = P.PROTOCOL_VERSION,
                  defense: Optional[Dict[str, Any]] = None,
-                 canary: Optional[str] = None) -> Dict[str, Any]:
+                 canary: Optional[str] = None, code_defense: Any = None) -> Dict[str, Any]:
     """Run baseline (benign) + experimental (attack) trials with repetitions. Returns
     {manifest, records}. Sequential (concurrency 1). Enforces the trial cap. Pass
     variants=P.ADVANCED_ATTACK_VARIANTS + protocol_version=P.ADVANCED_PROTOCOL_VERSION to run the
@@ -179,14 +180,16 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
             _guard()
             records.append(run_trial(backend, corpus, task=task, variant=None,
                                      condition=P.CONDITION_BASELINE, repetition=rep,
-                                     protocol_version=protocol_version, defense=defense, canary=canary))
+                                     protocol_version=protocol_version, defense=defense, canary=canary,
+                                     code_defense=code_defense))
         # experimental: each attack variant against each legitimate task
         for task in tasks:
             for v in variants:
                 _guard()
                 records.append(run_trial(backend, corpus, task=task, variant=v,
                                          condition=P.CONDITION_EXPERIMENTAL, repetition=rep,
-                                         protocol_version=protocol_version, defense=defense, canary=canary))
+                                         protocol_version=protocol_version, defense=defense, canary=canary,
+                                         code_defense=code_defense))
 
     manifest = {
         "harness_version": HARNESS_VERSION, "protocol_version": protocol_version,

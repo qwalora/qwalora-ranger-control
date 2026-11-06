@@ -88,6 +88,82 @@ def read_submission(snapshot_bytes: bytes) -> Dict[str, Any]:
     return out
 
 
+CODE_CHECKLIST = [
+    {"id": "defense_code", "required": True, "label": "Defense code (defense.py)",
+     "describes": "a sandboxed pure-function defense: SYSTEM / sanitize(doc) / screen(answer)"},
+    {"id": "writeup", "required": True, "label": "Written analysis (writeup.md)",
+     "describes": "threat model, approach, and tradeoffs"},
+    {"id": "addresses_attacks", "required": True, "label": "Declared attack families addressed",
+     "describes": "the injection families your defense is designed to resist"},
+]
+CODE_REQUIRED_IDS = [c["id"] for c in CODE_CHECKLIST if c["required"]]
+DEFAULT_CODE_FILE = "defense.py"
+
+
+def code_checklist() -> List[Dict[str, Any]]:
+    return [dict(c) for c in CODE_CHECKLIST]
+
+
+def read_file(snapshot_bytes: bytes, path: str) -> Optional[str]:
+    """Read one text file from the repo tarball (strip the top-level dir). Never executes anything."""
+    try:
+        tf = tarfile.open(fileobj=io.BytesIO(snapshot_bytes), mode="r:*")
+    except Exception:  # noqa: BLE001
+        return None
+    want = path.lstrip("/")
+    with tf:
+        for m in tf.getmembers():
+            if not m.isfile():
+                continue
+            rel = m.name.split("/", 1)[1] if "/" in m.name else m.name
+            if rel == want or _basename(m.name) == _basename(want):
+                if m.size > MAX_WRITEUP_BYTES * 2:
+                    return None
+                try:
+                    return tf.extractfile(m).read().decode("utf-8", errors="replace")
+                except Exception:  # noqa: BLE001
+                    return None
+    return None
+
+
+def validate_code(snapshot_bytes: bytes, selected: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Automatic submit-time validation for PX-D2 (code defense). Static-checks the candidate code in
+    the sandbox allowlist BEFORE anything runs; fail closed with the reasons."""
+    import hashlib
+    from . import pid_sandbox as SB
+    sub = read_submission(snapshot_bytes)
+    spec = sub["spec"]
+    norm = normalize(spec)
+    writeup = sub["writeup"] or ""
+    code_path = (spec or {}).get("code_path") if isinstance(spec, dict) else None
+    code = read_file(snapshot_bytes, code_path or DEFAULT_CODE_FILE) or ""
+    selected = selected if selected is not None else list(CODE_REQUIRED_IDS)
+    selected = [s for s in selected if s in CODE_REQUIRED_IDS]
+    unmet: List[Dict[str, str]] = []
+    for rid in CODE_REQUIRED_IDS:
+        if rid not in selected:
+            unmet.append({"id": rid, "reason": "not selected on the submission checklist"})
+    if not code.strip():
+        unmet.append({"id": "defense_code", "reason": "%s is missing or empty" % DEFAULT_CODE_FILE})
+    else:
+        errs = SB.static_check(code)
+        if errs:
+            unmet.append({"id": "defense_code", "reason": "unsafe/invalid code: %s" % "; ".join(errs[:4])})
+    if len(writeup.strip()) < MIN_WRITEUP_CHARS:
+        unmet.append({"id": "writeup", "reason": "writeup must be at least %d characters" % MIN_WRITEUP_CHARS})
+    if not norm["addresses"]:
+        unmet.append({"id": "addresses_attacks", "reason": "declare at least one attack family addressed"})
+    seen, dd = set(), []
+    for u in unmet:
+        k = (u["id"], u["reason"])
+        if k not in seen:
+            seen.add(k); dd.append(u)
+    code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest() if code else None
+    return {"ok": not dd, "unmet": dd, "code_sha256": code_sha, "addresses": norm["addresses"],
+            "checklist_selected": selected, "writeup_chars": len(writeup.strip()),
+            "code_present": bool(code.strip())}
+
+
 def normalize(spec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     spec = spec if isinstance(spec, dict) else {}
     addresses = [a for a in (spec.get("addresses") or []) if isinstance(a, str) and a][:16]

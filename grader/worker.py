@@ -133,7 +133,15 @@ def _score_from_metrics(metrics):
 
 
 def _is_pid(workload_id):
-    return str(workload_id or "").startswith("parallax-pi")
+    wl = str(workload_id or "")
+    return wl.startswith("parallax-pi") or wl.startswith("parallax-code")
+
+
+def _is_code_board(workload_id, spec=None):
+    # Board selection is authoritative from the portal-set workload_id ONLY. The candidate's own
+    # submission spec is never trusted to pick the code-execution path (`spec` kept for signature
+    # compatibility, intentionally unused).
+    return str(workload_id or "").startswith("parallax-code")
 
 
 def _snapshot_bytes(job):
@@ -170,40 +178,74 @@ def _grade_pid(job, workload_id):
     its behavior against the injection corpus (ASR/TCR/FPR), and run the model judge over the writeup +
     the observed transcript. Posts {measurement, defense, rubric}; the PORTAL runs the deterministic
     objective gate + the AUTO decision and signs. Executes no candidate code (declarative only)."""
-    from parallax.research import corpus as C, model_backend as mb
-    from parallax import pid_submission as PS, pid_evaluator as PE, pid_judge as PJ
+    from parallax.research import model_backend as mb
+    from parallax import pid_submission as PS, pid_evaluator as PE, pid_judge as PJ, pid_content as PC
 
     raw = _snapshot_bytes(job)                          # digest-verified
     sub = PS.read_submission(raw)
-    norm = PS.normalize(sub.get("spec"))
+    spec = sub.get("spec")
+    norm = PS.normalize(spec)
     defense, addresses = norm["defense"], norm["addresses"]
     writeup = sub.get("writeup") or ""
     env = _model_env(job)
     backend = mb.from_config(env)
-    corpus = C.default_corpus()
+    corpus = PC.pid_corpus()                            # the comprehensive PX-D1 benign corpus
+    is_code = _is_code_board(workload_id, spec)
+    code_defense = None
+    code_sha = None
+    if is_code:
+        from parallax import pid_sandbox as SB
+        code = PS.read_file(raw, (spec or {}).get("code_path") or "defense.py") or ""
+        errs = SB.static_check(code)
+        if errs:
+            # fail closed: unsafe/invalid code never runs and never silently passes
+            return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-D2",
+                    "error": "unsafe_code: " + "; ".join(errs[:4]), "grader_version": GRADER_VERSION}
+        code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        try:
+            code_defense = SB.build_code_defense(code)
+        except SB.SandboxError as e:
+            return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-D2",
+                    "error": "sandbox_error: " + str(e)[:200], "grader_version": GRADER_VERSION}
     # Per-instance campaign arrangement (cohort + candidate differentiation) from the portal-computed
     # integer seeds; falls back to the default family when seeds are absent.
     if job.get("instance_seed") is not None:
-        from parallax import pid_instance as PI
+        from parallax import pid_instance as PI, pid_adaptive as PA
         tasks, variants, reps, pv = PI.select(job["instance_seed"], job.get("cohort_seed"), workload_id)
+        # Adaptive attacker: deterministic evasion variants tailored to THIS candidate's declared guards
+        # (pure function of defense + seed), so a marker-stripping defense is probed around its guards.
+        variants = list(variants) + PA.adaptive_variants(defense, job["instance_seed"], max_variants=6)
     else:
         tasks = None
         variants, reps, pv = _pid_campaign(workload_id)
-    measurement = PE.measure_defense(backend, corpus, defense, variants=variants, tasks=tasks,
-                                     repetitions=reps, protocol_version=pv,
-                                     canary=job.get("instance_canary"))
+    try:
+        measurement = PE.measure_defense(
+            backend, corpus, (None if is_code else defense), variants=variants, tasks=tasks,
+            repetitions=reps, protocol_version=pv, canary=job.get("instance_canary"),
+            code_defense=code_defense, defense_hash=(code_sha if is_code else None))
+    except Exception as e:  # noqa: BLE001 - a sandbox failure during measurement fails closed
+        if is_code:
+            return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-D2",
+                    "error": "sandbox_runtime: " + str(e)[:200], "grader_version": GRADER_VERSION}
+        raise
+    finally:
+        if code_defense is not None:
+            code_defense.close()
     transcript = PJ.summarize_transcript(measurement["records"], measurement["metrics"])
-    rubric = PJ.judge(defense, writeup, transcript, addresses, env=env)
-    _log("pid_measured", sub=job.get("submission_id"),
+    rubric = PJ.judge((None if is_code else defense), writeup, transcript, addresses, env=env)
+    board = "PX-D2" if is_code else "PX-D1"
+    _log("pid_measured", sub=job.get("submission_id"), board=board,
          findings=measurement["metrics"].get("findings_available"),
          asr=(measurement["metrics"].get("real_backend") or {}).get("ASR"),
          rubric=bool(rubric.get("available")))
-    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-D1",
-            "workload_id": workload_id,
-            "measurement": {"metrics": measurement["metrics"],
-                            "defense_hash": measurement["defense_hash"]},
-            "defense": defense, "addresses": addresses, "rubric": rubric,
-            "grader_version": GRADER_VERSION}
+    out = {"submission_id": job["submission_id"], "status": "graded", "board": board,
+           "workload_id": workload_id,
+           "measurement": {"metrics": measurement["metrics"], "defense_hash": measurement["defense_hash"]},
+           "defense": (None if is_code else defense), "addresses": addresses, "rubric": rubric,
+           "grader_version": GRADER_VERSION}
+    if is_code:
+        out["code_sha256"] = code_sha
+    return out
 
 
 def _grade(job):

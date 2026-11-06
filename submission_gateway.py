@@ -266,10 +266,16 @@ def register(app, candidate_model, db, helpers=None):
             "RANGER_SUBMISSION_WORKLOADS", default).split(",") if w.strip()}
         return req if (req in allow) else default
 
+    def _is_code_board(workload_id):
+        # The PX-D2 board family: the candidate submits sandboxed defense CODE (defense.py), not a
+        # declarative config. Static-checked at submit time, executed only in the grader sandbox.
+        return str(workload_id or "").startswith("parallax-code")
+
     def _is_pid_board(workload_id):
-        # The PX-D1 prompt-injection-defense board family. Submissions for this board are
-        # content-gated at submit time (a real declarative defense + writeup are required).
-        return str(workload_id or "").startswith("parallax-pi")
+        # The PARALLAX prompt-injection-defense board family (PX-D1 declarative + PX-D2 code).
+        # Submissions are content-gated at submit time (a real defense + a writeup are required).
+        wl = str(workload_id or "")
+        return wl.startswith("parallax-pi") or wl.startswith("parallax-code")
 
     # ---- Candidate: provision workspace -------------------------------------
     @app.post("/submit/start")
@@ -325,13 +331,23 @@ def register(app, candidate_model, db, helpers=None):
         if _is_pid_board(workload_id):
             import parallax.pid_submission as PS
             selected = (request.get_json(silent=True) or {}).get("checklist")
-            chk = PS.validate(snapshot, selected)
+            is_code = _is_code_board(workload_id)
+            if is_code:
+                # PX-D2: static-check the candidate CODE in the sandbox allowlist before anything runs.
+                chk = PS.validate_code(snapshot, selected)
+                clist = PS.code_checklist()
+            else:
+                chk = PS.validate(snapshot, selected)
+                clist = PS.checklist()
             if not chk["ok"]:
                 _log("submit_criteria_unmet", cand=c.id, repo=full,
                      unmet=",".join(u["id"] for u in chk["unmet"]))
                 return jsonify(error="submission does not meet the board criteria",
-                               unmet=chk["unmet"], checklist=PS.checklist()), 422
-            pid_meta = {"defense_hash": chk["defense_hash"], "addresses": chk["addresses"],
+                               unmet=chk["unmet"], checklist=clist), 422
+            # For PX-D2 the binding hash is the code hash; for PX-D1 it is the declarative defense hash.
+            pid_meta = {"defense_hash": chk.get("defense_hash") or chk.get("code_sha256"),
+                        "code_sha256": chk.get("code_sha256"),
+                        "addresses": chk["addresses"],
                         "checklist": chk["checklist_selected"], "writeup_chars": chk["writeup_chars"]}
 
         tag = f"submit-a{attempt}-{sha[:12]}"
@@ -363,6 +379,7 @@ def register(app, candidate_model, db, helpers=None):
             # PX-D1 criteria recorded in the SIGNED manifest, so the candidate's checklist selection and
             # the exact defense that was validated are tamper-evident and bound to this submission.
             "defense_hash": (pid_meta or {}).get("defense_hash"),
+            "code_sha256": (pid_meta or {}).get("code_sha256"),
             "addresses": (pid_meta or {}).get("addresses"),
             "checklist": (pid_meta or {}).get("checklist"),
             "writeup_chars": (pid_meta or {}).get("writeup_chars"),
@@ -422,7 +439,20 @@ def register(app, candidate_model, db, helpers=None):
         c = _candidate_or_401()
         wl = os.environ.get("RANGER_SUBMISSION_WORKLOAD", "parallax-pi-basic")
         out = {"workload_id": wl, "cohort": _current_cohort(c)}
-        if _is_pid_board(wl):
+        if _is_code_board(wl):
+            import parallax.pid_submission as PS
+            out.update({
+                "board": "PX-D2", "title": "Prompt-Injection Defense (sandboxed code)",
+                "checklist": PS.code_checklist(),
+                "submission_file": PS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": PS.MIN_WRITEUP_CHARS,
+                "instructions": ("Harden the Aurora Notes RAG assistant with a sandboxed defense.py "
+                                 "exposing SYSTEM (str), sanitize(doc) and screen(answer) as pure "
+                                 "functions. Commit defense.py and a writeup.md, then select the "
+                                 "checklist items you are submitting. Your code runs only in an "
+                                 "isolated sandbox (no imports, no I/O, no attribute access)."),
+            })
+        elif _is_pid_board(wl):
             import parallax.pid_submission as PS
             out.update({
                 "board": "PX-D1", "title": "Prompt-Injection Defense of a RAG Assistant",
@@ -528,14 +558,16 @@ def register(app, candidate_model, db, helpers=None):
         # PX-D1 board: governance-bound, model-scored assessment. The grader posted the server-side
         # measurement + the model-judge rubric; the portal (the key-holder) runs the deterministic
         # objective gate + the AUTO decision and signs. Automatic - no human reviewer required.
-        if body.get("board") == "PX-D1" or _is_pid_board(row.workload_id):
+        if body.get("board") in ("PX-D1", "PX-D2") or _is_pid_board(row.workload_id):
             import parallax.pid_assessment as PA, parallax.pid_blueprint as PBP, parallax.registry as PR
+            is_code = _is_code_board(row.workload_id) or body.get("board") == "PX-D2"
+            board = "PX-D2" if is_code else "PX-D1"
             cand = candidate_model.query.get(row.candidate_id)
             candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
             approval = PR.active_spec_approval(db, PBP.PID_SPEC, PBP.blueprint())
             if not approval:
                 row.status = "failed"
-                row.grade_detail = json.dumps({"error": "PX-D1 scoring spec is not approved here"})
+                row.grade_detail = json.dumps({"error": "%s scoring spec is not approved here" % board})
                 row.graded_at = _utcnow(); row.snapshot_b64 = None
                 db.session.commit()
                 _log("grade_unapproved", sub=row.id)
@@ -546,12 +578,15 @@ def register(app, candidate_model, db, helpers=None):
             admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
             admins.discard(None)
             measurement = body.get("measurement") or {}
-            defense = body.get("defense")
+            # PX-D2 binds the signed result to the executed code's hash; declarative defense is absent.
+            defense = None if is_code else body.get("defense")
+            code_sha = body.get("code_sha256") if is_code else None
             rubric = body.get("rubric") or {}
             try:
                 result = PA.run_assessment(measurement=measurement, defense=defense, rubric=rubric,
                                            cohort=row.cohort, candidate_key=candidate_key,
-                                           attempt=row.attempt, approval=approval, authorized_admins=admins)
+                                           attempt=row.attempt, approval=approval, authorized_admins=admins,
+                                           code_sha=code_sha)
             except Exception as e:  # noqa: BLE001 - a grading failure is recorded, never faked
                 row.status = "failed"
                 row.grade_detail = json.dumps({"error": "pid_grade_error: %s" % str(e)[:300]})
@@ -564,10 +599,11 @@ def register(app, candidate_model, db, helpers=None):
             metrics = measurement.get("metrics") or {}
             decision_rec = result["signed"]["record"]
             graded = {
-                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-D1",
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": board,
                 "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
                 "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
                 "decision_record_hash": decision_rec.get("record_hash"),
+                "code_sha256": code_sha,
                 "assessment_passed": result["assessment_passed"], "score": final_score,
                 "ai_involved": True, "findings_available": metrics.get("findings_available"),
                 "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
@@ -576,9 +612,10 @@ def register(app, candidate_model, db, helpers=None):
             row.status = "graded"
             row.score = float(final_score) if final_score is not None else None
             row.metrics = json.dumps(metrics, sort_keys=True)
-            row.grade_detail = json.dumps({"board": "PX-D1", "candidate_feedback": fb,
+            row.grade_detail = json.dumps({"board": board, "candidate_feedback": fb,
                                            "assessment_passed": result["assessment_passed"],
                                            "ai_involved": True, "judge": rubric.get("provenance"),
+                                           "code_sha256": code_sha,
                                            "grader_version": body.get("grader_version")}, sort_keys=True)
             row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
                                            "decision": result["signed"]}, sort_keys=True)

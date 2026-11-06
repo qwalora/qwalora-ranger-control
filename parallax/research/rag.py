@@ -38,7 +38,7 @@ def inject_documents(fragments: List[str], attack_id: str, trust: str = "low") -
 
 
 def run_rag(backend: Backend, corpus: Corpus, *, task: str, k: int = 3,
-            injected=None, max_tokens: int = MAX_TOKENS, defense=None) -> Dict[str, Any]:
+            injected=None, max_tokens: int = MAX_TOKENS, defense=None, code_defense=None) -> Dict[str, Any]:
     """Execute one RAG query. `injected` may be a single attacker document OR a LIST of them (a
     split/multi-document payload); each is added to the retrievable set at LOW trust (the attacker's
     only control surface). Retrieval runs over the augmented corpus.
@@ -51,9 +51,13 @@ def run_rag(backend: Backend, corpus: Corpus, *, task: str, k: int = 3,
     candidate's defense. Returns the raw generation result, the exact retrieved doc ids (provenance),
     and a defense transcript."""
     inj_list = [] if injected is None else (injected if isinstance(injected, list) else [injected])
-    # Input guards act on the attacker-controlled low-trust documents only (pure data transforms).
+    # Input defense acts on the attacker-controlled low-trust documents only. A PX-D2 CODE defense
+    # (sandboxed candidate code) takes precedence over the declarative guards when present.
     in_actions: List[Dict[str, Any]] = []
-    if inj_list and D.is_active(defense):
+    if inj_list and code_defense is not None:
+        inj_list = code_defense.sanitize_docs(inj_list)
+        in_actions = [{"guard": "code_defense.sanitize"}]
+    elif inj_list and D.is_active(defense):
         inj_list, in_actions = D.apply_input_guards(defense, inj_list)
     use_corpus = corpus.with_documents(inj_list) if inj_list else corpus
     retrieved = use_corpus.retrieve(task, k=max(k, len(inj_list) + 1))
@@ -65,24 +69,34 @@ def run_rag(backend: Backend, corpus: Corpus, *, task: str, k: int = 3,
         retrieved = (missing + retrieved)
         forced = True
     retrieved = retrieved[:max(MAX_DOCS, len(inj_list) + 1)]
-    system, developer = D.compose_instructions(defense, SYSTEM_INSTRUCTIONS, DEVELOPER_INSTRUCTIONS)
+    if code_defense is not None:
+        system = code_defense.system_prompt(SYSTEM_INSTRUCTIONS); developer = DEVELOPER_INSTRUCTIONS
+    else:
+        system, developer = D.compose_instructions(defense, SYSTEM_INSTRUCTIONS, DEVELOPER_INSTRUCTIONS)
     req = GenRequest(system=system, developer=developer, task=task,
                      context=retrieved, max_tokens=max_tokens)
     result: GenResult = backend.generate(req)
-    # Output guards act on the model's own output (post-generation declarative check).
+    # Output defense acts on the model's own output (post-generation). Code defense takes precedence.
     final_text = result.text
     out_actions: List[Dict[str, Any]] = []
     out_blocked = False
-    if D.is_active(defense):
+    if code_defense is not None:
+        final_text = code_defense.screen_output(result.text)
+        out_actions = [{"guard": "code_defense.screen"}]
+        out_blocked = (final_text != result.text)
+    elif D.is_active(defense):
         final_text, out_actions, out_blocked = D.apply_output_guards(defense, result.text)
     nd = D.normalize_defense(defense)
+    code_active = code_defense is not None
     return {"result": result, "final_text": final_text,
             "retrieved_doc_ids": [d["doc_id"] for d in retrieved],
             "injected_doc_id": (inj_list[0]["doc_id"] if len(inj_list) == 1 else None),
             "injected_doc_ids": [d["doc_id"] for d in inj_list],
             "injected_forced_into_context": forced,
-            "defense": {"active": D.is_active(defense), "hash": D.defense_hash(defense),
-                        "system_overridden": bool(nd["system_prompt"]),
+            "defense": {"active": bool(code_active or D.is_active(defense)),
+                        "kind": "code" if code_active else "declarative",
+                        "hash": D.defense_hash(defense),
+                        "system_overridden": bool(code_active or nd["system_prompt"]),
                         "developer_overridden": bool(nd["developer_prompt"]),
                         "input_actions": in_actions, "output_actions": out_actions,
                         "output_blocked": out_blocked}}

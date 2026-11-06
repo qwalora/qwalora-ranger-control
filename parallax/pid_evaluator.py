@@ -48,11 +48,13 @@ def measure_defense(backend, corpus, defense: Optional[Dict[str, Any]], *,
                     tasks: Optional[List[Dict[str, Any]]] = None,
                     repetitions: int = 1,
                     protocol_version: Optional[str] = None,
-                    canary: Optional[str] = None) -> Dict[str, Any]:
+                    canary: Optional[str] = None,
+                    code_defense: Any = None,
+                    defense_hash: Optional[str] = None) -> Dict[str, Any]:
     """Run the injection campaign with the candidate defense deployed, against the PLATFORM backend.
-    `canary` is the per-instance SECRET success token (defeats literal-token gaming). Returns
-    {metrics, records, manifest, defense_hash}. The records are the transcript the model-judge reads;
-    metrics are what the objective evaluator scores."""
+    Either a declarative `defense` (PX-D1) or a sandboxed `code_defense` (PX-D2) is applied. `canary` is
+    the per-instance SECRET success token. `defense_hash` overrides the binding hash (PX-D2 uses the code
+    hash). Returns {metrics, records, manifest, defense_hash}."""
     kw: Dict[str, Any] = {"repetitions": repetitions, "defense": defense}
     if variants is not None:
         kw["variants"] = variants
@@ -62,10 +64,12 @@ def measure_defense(backend, corpus, defense: Optional[Dict[str, Any]], *,
         kw["protocol_version"] = protocol_version
     if canary is not None:
         kw["canary"] = canary
+    if code_defense is not None:
+        kw["code_defense"] = code_defense
     camp = harness.run_campaign(backend, corpus, **kw)
     metrics = harness.compute_metrics(camp["records"])
     return {"metrics": metrics, "records": camp["records"], "manifest": camp["manifest"],
-            "defense_hash": D.defense_hash(defense)}
+            "defense_hash": defense_hash or D.defense_hash(defense)}
 
 
 def make_truth_handle(measurement: Dict[str, Any], *, objective_pass: float,
@@ -90,14 +94,17 @@ class PIDDefenseEvaluator(Evaluator):
         if bad:
             return ev.signed_check(self.kind, False, {"error": "candidate_supplied_truth", "keys": bad})
         defense = (submission or {}).get("defense")
-        errs = D.validate_defense(defense)
-        if errs:
-            return ev.signed_check(self.kind, False,
-                                   {"outcome": "invalid_defense", "errors": errs[:20]})
+        is_code = bool((submission or {}).get("code"))
+        if not is_code:
+            errs = D.validate_defense(defense)
+            if errs:
+                return ev.signed_check(self.kind, False,
+                                       {"outcome": "invalid_defense", "errors": errs[:20]})
         truth = scope.truth_handle.resolve()            # server-side only
         measurement = truth["measurement"]
-        # bind the signed result to the exact defense that was measured
-        if D.defense_hash(defense) != measurement.get("defense_hash"):
+        # bind the signed result to the exact defense that was measured (code uses the code hash)
+        expected_hash = (submission or {}).get("defense_hash") or D.defense_hash(defense)
+        if expected_hash != measurement.get("defense_hash"):
             return ev.signed_check(self.kind, False,
                                    {"outcome": "defense_measurement_mismatch"})
         metrics = measurement.get("metrics") or {}
