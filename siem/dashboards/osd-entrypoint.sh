@@ -8,6 +8,17 @@
 set -euo pipefail
 
 CFG=/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+
+# Per-environment managed CA: when RANGER_CA_B64 is provided, write it to a NEW
+# runtime file (the image runs as uid 1000, which can create files in the config
+# dir but cannot overwrite the root-owned baked ca.pem), and point Dashboards at
+# it. When unset (prod), fall back to the baked ca.pem so prod is unchanged.
+CA_PATH=/usr/share/opensearch-dashboards/config/ranger-ca.pem
+if [ -n "${RANGER_CA_B64:-}" ]; then
+  CA_PATH=/usr/share/opensearch-dashboards/config/ranger-ca-runtime.pem
+  echo "$RANGER_CA_B64" | base64 -d > "$CA_PATH"
+fi
+
 cat > "$CFG" <<EOF
 server.host: "0.0.0.0"
 server.port: 5601
@@ -16,7 +27,7 @@ server.basePath: "/soc"
 server.rewriteBasePath: true
 opensearch.hosts: ["https://opensearch.railway.internal:9200"]
 opensearch.ssl.verificationMode: full
-opensearch.ssl.certificateAuthorities: ["/usr/share/opensearch-dashboards/config/ranger-ca.pem"]
+opensearch.ssl.certificateAuthorities: ["${CA_PATH}"]
 opensearch.username: "kibanaserver"
 opensearch.password: "${KIBANASERVER_PW}"
 opensearch.requestHeadersAllowlist: ["authorization", "securitytenant"]
