@@ -1,7 +1,7 @@
 ---
 title: Qwalora Ranger Candidate Handbook
 subtitle: Unified portal platform — STRATA and PARALLAX
-doc_version: 1.0 (draft, nonproduction)
+doc_version: 1.1 (draft, nonproduction) — adds PARALLAX board-based auto-graded assessments (PX-D1 / PX-D2)
 applies_to_programs: [strata, parallax]
 status: candidate-facing documentation for the DEPLOYED portal
 authority_note: >
@@ -60,20 +60,41 @@ objective score **and** an approved written report (see §10, §12).
 
 ## 3. RANGER PARALLAX program
 
-PARALLAX is a separate advanced track for AI-security practitioners. It is currently
-**assessment-only and in development**: **no pathway qualification or credential issuance is
-authorized**, and every assessment is recorded as not-qualifying by construction. Candidate activity
-is a bounded, model-backed research console (for example a preregistered prompt-injection study
-against a configured model backend) producing signed research evidence. PARALLAX access requires an
-active PARALLAX membership and a signed governance approval, and runs only in authorized
-nonproduction environments.
+PARALLAX is a separate advanced track for AI-security practitioners. It remains **assessment-only**:
+**no pathway qualification or credential issuance is authorized** — every result is recorded with
+`pathway_qualified = false` by construction. PARALLAX access requires an active PARALLAX membership
+and a signed governance approval, and runs only in authorized nonproduction environments.
+
+PARALLAX now runs as **board-based defense assessments that are graded automatically and
+server-side**, alongside the preregistered research console (§9). Each board sets a real defensive
+task against a model-backed system and scores the **measured behavior** of your submission rather
+than a self-reported claim:
+
+- **PX-D1 — Prompt-Injection Defense (declarative).** Harden the "Aurora Notes" retrieval assistant
+  with a declarative defense (hardened system/developer instructions plus input/output guards) and a
+  written analysis.
+- **PX-D2 — Prompt-Injection Defense (sandboxed code).** Submit a small Python defense (`defense.py`
+  exposing any of `SYSTEM`, `sanitize(doc)`, `screen(answer)`) that the grader executes in an
+  isolated sandbox, plus a written analysis.
+
+You choose the board from the dashboard submission card, work in a platform-provisioned workspace
+(§4, §7), and submit from the portal (§8). Grading is deterministic, reproducible, and signed (§12):
+the platform deploys your defense around the model and measures how it behaves against a
+per-candidate attack corpus and an adaptive attacker, then returns a score and behavior-grounded
+feedback. No human reviewer is required to produce the score; a reviewer override remains available.
+Resubmission is allowed and re-scores your updated work (best attempt counts).
 
 ## 4. GitHub authentication and admissions
 
 - **Authentication is GitHub OAuth only.** GitHub is used to sign in and to assure identity
   (verified email, two-factor, a minimum account age at enrollment). The OAuth scope is limited to
-  reading your profile and email (`read:user user:email`). **GitHub is not used as a submission
-  repository** — you do not submit work as pull requests; you submit inside the portal (see §8).
+  reading your profile and email (`read:user user:email`).
+- **You never submit work as a pull request.** STRATA work is done and submitted entirely inside the
+  portal (see §8). For a **PARALLAX board**, the platform provisions a private GitHub **workspace**
+  repository for you and grants you push access to it (this is separate from the sign-in OAuth
+  scope); you commit your defense and writeup there, then submit by a portal action — never by
+  opening a pull request. The portal snapshots and signs the exact commit you submit (§8), so your
+  working repository is never the authoritative record.
 - **Admission is by administrator review.** Applying or signing in creates a candidate in a
   **pending** state with nothing provisioned. An administrator **approves** (your account becomes
   **active** and Board 1 opens) or **declines** (**rejected**). Approval unlocks a candidate
@@ -93,9 +114,12 @@ The left navigation is your Ranger shell. For an active STRATA candidate on Boar
 - **Program access** (`/account`) — your identity and per-program entitlement status.
 - **Handbook** — this document, published as the Ranger manual.
 
-A PARALLAX candidate sees the **Research console** (`/parallax/workspace`) instead of the STRATA
-items. A dual-program candidate gets a program switcher. Navigation never exposes the other
-program's protected surfaces.
+A PARALLAX candidate sees the **Research console** (`/parallax/workspace`), **Investigations**, and
+**Evidence & publications** instead of the STRATA lab items, and on the **Dashboard** (`/me`) a
+**board submission card**: a board selector (PX-D1 / PX-D2 when more than one is open), the selected
+board's brief and submission checklist, **Provision workspace** and **Submit for grading** controls,
+and the signed result (score, measured ASR/TCR/FPR, and feedback) once graded. A dual-program
+candidate gets a program switcher. Navigation never exposes the other program's protected surfaces.
 
 ## 6. Board and assessment assignments
 
@@ -116,7 +140,8 @@ or shows a launch control for an environment that is not genuinely available.
 | Board 2 (Tracker) | **Private OpenSearch SOC** with Dashboards, reached through the Ranger SOC gateway with your authorized identity. You do not install OpenSearch or receive cluster credentials. | Opened on assignment once the gateway and your index are provisioned | **Not available in nonproduction** until genuinely accessible; the dashboard labels it "Not available yet" and shows no launch |
 | Boards 3–4 | Portal-hosted analysis workspace (seeded dataset) | Portal | Board-gated by progression |
 | Boards 5–6 (Raider/Vanguard) | **Isolated GOAD range** over a per-candidate WireGuard tunnel | "Start lab" (range boards only), then "Download WireGuard" | Available only when the range broker is live |
-| PARALLAX | **Model-backed research workspace** (research console) | "Open the research console" | Authorized nonproduction only, with PARALLAX membership + signed approval |
+| PARALLAX boards (PX-D1 / PX-D2) | **Platform-provisioned GitHub workspace** — a private repo, one per board, seeded on creation with a starter kit (a README brief, the submission-file template or `defense.py` stub, and a `writeup.md` skeleton). Grading runs server-side against the model; you stand up no model endpoint or lab. | "Provision workspace", then "Submit for grading", on the dashboard submission card | Authorized nonproduction only, with PARALLAX membership + signed approval |
+| PARALLAX research console | **Model-backed research workspace** (preregistered study) | "Open the research console" | Authorized nonproduction only, with PARALLAX membership + signed approval |
 
 You should never have to guess whether to use OpenSearch, the portal SOC workspace, GitHub, or an
 external lab: the dashboard and mission brief state the platform, its availability, and the exact
@@ -124,13 +149,24 @@ launch control for your current board.
 
 ## 8. Evidence and submissions
 
-- **You submit inside the portal**, not through GitHub. Board-1 triage is submitted from the SOC
-  workspace; the Board-1 incident investigation, Board-2 cases, written reports, and PARALLAX runs
-  each have their own in-portal submission.
-- **Grading is answer-free and server-side.** The answer key is re-derived on the server from your
-  own dataset seed and is never sent to the browser.
+- **You submit inside the portal**, not through GitHub pull requests. Board-1 triage is submitted
+  from the SOC workspace; the Board-1 incident investigation, Board-2 cases, written reports, and
+  PARALLAX research runs each have their own in-portal submission.
+- **A PARALLAX board submission snapshots your provisioned workspace.** When you click Submit, the
+  portal reads your repository at its current commit, pins that commit to an immutable tag, computes
+  a content digest, and signs a submission manifest that binds the exact content graded (including,
+  for PX-D2, the SHA-256 of your `defense.py`). A later force-push cannot change what was graded.
+  Submit-time criteria are checked automatically (a valid defense/code, a writeup of at least the
+  minimum length, and your declared attack families); PX-D2 code is additionally static-checked
+  against the sandbox allowlist before anything runs, and unsafe code is rejected at submit.
+- **Grading is answer-free and server-side.** For STRATA the answer key is re-derived on the server
+  from your own dataset seed and never sent to the browser. For PARALLAX boards the authoritative
+  score is a reproducible measurement of your defense's behavior, computed server-side (§12); the
+  attack corpus and the success token are not disclosed to the candidate context.
 - **Evidence is Ed25519-signed.** Signed records are produced for Board-1 incident assessments,
-  Board-2 case evidence, and PARALLAX research/governance records, and are independently verifiable.
+  Board-2 case evidence, PARALLAX research/governance records, and PARALLAX **board grades** (the
+  signed decision plus a signed grade envelope bound to your submission), and are independently
+  verifiable at `/submit/verify/<id>`.
 
 ## 9. Draft saving and final submission
 
@@ -177,6 +213,10 @@ empty report is rejected server-side, and no new minimum length or scoring was i
 successful submission supersedes the draft so it does not resurface as unsubmitted work.
 
 ### PARALLAX research workspace
+
+This subsection covers the **research console** drafts, which are distinct from a **board
+submission** (§3, §8, §12): board work lives in your provisioned GitHub workspace and is submitted,
+snapshotted, and graded there, whereas the research console autosaves in-portal draft text only.
 
 The PARALLAX research console autosaves your in-progress work the same way, on the same shared
 server-side draft service, with the same program/board/protocol scoping and optimistic-concurrency
@@ -230,8 +270,21 @@ Reviewer actions are authorization-gated; candidates cannot review their own or 
 - **STRATA objective standard: 95 percent per board** (unchanged). Board clearance requires the
   objective at the standard and an approved report. Qualification requires clearing every board and
   passing every mandatory safety gate.
-- **PARALLAX** is **assessment-only**: no pathway qualification or credential issuance is
-  authorized.
+- **PARALLAX boards are graded automatically, server-side, and signed.** The platform deploys your
+  defense around the model and measures its behavior over a per-candidate attack corpus plus an
+  adaptive attacker that targets your submission, reporting three rates: **ASR** (attack-success
+  rate, lower is better), **TCR** (legitimate-task completion, higher is better), and **FPR**
+  (over-blocking of benign content, lower is better). The authoritative score is a composite,
+  `100 * TCR * (1 - ASR) * (1 - 0.5*FPR)`, with a **pass bar of composite ≥ 75**. A measured ASR at
+  or above the ceiling, or a TCR below the floor (so "refuse everything" cannot pass), is a critical
+  failure. The objective measurement is authoritative and reproducible; a model also writes
+  qualitative, behavior-grounded feedback that is advisory only. Scores are deterministic and
+  reproducible, and each attempt is independently signed. Every candidate's instance differs
+  (per-cohort and per-candidate), and the success token rotates per attempt, so a submission cannot
+  be transferred or gamed by hard-coding a token.
+- **PARALLAX remains assessment-only.** A board result is a signed assessment record and nothing
+  more: **no pathway qualification or credential issuance is authorized** (`pathway_qualified =
+  false`). Clearing a board does not grant a credential.
 - **PENDING POLICY REVIEW:** the legacy manual's specific 100-point rubric weights
   (Functional 30 / Security 25 / Detection 20 / Documentation 15 / Live defense 10) and the strict
   "no AI, ever" integrity clause describe the self-directed model; how they map to the portal's
