@@ -120,6 +120,8 @@ def _board_slug(workload_id) -> str:
         return "pxa1"
     if wl.startswith("parallax-devsecops"):
         return "pxs1"
+    if wl.startswith("parallax-detection"):
+        return "pxde1"
     if wl.startswith("parallax-pi"):
         return "pxd1"
     return ""
@@ -177,6 +179,52 @@ def _starter_files(workload_id, candidate, cohort):
     instead of discovered via a 422. Returns {path: text}."""
     handle = getattr(candidate, "handle", "candidate")
     slug = _board_slug(workload_id)
+    if slug == "pxde1":
+        readme = (
+            "# PARALLAX Board PX-DE1 - Detection Engineering (SOC)\n\n"
+            "Workspace for **%s** (cohort %s).\n\n"
+            "## The task\n"
+            "`detect.py` ships a NAIVE detector that flags nothing. Write detection rules that flag the "
+            "malicious events in a log stream while staying silent on benign look-alikes.\n\n"
+            "## What you submit\n"
+            "- `detect.py` - `detect(events) -> list[int]` returning the indices of attack events\n"
+            "- `writeup.md` - detection strategy, scenario coverage, and tradeoffs (min 400 chars)\n\n"
+            "## detect(events) contract\n"
+            "`events` is a list of dicts (parsed log lines), each with a `type` and type-specific fields "
+            "(`src_ip`, `user`, `dest_ip`, `bytes_out`, `cmdline`, `ts`). Return the list of indices that "
+            "are part of an attack, per this policy:\n"
+            "- brute force: 5+ `auth_fail` from the same `src_ip` -> flag each of those events\n"
+            "- account takeover: an `auth_success` from an `src_ip` that had 5+ prior auth_fail\n"
+            "- exfiltration: a `data_transfer` with `bytes_out` >= 1000000 to a `dest_ip` outside 10.0.0.0/8\n"
+            "- malicious process: a `process` whose `cmdline` matches encoded PowerShell (`-enc`), a piped "
+            "`| sh`, `base64 -d`, or `mimikatz`\n"
+            "Benign look-alikes must NOT be flagged: 4 failed logins from one IP, large INTERNAL "
+            "transfers, normal auth_success, ordinary processes.\n\n"
+            "## Sandbox rules (enforced at submit AND grade time, fail-closed)\n"
+            "Pure functions only: no imports (re/string/json/math/random are pre-provided), no "
+            "underscore/dunder attribute access, no eval/exec/open/getattr, no '__' string literals.\n\n"
+            "## How you're graded (deterministic, signed, reproducible - no model)\n"
+            "Your detector runs over a sealed, per-instance event stream. Measured: recall (attacks "
+            "caught) and specificity (benign not flagged). Composite = 100 * recall * specificity, pass "
+            "bar >= 75. Recall below the floor (attacks missed) or specificity below the floor (too many "
+            "false alerts) is a critical failure. The naive baseline scores 0 until you write rules.\n"
+            % (handle, cohort))
+        from parallax import detection_content as _DC
+        defense = (
+            "# PX-DE1: SOC detection rules. This is the NAIVE baseline (flags nothing) and scores 0\n"
+            "# until you implement it. Pure functions only; re/string/json/math/random pre-provided.\n\n"
+            + _DC.NAIVE_BASELINE)
+        writeup = (
+            "# Detection engineering writeup\n\n"
+            "## Strategy\n"
+            "_How you detect each scenario: brute force, account takeover, exfiltration, malicious "
+            "process._\n\n"
+            "## Coverage\n"
+            "_Which log event types and fields each rule keys on, and the thresholds you chose._\n\n"
+            "## Tradeoffs\n"
+            "_Catching attacks (recall) without alerting on benign look-alikes (specificity / alert "
+            "fatigue)._\n")
+        return {"README.md": readme, "writeup.md": writeup, "detect.py": defense}
     if slug == "pxs1":
         readme = (
             "# PARALLAX Board PX-S1 - Secure Release Gate (CI/CD DevSecOps)\n\n"
@@ -543,12 +591,17 @@ def register(app, candidate_model, db, helpers=None):
         # PX-S1 (Board 4) secure-release-gate board: candidate submits a sandboxed gates.py.
         return str(workload_id or "").startswith("parallax-devsecops")
 
+    def _is_detection_board(workload_id):
+        # PX-DE1 (Board 2) detection-engineering board: candidate submits a sandboxed detect.py.
+        return str(workload_id or "").startswith("parallax-detection")
+
     def _is_pid_board(workload_id):
         # The PARALLAX board family that is content-gated at submit time and auto-graded: PX-D1
-        # (declarative), PX-D2 (defense code), PX-A1 (authz handler), PX-S1 (CI/CD gates).
+        # (declarative), PX-D2 (defense code), PX-A1 (authz), PX-S1 (CI/CD gates), PX-DE1 (detection).
         wl = str(workload_id or "")
         return (wl.startswith("parallax-pi") or wl.startswith("parallax-code")
-                or wl.startswith("parallax-apisec") or wl.startswith("parallax-devsecops"))
+                or wl.startswith("parallax-apisec") or wl.startswith("parallax-devsecops")
+                or wl.startswith("parallax-detection"))
 
     def _available_workloads():
         # The configured allowlist (ordered), defaulting to the single default workload. These are the
@@ -567,6 +620,20 @@ def register(app, candidate_model, db, helpers=None):
         # /submit/board (one board) and /submit/boards (the selector list).
         import parallax.pid_submission as PS
         out = {"workload_id": workload_id, "cohort": cohort}
+        if _is_detection_board(workload_id):
+            import parallax.detection_submission as DES
+            out.update({
+                "board": "PX-DE1", "title": "Detection Engineering (SOC)",
+                "checklist": DES.code_checklist(),
+                "submission_file": DES.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": DES.MIN_WRITEUP_CHARS,
+                "instructions": ("Write detection rules in detect.py that flag the malicious events in "
+                                 "a log stream (brute force, account takeover, exfiltration, malicious "
+                                 "process) while staying silent on benign look-alikes. Provision the "
+                                 "workspace to get the brief, the detection policy, and a naive stub to "
+                                 "implement, then commit detect.py + writeup.md and select the checklist "
+                                 "items. Grading is deterministic and uses no model.")})
+            return out
         if _is_devsecops_board(workload_id):
             import parallax.devsecops_submission as DSS
             out.update({
@@ -676,7 +743,13 @@ def register(app, candidate_model, db, helpers=None):
             is_code = _is_code_board(workload_id)
             is_apisec = _is_apisec_board(workload_id)
             is_devsecops = _is_devsecops_board(workload_id)
-            if is_devsecops:
+            is_detection = _is_detection_board(workload_id)
+            if is_detection:
+                # PX-DE1: static-check the candidate detector in the sandbox allowlist before it runs.
+                import parallax.detection_submission as DES
+                chk = DES.validate_code(snapshot, selected)
+                clist = DES.code_checklist()
+            elif is_devsecops:
                 # PX-S1: static-check the candidate gates in the sandbox allowlist before anything runs.
                 import parallax.devsecops_submission as DSS
                 chk = DSS.validate_code(snapshot, selected)
@@ -896,6 +969,64 @@ def register(app, candidate_model, db, helpers=None):
             row.snapshot_b64 = None
             db.session.commit()
             _log("grade_failed", sub=row.id, err=str(body.get("error"))[:120])
+            return jsonify(ok=True)
+
+        # PX-DE1 board (detection engineering): governance-bound, fully deterministic. Branch BEFORE the
+        # PID family since _is_pid_board now includes it.
+        if body.get("board") == "PX-DE1" or _is_detection_board(row.workload_id):
+            import parallax.detection_assessment as DEA, parallax.detection_blueprint as DEBP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, DEBP.DETECTION_SPEC, DEBP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-DE1 scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            code_sha = body.get("code_sha256")
+            try:
+                result = DEA.run_assessment(measurement=measurement, cohort=row.cohort,
+                                            candidate_key=candidate_key, attempt=row.attempt,
+                                            approval=approval, authorized_admins=admins, code_sha=code_sha)
+            except Exception as e:  # noqa: BLE001
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "detection_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_detection_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-DE1",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"), "code_sha256": code_sha,
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": False, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-DE1", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": False, "code_sha256": code_sha,
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig; row.grade_kid = gkid
+            row.graded_at = _utcnow(); row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_detection", sub=row.id, score=row.score, passed=result["assessment_passed"])
             return jsonify(ok=True)
 
         # PX-S1 board (secure release gate): governance-bound, fully deterministic. Branch BEFORE the
@@ -1196,7 +1327,7 @@ def register(app, candidate_model, db, helpers=None):
             if request.args.get("key") != _test_key:
                 abort(404)
             import parallax.pid_blueprint as PBP, parallax.apisec_blueprint as ABP
-            import parallax.devsecops_blueprint as DBP
+            import parallax.devsecops_blueprint as DBP, parallax.detection_blueprint as DEBP
             import parallax.registry as PR, parallax.governance as GOV
             from models import ParallaxApproval
             admins = PR.authorized_admins(db)
@@ -1206,7 +1337,7 @@ def register(app, candidate_model, db, helpers=None):
                                "(set REVIEWER_GITHUB_IDS or RANGER_PID_APPROVER)"), 409
             out = {}
             for spec, bp in ((PBP.PID_SPEC, PBP.blueprint()), (ABP.APISEC_SPEC, ABP.blueprint()),
-                             (DBP.DEVSECOPS_SPEC, DBP.blueprint())):
+                             (DBP.DEVSECOPS_SPEC, DBP.blueprint()), (DEBP.DETECTION_SPEC, DEBP.blueprint())):
                 ch = GOV.scoring_spec_hash(spec, bp)
                 if PR.active_spec_approval(db, spec, bp):
                     out[spec.assessment_id] = {"created": False, "content_hash": ch}
