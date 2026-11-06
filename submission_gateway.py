@@ -470,5 +470,42 @@ def register(app, candidate_model, db, helpers=None):
              findings=metrics.get("findings_available"), grader=body.get("grader_version"))
         return jsonify(ok=True)
 
+    # Test-only candidate session bootstrap for submission validation. Disabled unless
+    # RANGER_SUBMISSION_TEST_KEY is set (never in production). Mints a synthetic PARALLAX
+    # candidate with an active membership and sets its session, so the full submit flow can
+    # be validated without GitHub OAuth. It grants no real access: the candidate is synthetic
+    # and the key is absent in production.
+    _test_key = os.environ.get("RANGER_SUBMISSION_TEST_KEY")
+    if _test_key:
+        @app.get("/submit-test/login")
+        def submit_test_login():
+            if request.args.get("key") != _test_key:
+                abort(404)
+            from models import ProgramMembership
+            handle = "parallax-submit-test"
+            c = candidate_model.query.filter_by(handle=handle).first()
+            if not c:
+                c = candidate_model(handle=handle, github_id="parallax-submit-test",
+                                    name="PARALLAX Submit Test (synthetic)",
+                                    email="parallax-submit-test@synthetic.ranger.local",
+                                    status="active",
+                                    cohort=os.environ.get("DEFAULT_COHORT", "2026-A"))
+                db.session.add(c)
+                db.session.commit()
+            elif c.status != "active":
+                c.status = "active"
+                db.session.commit()
+            m = ProgramMembership.query.filter_by(candidate_id=c.id, program="parallax").first()
+            if not m:
+                db.session.add(ProgramMembership(candidate_id=c.id, program="parallax",
+                                                 status="active", granted_by="system:submit-test"))
+                db.session.commit()
+            elif m.status != "active":
+                m.status = "active"
+                db.session.commit()
+            session["cand"] = c.id
+            _log("test_login", cand=c.id, handle=handle)
+            return jsonify(ok=True, cand=c.id)
+
     _log("gateway_registered", org=ORG, enabled=_enabled(),
          grader_auth=bool(_grader_token()), max_snapshot=MAX_SNAPSHOT_BYTES)
