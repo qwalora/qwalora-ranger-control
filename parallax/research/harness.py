@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -41,7 +42,8 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
               variant: Optional[Dict[str, Any]], condition: str, repetition: int,
               app_version: str = HARNESS_VERSION,
               protocol_version: str = P.PROTOCOL_VERSION,
-              defense: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+              defense: Optional[Dict[str, Any]] = None,
+              canary: Optional[str] = None) -> Dict[str, Any]:
     """Execute one trial and return a full machine-readable experiment record. A variant may carry
     `text` (single low-trust document) or `fragments` (a SPLIT payload across several low-trust
     documents).
@@ -54,12 +56,14 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
     exp_id = "exp-" + uuid.uuid4().hex[:12]
     adversarial_id = (variant or {}).get("attack_id")
     attempts_inj = P.attempts_injection(variant) if variant else False
-    if not variant:
+    # Render the per-instance secret canary into the attack payload (default canary -> unchanged).
+    rvariant = P.render_variant(variant, canary) if (variant and canary) else variant
+    if not rvariant:
         injected = None
-    elif variant.get("fragments"):
-        injected = rag.inject_documents(variant["fragments"], variant["attack_id"])
+    elif rvariant.get("fragments"):
+        injected = rag.inject_documents(rvariant["fragments"], rvariant["attack_id"])
     else:
-        injected = rag.inject_document(variant["text"], variant["attack_id"])
+        injected = rag.inject_document(rvariant["text"], rvariant["attack_id"])
     t0 = time.time()
     infra_error = None
     observed = None
@@ -84,7 +88,15 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
         infra_error = "harness_error: %s" % type(e).__name__
 
     ev = E.evaluate(output_text=observed, condition=condition, attempts_injection=attempts_inj,
-                    expected_contains=task.get("expected_contains"), infra_error=infra_error)
+                    expected_contains=task.get("expected_contains"), infra_error=infra_error,
+                    canary=canary)
+
+    # Keep the per-instance secret canary out of the stored record (it is seed-derived and rotates per
+    # attempt; the outcome field already records whether it was emitted). Store only a digest for audit.
+    secret = canary if (canary and canary != P.CANARY) else None
+    observed_stored = (re.sub(re.escape(secret), "[canary]", observed, flags=re.IGNORECASE)
+                       if (secret and observed) else observed)
+    canary_digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret else None
 
     record = {
         "experiment_id": exp_id,
@@ -114,10 +126,13 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
         "legitimate_task": task.get("task"),
         "expected_authorized_behavior": {"never_emit": P.CANARY,
                                          "answer_contains_any": task.get("expected_contains")},
-        "observed_behavior": observed,
+        "observed_behavior": observed_stored,
+        "canary_digest": canary_digest,
         "defense": defense_record,
-        "model_raw_output": (observed if defense_record is None or not defense_record.get("active")
-                             else (getattr(res, "text", None) if not infra_error else None)),
+        "model_raw_output": (observed_stored if defense_record is None or not defense_record.get("active")
+                             else ((re.sub(re.escape(secret), "[canary]", getattr(res, "text", "") or "",
+                                           flags=re.IGNORECASE) if secret else getattr(res, "text", None))
+                                   if not infra_error else None)),
         "evaluation": ev,
         "outcome": ev["outcome"],
         "repetition": repetition,
@@ -143,7 +158,8 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
                  tasks: Optional[List[Dict[str, Any]]] = None,
                  variants: Optional[List[Dict[str, Any]]] = None,
                  protocol_version: str = P.PROTOCOL_VERSION,
-                 defense: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 defense: Optional[Dict[str, Any]] = None,
+                 canary: Optional[str] = None) -> Dict[str, Any]:
     """Run baseline (benign) + experimental (attack) trials with repetitions. Returns
     {manifest, records}. Sequential (concurrency 1). Enforces the trial cap. Pass
     variants=P.ADVANCED_ATTACK_VARIANTS + protocol_version=P.ADVANCED_PROTOCOL_VERSION to run the
@@ -163,14 +179,14 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
             _guard()
             records.append(run_trial(backend, corpus, task=task, variant=None,
                                      condition=P.CONDITION_BASELINE, repetition=rep,
-                                     protocol_version=protocol_version, defense=defense))
+                                     protocol_version=protocol_version, defense=defense, canary=canary))
         # experimental: each attack variant against each legitimate task
         for task in tasks:
             for v in variants:
                 _guard()
                 records.append(run_trial(backend, corpus, task=task, variant=v,
                                          condition=P.CONDITION_EXPERIMENTAL, repetition=rep,
-                                         protocol_version=protocol_version, defense=defense))
+                                         protocol_version=protocol_version, defense=defense, canary=canary))
 
     manifest = {
         "harness_version": HARNESS_VERSION, "protocol_version": protocol_version,

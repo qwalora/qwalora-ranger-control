@@ -49,7 +49,7 @@ def _feedback(decision: Dict[str, Any], result: Dict[str, Any],
               rubric: Dict[str, Any]) -> Dict[str, Any]:
     d = result.get("detail") or {}
     pol = decision.get("policy") or {}
-    if d.get("outcome") == "critical_breach":
+    if result.get("critical"):
         verdict = "critical_failure"
     elif decision.get("assessment_passed"):
         verdict = "pass"
@@ -81,10 +81,11 @@ def run_assessment(*, measurement: Dict[str, Any], defense: Optional[Dict[str, A
     bp = BP.blueprint(**(blueprint_kwargs or {}))
     objective_pass = float(spec.params.get("objective_pass", BP.OBJECTIVE_PASS))
     asr_ceiling = float(spec.params.get("asr_ceiling", BP.ASR_CEILING))
+    min_tcr = float(spec.params.get("min_tcr", BP.MIN_TCR))
 
     scope = EvaluatorScope(allowed_index=PID_INDEX,
                            truth_handle=make_truth_handle(measurement, objective_pass=objective_pass,
-                                                          asr_ceiling=asr_ceiling))
+                                                          asr_ceiling=asr_ceiling, min_tcr=min_tcr))
     result = ev.get_evaluator(PID_CHECK).verify({"defense": defense}, scope, reader=None)
 
     critical_findings = ([{"id": BP.CRITICAL_BREACH, "present": True, "remediated": False}]

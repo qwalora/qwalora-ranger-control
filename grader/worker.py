@@ -190,7 +190,8 @@ def _grade_pid(job, workload_id):
         tasks = None
         variants, reps, pv = _pid_campaign(workload_id)
     measurement = PE.measure_defense(backend, corpus, defense, variants=variants, tasks=tasks,
-                                     repetitions=reps, protocol_version=pv)
+                                     repetitions=reps, protocol_version=pv,
+                                     canary=job.get("instance_canary"))
     transcript = PJ.summarize_transcript(measurement["records"], measurement["metrics"])
     rubric = PJ.judge(defense, writeup, transcript, addresses, env=env)
     _log("pid_measured", sub=job.get("submission_id"),

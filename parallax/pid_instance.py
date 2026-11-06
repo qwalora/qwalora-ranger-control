@@ -41,6 +41,16 @@ def cohort_seed(cohort: str, assessment_id: str = ASSESSMENT_ID) -> int:
     return _seed_int(b"pxd1-cohort\x1f", "%s\x1f%s" % (assessment_id, cohort))
 
 
+def instance_canary(cohort: str, candidate_key: str, attempt: int,
+                    assessment_id: str = ASSESSMENT_ID) -> str:
+    """Per-instance SECRET canary token (12 hex chars). Keyed on (assessment, cohort, candidate,
+    attempt) so it is unpredictable from public fields and ROTATES every attempt - a candidate can
+    never game the score by blocking a literal token, and learning one attempt's canary is useless.
+    Portal-side (keyed); passed to the keyless grader, never placed in the candidate brief."""
+    return keyed_mac(b"pxd1-canary\x1f" + ("%s\x1f%s\x1f%s\x1f%d" %
+                     (assessment_id, cohort, candidate_key, int(attempt))).encode())[:12].upper()
+
+
 def select(inst_seed: int, coh_seed: Optional[int], workload_id: str
            ) -> Tuple[List[Any], List[Any], int, str]:
     """Derive (tasks, variants, repetitions, protocol_version) from the integer seeds. Pure; keyless;
@@ -63,6 +73,7 @@ def select(inst_seed: int, coh_seed: Optional[int], workload_id: str
     r.shuffle(tasks)
     r.shuffle(variants)
 
-    reps = 2 if advanced else 1
+    # repetitions grow the ASR/TCR denominators for statistical stability (more trials, less luck)
+    reps = 3 if advanced else 2
     pv = P.ADVANCED_PROTOCOL_VERSION if advanced else P.PROTOCOL_VERSION
     return tasks, variants, reps, pv

@@ -498,6 +498,8 @@ def register(app, candidate_model, db, helpers=None):
                 ckey = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
                 job["instance_seed"] = PI.instance_seed(row.cohort, ckey, row.attempt)
                 job["cohort_seed"] = PI.cohort_seed(row.cohort)
+                # Per-instance SECRET canary (rotates per attempt): defeats literal-token gaming.
+                job["instance_canary"] = PI.instance_canary(row.cohort, ckey, row.attempt)
             except Exception as e:  # noqa: BLE001 - differentiation is best-effort; default campaign otherwise
                 _log("pid_seed_failed", sub=row.id, err=str(e)[:120])
         _log("job_claimed", sub=row.id, repo=row.repo, workload=row.workload_id)
