@@ -514,5 +514,29 @@ def register(app, candidate_model, db, helpers=None):
             _log("test_login", cand=c.id, handle=handle)
             return jsonify(ok=True, cand=c.id, csrf=_csrf)
 
+        @app.post("/submit-test/requeue")
+        def submit_test_requeue():
+            # Test-only: re-enqueue the synthetic candidate's latest submission so a
+            # fixed grader can reclaim a job stranded in "grading". Never touches a real
+            # candidate. X-CI-Token header marks this as an API client so the portal's
+            # form-CSRF guard exempts it; ?key authenticates the test affordance.
+            if request.args.get("key") != _test_key:
+                abort(404)
+            c = candidate_model.query.filter_by(handle="parallax-submit-test").first()
+            if not c:
+                abort(404)
+            row = (ParallaxSubmission.query
+                   .filter(ParallaxSubmission.candidate_id == c.id)
+                   .order_by(ParallaxSubmission.created_at.desc()).first())
+            if not row:
+                return jsonify(ok=False, reason="no submission")
+            if row.status in ("submitted", "graded"):
+                return jsonify(ok=True, submission_id=row.id, status=row.status, changed=False)
+            row.status = "submitted"
+            row.grading_started_at = None
+            db.session.commit()
+            _log("test_requeue", sub=row.id, cand=c.id)
+            return jsonify(ok=True, submission_id=row.id, status=row.status, changed=True)
+
     _log("gateway_registered", org=ORG, enabled=_enabled(),
          grader_auth=bool(_grader_token()), max_snapshot=MAX_SNAPSHOT_BYTES)
