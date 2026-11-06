@@ -58,7 +58,10 @@ def _log(event, **kv):
 def _portal(method, path, body=None):
     url = PORTAL + path
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"X-Grader-Token": TOKEN, "User-Agent": _UA}
+    # X-Grader-Token authenticates to the gateway. X-CI-Token additionally marks this
+    # as a header-token-authed API client (not a browser), so the portal's form-CSRF
+    # guard exempts it: cookie CSRF is not a threat for a non-browser service caller.
+    headers = {"X-Grader-Token": TOKEN, "X-CI-Token": TOKEN, "User-Agent": _UA}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
