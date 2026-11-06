@@ -334,6 +334,10 @@
 
         <div class="card" id="pxd1-card" style="display:none"><div class="card-head"><span class="eyebrow"><span class="d"></span><span id="pxd1-title">Board submission</span></span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>auto-graded</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+            <div id="pxd1-board-row" style="display:none;align-items:center;gap:8px">
+              <label class="label" for="pxd1-board" style="margin:0">Board</label>
+              <select id="pxd1-board" class="input" style="max-width:360px;padding:6px 8px;font-size:12.5px"></select>
+            </div>
             <p class="muted" id="pxd1-instructions" style="font-size:12.5px;margin:0"></p>
             <div>
               <label class="label">Submission checklist <span class="muted" style="font-weight:400">— select the deliverables you are submitting</span></label>
@@ -376,9 +380,14 @@
             elRes.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">Attempt '+esc(sub.attempt)+' · <span class="mono">'+esc((sub.commit_sha||'').slice(0,12))+'</span></b>'+pill+'</div>'+rows+
               '<p class="dim" style="font-size:11px;margin:8px 0 0">Signed record · <a href="/submit/verify/'+esc(sub.submission_id)+'">verify</a></p>';
           }
-          function refresh(){fetch('/submit/status',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(d){if(d&&d.submissions&&d.submissions.length)renderResult(d.submissions[0]);});}
-          fetch('/submit/board',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(b){
-            if(!b||!b.board){return;} board=b; card.style.display='';
+          function refresh(){fetch('/submit/status',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+            var subs=(d&&d.submissions)||[];
+            var wl=board&&board.workload_id;
+            var mine=wl?subs.filter(function(s){return s.workload_id===wl;}):subs;
+            renderResult(mine.length?mine[0]:null);
+          });}
+          function renderBoard(b){
+            if(!b||!b.board) return; board=b;
             document.getElementById('pxd1-title').textContent=b.title||'Board submission';
             document.getElementById('pxd1-instructions').textContent=b.instructions||'';
             elList.innerHTML=(b.checklist||[]).map(function(it){
@@ -387,13 +396,33 @@
                 '<span><b style="color:var(--ink)">'+esc(it.label)+'</b>'+(it.required?' <span class="muted">(required)</span>':'')+
                 '<span class="muted" style="display:block">'+esc(it.describes)+'</span></span></label>';
             }).join('');
+            elRepo.innerHTML=''; elRes.style.display='none'; elMsg.style.display='none';
+          }
+          var boardsById={};
+          var sel=document.getElementById('pxd1-board'), selRow=document.getElementById('pxd1-board-row');
+          fetch('/submit/boards',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+            var list=(d&&d.boards)||[];
+            if(!list.length){ // fall back to the single-board brief
+              fetch('/submit/board',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(b){if(b&&b.board){card.style.display='';renderBoard(b);refresh();}});
+              return;
+            }
+            card.style.display='';
+            list.forEach(function(b){boardsById[b.workload_id]=b;});
+            if(list.length>1){
+              selRow.style.display='flex';
+              sel.innerHTML=list.map(function(b){return '<option value="'+esc(b.workload_id)+'">'+esc(b.title)+' ('+esc(b.board)+')</option>';}).join('');
+              sel.value=(d.default in boardsById)?d.default:list[0].workload_id;
+              sel.onchange=function(){renderBoard(boardsById[sel.value]);refresh();};
+            }
+            renderBoard(boardsById[sel.value]||list[0]);
             refresh();
           });
           document.getElementById('pxd1-provision').onclick=function(){
+            if(!board){return;}
             msg('Provisioning your workspace…');
-            fetch('/submit/start',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},body:'{}'})
+            fetch('/submit/start',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},body:JSON.stringify({workload_id:board.workload_id})})
               .then(function(r){return r.json();}).then(function(d){
-                if(d&&d.url){elRepo.innerHTML='Workspace: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.repo)+'</a>';msg('Workspace ready. Commit '+esc(board.submission_file)+' and '+esc(board.writeup_file)+', then Submit.');}
+                if(d&&d.url){elRepo.innerHTML='Workspace: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.repo)+'</a>';msg((d.created?'Workspace created with a starter kit (README brief, '+esc(board.submission_file)+' template, writeup.md). Clone it, fill it in, push, then Submit.':'Workspace ready. Commit '+esc(board.submission_file)+' and '+esc(board.writeup_file)+', then Submit.'));}
                 else msg('Could not provision workspace.','err');});
           };
           document.getElementById('pxd1-submit').onclick=function(){
