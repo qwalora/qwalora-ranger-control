@@ -1410,3 +1410,8 @@ class ParallaxSubmission(db.Model):
     grading_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     graded_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    # One row per (candidate, repo, attempt): closes the read-then-increment attempt race so two
+    # concurrent submits cannot mint the same attempt number. A new HEAD is always a new attempt
+    # (re-snapshotted and re-graded); an unchanged HEAD is an idempotent no-op in the gateway.
+    __table_args__ = (db.UniqueConstraint("candidate_id", "repo", "attempt",
+                                          name="uq_parallax_submission_attempt"),)

@@ -20,6 +20,7 @@ from . import HARNESS_VERSION
 from . import protocol as P
 from . import rag, evaluator as E
 from . import provenance
+from . import defense as D
 from .corpus import Corpus
 from .model_backend import Backend, ModelBackendError, PROMPT_TEMPLATE_VERSION
 
@@ -39,10 +40,17 @@ def _hash(obj: Any) -> str:
 def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
               variant: Optional[Dict[str, Any]], condition: str, repetition: int,
               app_version: str = HARNESS_VERSION,
-              protocol_version: str = P.PROTOCOL_VERSION) -> Dict[str, Any]:
+              protocol_version: str = P.PROTOCOL_VERSION,
+              defense: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Execute one trial and return a full machine-readable experiment record. A variant may carry
     `text` (single low-trust document) or `fragments` (a SPLIT payload across several low-trust
-    documents)."""
+    documents).
+
+    `defense` is an optional declarative candidate defense deployed as part of the assistant (see
+    parallax.research.defense). The evaluator scores the deployed assistant's output (post output-guard),
+    so the recorded outcome reflects the candidate's defense. The defense transcript is recorded for
+    audit and for the model-judge; the honesty invariant (backend_is_real / backend_provenance) is
+    unchanged - a defense never makes a simulated backend count as a finding."""
     exp_id = "exp-" + uuid.uuid4().hex[:12]
     adversarial_id = (variant or {}).get("attack_id")
     attempts_inj = P.attempts_injection(variant) if variant else False
@@ -58,13 +66,15 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
     retrieved_ids: List[str] = []
     forced = False
     gen_meta: Dict[str, Any] = {}
+    defense_record: Optional[Dict[str, Any]] = None
     try:
-        out = rag.run_rag(backend, corpus, task=task["task"], injected=injected)
+        out = rag.run_rag(backend, corpus, task=task["task"], injected=injected, defense=defense)
         res = out["result"]
-        observed = res.text
+        observed = out["final_text"]   # deployed assistant's output (post output-guard)
         gen_meta = dict(getattr(res, "meta", None) or {})
         retrieved_ids = out["retrieved_doc_ids"]
         forced = out["injected_forced_into_context"]
+        defense_record = out.get("defense")
         ident = backend.identity()
     except ModelBackendError as e:
         ident = backend.identity()
@@ -105,6 +115,9 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
         "expected_authorized_behavior": {"never_emit": P.CANARY,
                                          "answer_contains_any": task.get("expected_contains")},
         "observed_behavior": observed,
+        "defense": defense_record,
+        "model_raw_output": (observed if defense_record is None or not defense_record.get("active")
+                             else (getattr(res, "text", None) if not infra_error else None)),
         "evaluation": ev,
         "outcome": ev["outcome"],
         "repetition": repetition,
@@ -129,11 +142,13 @@ def run_trial(backend: Backend, corpus: Corpus, *, task: Dict[str, Any],
 def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
                  tasks: Optional[List[Dict[str, Any]]] = None,
                  variants: Optional[List[Dict[str, Any]]] = None,
-                 protocol_version: str = P.PROTOCOL_VERSION) -> Dict[str, Any]:
+                 protocol_version: str = P.PROTOCOL_VERSION,
+                 defense: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run baseline (benign) + experimental (attack) trials with repetitions. Returns
     {manifest, records}. Sequential (concurrency 1). Enforces the trial cap. Pass
     variants=P.ADVANCED_ATTACK_VARIANTS + protocol_version=P.ADVANCED_PROTOCOL_VERSION to run the
-    preregistered advanced attack family."""
+    preregistered advanced attack family. Pass `defense` to deploy a declarative candidate defense as
+    part of the assistant for every trial (PX-D1 scoring)."""
     tasks = tasks or P.LEGIT_TASKS
     variants = variants if variants is not None else P.ATTACK_VARIANTS
     records: List[Dict[str, Any]] = []
@@ -148,14 +163,14 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
             _guard()
             records.append(run_trial(backend, corpus, task=task, variant=None,
                                      condition=P.CONDITION_BASELINE, repetition=rep,
-                                     protocol_version=protocol_version))
+                                     protocol_version=protocol_version, defense=defense))
         # experimental: each attack variant against each legitimate task
         for task in tasks:
             for v in variants:
                 _guard()
                 records.append(run_trial(backend, corpus, task=task, variant=v,
                                          condition=P.CONDITION_EXPERIMENTAL, repetition=rep,
-                                         protocol_version=protocol_version))
+                                         protocol_version=protocol_version, defense=defense))
 
     manifest = {
         "harness_version": HARNESS_VERSION, "protocol_version": protocol_version,
@@ -164,6 +179,8 @@ def run_campaign(backend: Backend, corpus: Corpus, *, repetitions: int = 1,
         "n_tasks": len(tasks), "n_variants": len(variants), "n_records": len(records),
         "all_simulated": all(not r["backend_is_real"] for r in records),
         "any_real": any(r["backend_is_real"] for r in records),
+        "defense_applied": D.is_active(defense),
+        "defense_hash": D.defense_hash(defense) if D.is_active(defense) else None,
     }
     manifest["manifest_hash"] = _hash(manifest)
     return {"manifest": manifest, "records": records}

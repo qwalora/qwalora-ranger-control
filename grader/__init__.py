@@ -4,4 +4,4 @@ token and no signing private key. It reaches the portal only over Railway privat
 networking with a shared internal token, and the model only over the private
 inference endpoint. See grader.worker for the run loop.
 """
-GRADER_VERSION = "grader-1.0.0"
+GRADER_VERSION = "grader-1.1.0"

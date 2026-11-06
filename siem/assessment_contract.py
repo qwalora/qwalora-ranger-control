@@ -51,6 +51,12 @@ SUPPORTED_BLUEPRINT_VERSIONS = {"strata": {1}, "parallax": {1}}
 
 POLICY_STRATA_BAR = "strata_objective_bar"
 POLICY_PARALLAX_PORTFOLIO = "parallax_portfolio"
+# Auto-scored PARALLAX policy: the deterministic objective measurement is a reproducible ELIGIBILITY
+# gate (+ non-overridable critical-failure veto), and a pinned model-judge supplies the rubric score
+# and candidate feedback. No human reviewer is required to produce a score. A decision under this policy
+# is honestly stamped ai_involved=True with the judge's provenance, so it is never mistaken for the
+# deterministic, no-AI decision that the other two policies produce.
+POLICY_PARALLAX_AUTO = "parallax_auto_model"
 
 
 def _err(code, msg, **kv):
@@ -73,7 +79,7 @@ def validate_blueprint(bp: dict) -> dict:
     if not isinstance(bp.get("blueprint_version"), int):
         errors.append(_err("MISSING_VERSION", "blueprint_version (int) required"))
     pol = (bp.get("decision_policy") or {}).get("type")
-    if pol not in (POLICY_STRATA_BAR, POLICY_PARALLAX_PORTFOLIO):
+    if pol not in (POLICY_STRATA_BAR, POLICY_PARALLAX_PORTFOLIO, POLICY_PARALLAX_AUTO):
         errors.append(_err("BAD_POLICY", f"unknown decision policy {pol!r}"))
     # objective checks must reference known evaluator kinds
     for oc in (bp.get("objective_checks") or []):
@@ -95,10 +101,15 @@ def _aggregate_rubric(bp, rubric_scores):
 
 def decide(blueprint: dict, *, authorization: dict, objective_results: list,
            critical_findings: list | None = None, rubric_scores: dict | None = None,
-           reviewer_decision: dict | None = None, scenario_version: str | None = None) -> dict:
-    """Combine the ten concerns into a single auditable qualification decision. Pure and
-    deterministic (no AI). Returns a decision dict; qualified is True only when EVERY gate
-    passes and no critical failure vetoes."""
+           reviewer_decision: dict | None = None, scenario_version: str | None = None,
+           model_scoring: dict | None = None) -> dict:
+    """Combine the ten concerns into a single auditable qualification decision. For the two
+    deterministic policies this is pure and needs no AI. For POLICY_PARALLAX_AUTO the objective
+    measurement is still deterministic and reproducible (the eligibility gate + critical veto), while
+    the rubric comes from a pinned model judge passed via `rubric_scores`; `model_scoring` then carries
+    the judge provenance + blend weights and the decision is stamped ai_involved=True. `qualified` is
+    True only when every gate passes and no critical failure vetoes (always False for single PARALLAX
+    assessments)."""
     critical_findings = critical_findings or []
     reviewer_decision = reviewer_decision or {}
     breakdown = {}
@@ -227,19 +238,69 @@ def decide(blueprint: dict, *, authorization: dict, objective_results: list,
         reason = "assessment_met" if assessment_met else "portfolio_requirements_unmet"
         return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown)
 
+    if ptype == POLICY_PARALLAX_AUTO:
+        activated = bool(policy.get("activated"))
+        threshold = policy.get("rubric_threshold")
+        if not activated or threshold is None:
+            return _fail(blueprint, pw, "POLICY_NOT_ACTIVATED",
+                         [_err("POLICY_NOT_ACTIVATED",
+                               "PARALLAX auto policy is not activated (needs separate approval)")],
+                         breakdown)
+        # Eligibility gate (deterministic + reproducible): the objective measurement must pass its
+        # required checks and clear its evidence, and the critical veto above must not have fired. The
+        # model-judge rubric is the PRIMARY qualitative score but can never rescue a submission that
+        # fails the reproducible objective gate or trips the critical-failure veto.
+        rubric_ok = (rubric_agg is not None) and (rubric_agg >= threshold)
+        eligible = bool(all_required_passed and evidence_ok)
+        assessment_met = bool(eligible and rubric_ok)
+        # Blended final score (objective composite + model rubric), weights from the blueprint policy.
+        weights = policy.get("weights") or {"objective": 0.4, "rubric": 0.6}
+        w_obj = float(weights.get("objective", 0.0))
+        w_rub = float(weights.get("rubric", 0.0))
+        parts, wsum = 0.0, 0.0
+        if objective_score is not None:
+            parts += w_obj * float(objective_score); wsum += w_obj
+        if rubric_agg is not None:
+            parts += w_rub * float(rubric_agg); wsum += w_rub
+        final_score = round(parts / wsum, 2) if wsum else None
+        qualified = False   # a single PARALLAX assessment is never a pathway qualification
+        policy_detail.update({"rubric_threshold": threshold, "rubric_aggregate": rubric_agg,
+                              "objective_score": objective_score, "eligible": eligible,
+                              "final_score": final_score, "weights": {"objective": w_obj, "rubric": w_rub},
+                              "scoring_mode": (model_scoring or {}).get("scoring_mode", "model_primary"),
+                              "assessment_only": True})
+        reason = "assessment_met" if assessment_met else (
+            "objective_gate_unmet" if not eligible else "below_rubric_threshold")
+        return _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown,
+                   ai_involved=True, extra={"model_scoring": _judge_provenance(model_scoring)})
+
     return _fail(blueprint, pw, "BAD_POLICY", [_err("BAD_POLICY", f"unknown policy {ptype!r}")],
                  breakdown)
 
 
-def _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown):
-    return {"qualified": bool(qualified),
-            "assessment_outcome": "met" if assessment_met else "unmet",
-            "assessment_passed": bool(assessment_met),
-            "reason": reason, "pathway": pw,
-            "blueprint_version": bver, "blueprint_hash": blueprint_hash(blueprint),
-            "policy": policy_detail, "breakdown": breakdown,
-            "auditable": True, "ai_involved": False,
-            "contract_version": ASSESSMENT_CONTRACT_VERSION}
+def _judge_provenance(model_scoring: dict | None) -> dict | None:
+    """Carry only non-sensitive judge provenance into the signed decision (model identity, decoding,
+    digests, scoring mode) - never any truth or candidate-identifying content."""
+    if not model_scoring:
+        return None
+    allow = ("model_id", "runtime", "backend", "model_digest", "temperature", "prompt_sha",
+             "rubric_sha", "scoring_mode", "judge_version", "validated_model")
+    return {k: model_scoring.get(k) for k in allow if k in model_scoring}
+
+
+def _ok(blueprint, pw, bver, qualified, assessment_met, reason, policy_detail, breakdown,
+        ai_involved=False, extra=None):
+    out = {"qualified": bool(qualified),
+           "assessment_outcome": "met" if assessment_met else "unmet",
+           "assessment_passed": bool(assessment_met),
+           "reason": reason, "pathway": pw,
+           "blueprint_version": bver, "blueprint_hash": blueprint_hash(blueprint),
+           "policy": policy_detail, "breakdown": breakdown,
+           "auditable": True, "ai_involved": bool(ai_involved),
+           "contract_version": ASSESSMENT_CONTRACT_VERSION}
+    if extra:
+        out.update(extra)
+    return out
 
 
 def _fail(blueprint, pw, reason, errors, breakdown):

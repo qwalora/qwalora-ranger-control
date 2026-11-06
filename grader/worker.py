@@ -132,7 +132,82 @@ def _score_from_metrics(metrics):
     return round(100.0 * composite, 1)
 
 
+def _is_pid(workload_id):
+    return str(workload_id or "").startswith("parallax-pi")
+
+
+def _snapshot_bytes(job):
+    """Return the digest-verified snapshot bytes (fail closed on mismatch)."""
+    b64 = job.get("snapshot_b64")
+    raw = base64.b64decode(b64) if b64 else b""
+    want = job.get("content_digest_sha256")
+    got = hashlib.sha256(raw).hexdigest()
+    if want and got != want:
+        raise ValueError("snapshot digest mismatch: got %s want %s" % (got[:12], want[:12]))
+    return raw
+
+
+def _model_env(job):
+    """Env for model_backend.from_config: the platform-configured endpoint (never a candidate one),
+    preserving the host allow-list + validated-model set from the grader's own environment."""
+    env = dict(os.environ)
+    if job.get("model_url"):
+        env["RANGER_RESEARCH_MODEL_URL"] = job["model_url"]
+    if job.get("model_id"):
+        env["RANGER_RESEARCH_MODEL_ID"] = job["model_id"]
+    return env
+
+
+def _pid_campaign(workload_id):
+    from parallax.research import protocol as P
+    if str(workload_id).endswith("advanced"):
+        return P.ADVANCED_ATTACK_VARIANTS, 2, P.ADVANCED_PROTOCOL_VERSION
+    return P.ATTACK_VARIANTS, 1, P.PROTOCOL_VERSION
+
+
+def _grade_pid(job, workload_id):
+    """PX-D1: deploy the candidate's declarative defense as part of the Aurora Notes assistant, measure
+    its behavior against the injection corpus (ASR/TCR/FPR), and run the model judge over the writeup +
+    the observed transcript. Posts {measurement, defense, rubric}; the PORTAL runs the deterministic
+    objective gate + the AUTO decision and signs. Executes no candidate code (declarative only)."""
+    from parallax.research import corpus as C, model_backend as mb
+    from parallax import pid_submission as PS, pid_evaluator as PE, pid_judge as PJ
+
+    raw = _snapshot_bytes(job)                          # digest-verified
+    sub = PS.read_submission(raw)
+    norm = PS.normalize(sub.get("spec"))
+    defense, addresses = norm["defense"], norm["addresses"]
+    writeup = sub.get("writeup") or ""
+    env = _model_env(job)
+    backend = mb.from_config(env)
+    corpus = C.default_corpus()
+    # Per-instance campaign arrangement (cohort + candidate differentiation) from the portal-computed
+    # integer seeds; falls back to the default family when seeds are absent.
+    if job.get("instance_seed") is not None:
+        from parallax import pid_instance as PI
+        tasks, variants, reps, pv = PI.select(job["instance_seed"], job.get("cohort_seed"), workload_id)
+    else:
+        tasks = None
+        variants, reps, pv = _pid_campaign(workload_id)
+    measurement = PE.measure_defense(backend, corpus, defense, variants=variants, tasks=tasks,
+                                     repetitions=reps, protocol_version=pv)
+    transcript = PJ.summarize_transcript(measurement["records"], measurement["metrics"])
+    rubric = PJ.judge(defense, writeup, transcript, addresses, env=env)
+    _log("pid_measured", sub=job.get("submission_id"),
+         findings=measurement["metrics"].get("findings_available"),
+         asr=(measurement["metrics"].get("real_backend") or {}).get("ASR"),
+         rubric=bool(rubric.get("available")))
+    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-D1",
+            "workload_id": workload_id,
+            "measurement": {"metrics": measurement["metrics"],
+                            "defense_hash": measurement["defense_hash"]},
+            "defense": defense, "addresses": addresses, "rubric": rubric,
+            "grader_version": GRADER_VERSION}
+
+
 def _grade(job):
+    if _is_pid(job.get("workload_id")):
+        return _grade_pid(job, job.get("workload_id"))
     from parallax.research import corpus as C, model_backend as mb, harness
 
     wl = _WORKLOADS.get(job.get("workload_id")) or _WORKLOADS["parallax-pi-basic"]

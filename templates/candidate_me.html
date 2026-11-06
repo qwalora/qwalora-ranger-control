@@ -332,6 +332,87 @@
           </div>
         </div>
 
+        <div class="card" id="pxd1-card" style="display:none"><div class="card-head"><span class="eyebrow"><span class="d"></span><span id="pxd1-title">Board submission</span></span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>auto-graded</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+            <p class="muted" id="pxd1-instructions" style="font-size:12.5px;margin:0"></p>
+            <div>
+              <label class="label">Submission checklist <span class="muted" style="font-weight:400">— select the deliverables you are submitting</span></label>
+              <div id="pxd1-checklist" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+              <button type="button" id="pxd1-provision" class="btn btn-sm">{{ ic('cpu','ic ic-sm') }} Provision workspace</button>
+              <button type="button" id="pxd1-submit" class="btn btn-primary btn-sm">{{ ic('arrow','ic ic-sm') }} Submit for grading</button>
+              <span id="pxd1-repo" class="muted" style="font-size:12px"></span>
+            </div>
+            <div id="pxd1-msg" style="display:none;font-size:12.5px"></div>
+            <div id="pxd1-result" style="display:none;border:1px solid var(--line2);border-radius:10px;padding:12px 14px"></div>
+          </div>
+        </div>
+        <script>
+        (function(){
+          var CSRF = "{{ csrf_token }}";
+          var card=document.getElementById('pxd1-card'); if(!card) return;
+          var elList=document.getElementById('pxd1-checklist'), elMsg=document.getElementById('pxd1-msg'),
+              elRes=document.getElementById('pxd1-result'), elRepo=document.getElementById('pxd1-repo');
+          var board=null;
+          function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+          function msg(t,kind){elMsg.style.display='block';elMsg.className=kind==='err'?'vb-warn':'';elMsg.style.color=kind==='err'?'#b4232a':'var(--muted)';elMsg.textContent=t;}
+          function selected(){return Array.prototype.slice.call(elList.querySelectorAll('input:checked')).map(function(i){return i.value;});}
+          function num(x){return (x==null)?'—':Math.round(x*100)/100;}
+          function renderResult(sub){
+            if(!sub){elRes.style.display='none';return;}
+            elRes.style.display='block';
+            var fb=sub.feedback||{}; var passed=sub.assessment_passed;
+            var pill=(sub.status!=='graded')?'<span class="pill pill-amber"><span class="dot dot-amber"></span>'+esc(sub.status)+'</span>':
+              (passed?'<span class="pill pill-ok"><span class="dot dot-ok"></span>passed</span>':'<span class="pill"><span class="dot"></span>not passed</span>');
+            var rows='';
+            if(sub.status==='graded'){
+              rows+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px" class="muted">'+
+                '<span><b style="color:var(--ink)">'+num(fb.final_score!=null?fb.final_score:sub.score)+'</b> score</span>'+
+                '<span>ASR '+num(fb.measured_asr)+'</span><span>TCR '+num(fb.measured_tcr)+'</span><span>FPR '+num(fb.measured_fpr)+'</span>'+
+                '<span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>model-scored</span></div>';
+              if(fb.rubric_feedback) rows+='<p style="font-size:12.5px;margin:10px 0 0;color:var(--ink)">'+esc(fb.rubric_feedback)+'</p>';
+            }
+            elRes.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">Attempt '+esc(sub.attempt)+' · <span class="mono">'+esc((sub.commit_sha||'').slice(0,12))+'</span></b>'+pill+'</div>'+rows+
+              '<p class="dim" style="font-size:11px;margin:8px 0 0">Signed record · <a href="/submit/verify/'+esc(sub.submission_id)+'">verify</a></p>';
+          }
+          function refresh(){fetch('/submit/status',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(d){if(d&&d.submissions&&d.submissions.length)renderResult(d.submissions[0]);});}
+          fetch('/submit/board',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(b){
+            if(!b||!b.board){return;} board=b; card.style.display='';
+            document.getElementById('pxd1-title').textContent=b.title||'Board submission';
+            document.getElementById('pxd1-instructions').textContent=b.instructions||'';
+            elList.innerHTML=(b.checklist||[]).map(function(it){
+              return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;cursor:pointer">'+
+                '<input type="checkbox" value="'+esc(it.id)+'"'+(it.required?' checked':'')+' style="margin-top:2px">'+
+                '<span><b style="color:var(--ink)">'+esc(it.label)+'</b>'+(it.required?' <span class="muted">(required)</span>':'')+
+                '<span class="muted" style="display:block">'+esc(it.describes)+'</span></span></label>';
+            }).join('');
+            refresh();
+          });
+          document.getElementById('pxd1-provision').onclick=function(){
+            msg('Provisioning your workspace…');
+            fetch('/submit/start',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},body:'{}'})
+              .then(function(r){return r.json();}).then(function(d){
+                if(d&&d.url){elRepo.innerHTML='Workspace: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.repo)+'</a>';msg('Workspace ready. Commit '+esc(board.submission_file)+' and '+esc(board.writeup_file)+', then Submit.');}
+                else msg('Could not provision workspace.','err');});
+          };
+          document.getElementById('pxd1-submit').onclick=function(){
+            var sel=selected(); if(!sel.length){msg('Select at least the required checklist items.','err');return;}
+            msg('Submitting… the server snapshots your repo, validates the criteria, and grades it.');
+            fetch('/submit',{method:'POST',credentials:'same-origin',headers:{'X-CSRF-Token':CSRF,'Content-Type':'application/json'},
+              body:JSON.stringify({workload_id:board.workload_id,checklist:sel})})
+              .then(function(r){return r.json().then(function(d){return {s:r.status,d:d};});})
+              .then(function(x){
+                if(x.s===422){var u=(x.d.unmet||[]).map(function(m){return m.reason;}).join('; ');msg('Not submitted — unmet criteria: '+u,'err');return;}
+                if(x.s===201||x.s===200){msg('Submitted. Grading…');var tries=0;
+                  var t=setInterval(function(){tries++;fetch('/submit/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){
+                    var sub=d&&d.submissions&&d.submissions[0];if(sub){renderResult(sub);if(sub.status==='graded'||sub.status==='failed'||tries>40){clearInterval(t);msg(sub.status==='graded'?'Graded.':'Grading finished.');}}});},3000);
+                  return;}
+                msg('Submit failed ('+x.s+').','err');});
+          };
+        })();
+        </script>
+
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Research activity</span>
           {% if ov and ov.total %}<span class="pill {% if ov.stage=='reviewed' %}pill-ok{% elif ov.stage=='under_review' %}pill-amber{% else %}pill-violet{% endif %}" style="flex:none"><span class="dot {% if ov.stage=='reviewed' %}dot-ok{% elif ov.stage=='under_review' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ stage_label[ov.stage] }}</span>{% endif %}</div>
           <div class="card-body">

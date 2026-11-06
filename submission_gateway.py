@@ -266,6 +266,11 @@ def register(app, candidate_model, db, helpers=None):
             "RANGER_SUBMISSION_WORKLOADS", default).split(",") if w.strip()}
         return req if (req in allow) else default
 
+    def _is_pid_board(workload_id):
+        # The PX-D1 prompt-injection-defense board family. Submissions for this board are
+        # content-gated at submit time (a real declarative defense + writeup are required).
+        return str(workload_id or "").startswith("parallax-pi")
+
     # ---- Candidate: provision workspace -------------------------------------
     @app.post("/submit/start")
     def submit_start():
@@ -310,6 +315,25 @@ def register(app, candidate_model, db, helpers=None):
             _log("submit_snapshot_failed", cand=c.id, repo=full, sha=sha[:12])
             abort(502)
 
+        workload_id = _workload_id(c)
+        # Automatic submit-time criteria gating (no manual validation). For the PX-D1 board the repo
+        # must carry a valid declarative defense + a writeup + declared attack families, and the
+        # candidate's checklist selection must cover every required deliverable. A near-empty repo
+        # (e.g. a README) is rejected here, which is also why a submission can no longer score on the
+        # platform-model baseline alone.
+        pid_meta = None
+        if _is_pid_board(workload_id):
+            import parallax.pid_submission as PS
+            selected = (request.get_json(silent=True) or {}).get("checklist")
+            chk = PS.validate(snapshot, selected)
+            if not chk["ok"]:
+                _log("submit_criteria_unmet", cand=c.id, repo=full,
+                     unmet=",".join(u["id"] for u in chk["unmet"]))
+                return jsonify(error="submission does not meet the board criteria",
+                               unmet=chk["unmet"], checklist=PS.checklist()), 422
+            pid_meta = {"defense_hash": chk["defense_hash"], "addresses": chk["addresses"],
+                        "checklist": chk["checklist_selected"], "writeup_chars": chk["writeup_chars"]}
+
         tag = f"submit-a{attempt}-{sha[:12]}"
         if not _pin_tag(full, sha, tag, token):
             _log("submit_tag_conflict", cand=c.id, repo=full, tag=tag)
@@ -319,7 +343,6 @@ def register(app, candidate_model, db, helpers=None):
         hf_repo = (request.get_json(silent=True) or {}).get("hf_repo") or None
         hf_rev = _hf_latest_revision(hf_repo) if hf_repo else None
 
-        workload_id = _workload_id(c)
         manifest = {
             "schema": SIG_DOMAIN,
             "program": "parallax",
@@ -337,6 +360,12 @@ def register(app, candidate_model, db, helpers=None):
             "hf_repo": hf_repo,
             "hf_revision": hf_rev,
             "attempt": attempt,
+            # PX-D1 criteria recorded in the SIGNED manifest, so the candidate's checklist selection and
+            # the exact defense that was validated are tamper-evident and bound to this submission.
+            "defense_hash": (pid_meta or {}).get("defense_hash"),
+            "addresses": (pid_meta or {}).get("addresses"),
+            "checklist": (pid_meta or {}).get("checklist"),
+            "writeup_chars": (pid_meta or {}).get("writeup_chars"),
             "submitted_at": int(time.time()),
         }
         sig, kid = signing.sign_domain(SIG_DOMAIN, manifest)
@@ -357,7 +386,7 @@ def register(app, candidate_model, db, helpers=None):
         return jsonify(_receipt(row)), 201
 
     def _receipt(row):
-        return {
+        out = {
             "submission_id": row.id, "status": row.status, "attempt": row.attempt,
             "repo": row.repo, "tag": row.tag, "commit_sha": row.commit_sha,
             "content_digest_sha256": row.content_digest, "workload_id": row.workload_id,
@@ -366,6 +395,16 @@ def register(app, candidate_model, db, helpers=None):
             "public_key_b64": signing.public_key_b64(row.signing_kid),
             "score": row.score, "verify_url": f"/submit/verify/{row.id}",
         }
+        # Candidate-facing feedback (only reaches candidate-authed callers: submit/status, the 201).
+        if row.grade_detail:
+            try:
+                gd = json.loads(row.grade_detail)
+                if gd.get("candidate_feedback"):
+                    out["feedback"] = gd["candidate_feedback"]
+                    out["assessment_passed"] = gd.get("assessment_passed")
+            except Exception:  # noqa: BLE001
+                pass
+        return out
 
     # ---- Candidate: status --------------------------------------------------
     @app.get("/submit/status")
@@ -375,6 +414,27 @@ def register(app, candidate_model, db, helpers=None):
         rows = (ParallaxSubmission.query.filter_by(candidate_id=c.id)
                 .order_by(ParallaxSubmission.created_at.desc()).limit(50).all())
         return jsonify(submissions=[_receipt(r) for r in rows])
+
+    # ---- Candidate: board brief + submission checklist ----------------------
+    @app.get("/submit/board")
+    def submit_board():
+        _gate()
+        c = _candidate_or_401()
+        wl = os.environ.get("RANGER_SUBMISSION_WORKLOAD", "parallax-pi-basic")
+        out = {"workload_id": wl, "cohort": _current_cohort(c)}
+        if _is_pid_board(wl):
+            import parallax.pid_submission as PS
+            out.update({
+                "board": "PX-D1", "title": "Prompt-Injection Defense of a RAG Assistant",
+                "checklist": PS.checklist(),
+                "submission_file": PS.SUBMISSION_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": PS.MIN_WRITEUP_CHARS,
+                "instructions": ("Harden the Aurora Notes RAG assistant against the injection corpus. "
+                                 "Commit a parallax_submission.json (declarative defense + declared "
+                                 "attack families) and a writeup.md, then select the checklist items "
+                                 "you are submitting."),
+            })
+        return jsonify(out)
 
     # ---- Public: independent verification -----------------------------------
     @app.get("/submit/verify/<int:sub_id>")
@@ -390,6 +450,18 @@ def register(app, candidate_model, db, helpers=None):
                "content_digest_sha256": row.content_digest, "signing_kid": row.signing_kid,
                "public_key_b64": signing.public_key_b64(row.signing_kid),
                "graded": row.status == "graded", "score": row.score}
+        if row.status == "graded" and row.grade_record:
+            try:
+                env = (json.loads(row.grade_record).get("grade_envelope") or {})
+                if env.get("board"):
+                    out["board"] = env.get("board")
+                    out["assessment_passed"] = env.get("assessment_passed")
+                    out["ai_involved"] = env.get("ai_involved")
+                    out["findings_available"] = env.get("findings_available")
+                    out["grade_signature_valid"] = bool(
+                        signing.verify_domain(GRADE_SIG_DOMAIN, env, row.grade_sig, kid=row.grade_kid))
+            except Exception:  # noqa: BLE001
+                pass
         return jsonify(out)
 
     # ---- Internal (grader): claim next job ----------------------------------
@@ -416,6 +488,18 @@ def register(app, candidate_model, db, helpers=None):
             "model_url": os.environ.get("RANGER_RESEARCH_MODEL_URL"),
             "model_id": os.environ.get("RANGER_RESEARCH_MODEL_ID"),
         }
+        # Per-instance campaign seeds for cohort + candidate differentiation. Computed portal-side (the
+        # key-holder) and passed as integers so the grader stays keyless. Each (cohort, candidate,
+        # attempt) runs a distinct arrangement; two cohorts differ.
+        if _is_pid_board(row.workload_id):
+            try:
+                import parallax.pid_instance as PI
+                cand = candidate_model.query.get(row.candidate_id)
+                ckey = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+                job["instance_seed"] = PI.instance_seed(row.cohort, ckey, row.attempt)
+                job["cohort_seed"] = PI.cohort_seed(row.cohort)
+            except Exception as e:  # noqa: BLE001 - differentiation is best-effort; default campaign otherwise
+                _log("pid_seed_failed", sub=row.id, err=str(e)[:120])
         _log("job_claimed", sub=row.id, repo=row.repo, workload=row.workload_id)
         return jsonify(job=job)
 
@@ -437,6 +521,72 @@ def register(app, candidate_model, db, helpers=None):
             row.snapshot_b64 = None
             db.session.commit()
             _log("grade_failed", sub=row.id, err=str(body.get("error"))[:120])
+            return jsonify(ok=True)
+
+        # PX-D1 board: governance-bound, model-scored assessment. The grader posted the server-side
+        # measurement + the model-judge rubric; the portal (the key-holder) runs the deterministic
+        # objective gate + the AUTO decision and signs. Automatic - no human reviewer required.
+        if body.get("board") == "PX-D1" or _is_pid_board(row.workload_id):
+            import parallax.pid_assessment as PA, parallax.pid_blueprint as PBP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, PBP.PID_SPEC, PBP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-D1 scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            # Include the approval's own approver so the bind-time verification holds even if the live
+            # authorized-admin set has since changed (the approval remains valid while its approver's
+            # governing authority is in effect, which active_spec_approval already enforced).
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            defense = body.get("defense")
+            rubric = body.get("rubric") or {}
+            try:
+                result = PA.run_assessment(measurement=measurement, defense=defense, rubric=rubric,
+                                           cohort=row.cohort, candidate_key=candidate_key,
+                                           attempt=row.attempt, approval=approval, authorized_admins=admins)
+            except Exception as e:  # noqa: BLE001 - a grading failure is recorded, never faked
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "pid_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_pid_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-D1",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"),
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": True, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-D1", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": True, "judge": rubric.get("provenance"),
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig
+            row.grade_kid = gkid
+            row.graded_at = _utcnow()
+            row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_pid", sub=row.id, score=row.score, passed=result["assessment_passed"],
+                 findings=metrics.get("findings_available"))
             return jsonify(ok=True)
 
         metrics = body.get("metrics") or {}
@@ -537,6 +687,38 @@ def register(app, candidate_model, db, helpers=None):
             db.session.commit()
             _log("test_requeue", sub=row.id, cand=c.id)
             return jsonify(ok=True, submission_id=row.id, status=row.status, changed=True)
+
+        @app.post("/submit-test/pid-approve")
+        def submit_test_pid_approve():
+            # Test-only, one-time governance bootstrap: persist a signed approval of the PX-D1 scoring
+            # spec so the board can grade automatically on this non-prod environment. Approver is taken
+            # from the configured authorized-admin set (REVIEWER_GITHUB_IDS). Idempotent. Never present
+            # in production (gated by RANGER_SUBMISSION_TEST_KEY).
+            if request.args.get("key") != _test_key:
+                abort(404)
+            import parallax.pid_blueprint as PBP, parallax.registry as PR, parallax.governance as GOV
+            from models import ParallaxApproval
+            spec, bp = PBP.PID_SPEC, PBP.blueprint()
+            existing = PR.active_spec_approval(db, spec, bp)
+            if existing:
+                return jsonify(ok=True, created=False, content_hash=GOV.scoring_spec_hash(spec, bp))
+            admins = PR.authorized_admins(db)
+            approver = sorted(admins)[0] if admins else os.environ.get("RANGER_PID_APPROVER")
+            if not approver:
+                return jsonify(ok=False, error="no authorized approver configured "
+                               "(set REVIEWER_GITHUB_IDS or RANGER_PID_APPROVER)"), 409
+            approval = GOV.approve_spec(spec, bp, approver_id=approver, authorized_admins={approver})
+            ch = GOV.scoring_spec_hash(spec, bp)
+            row = ParallaxApproval(
+                pathway="parallax", kind="scoring_spec", assessment_id=spec.assessment_id,
+                assessment_version=spec.version, competency=spec.competency, content_hash=ch,
+                approval_record=json.dumps(approval["record"], sort_keys=True, separators=(",", ":")),
+                signature=approval["signature"], signing_kid=signing.active_kid(),
+                approver_id=approver, status="active")
+            db.session.add(row)
+            db.session.commit()
+            _log("pid_approved", approver=approver, content_hash=ch[:12])
+            return jsonify(ok=True, created=True, approver=approver, content_hash=ch)
 
     _log("gateway_registered", org=ORG, enabled=_enabled(),
          grader_auth=bool(_grader_token()), max_snapshot=MAX_SNAPSHOT_BYTES)
