@@ -1356,3 +1356,57 @@ class IncidentAssessment(db.Model):
     attempts = db.Column(db.Integer, nullable=False, default=1)
     created_at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+# ===========================================================================
+# APPEND this class to models.py (anywhere among the model classes; the end of
+# the file is safe). db.create_all() picks it up automatically, so no ensure_schema
+# entry is required for the fresh table. If columns are ADDED later, add a
+# "parallax_submissions" block to ensure_schema's `wanted` dict (idempotent ALTER).
+# ===========================================================================
+
+
+class ParallaxSubmission(db.Model):
+    """One tamper-proof PARALLAX submission and its grade.
+
+    The candidate works in a platform-owned per-candidate repo and clicks Submit; the
+    server (submission_gateway.py) snapshots the exact HEAD commit, pins an immutable
+    tag, computes a content digest, and Ed25519-signs a manifest binding all of it.
+    The signed record is authoritative: the candidate can keep working, but `commit_sha`
+    + `content_digest` freeze exactly what was graded. Grading is performed by the
+    separate low-privilege grader service; the portal signs the final grade record.
+    """
+    __tablename__ = "parallax_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    cohort = db.Column(db.String(40), nullable=False, index=True)
+    program = db.Column(db.String(20), nullable=False, default="parallax")
+    workload_id = db.Column(db.String(60), nullable=False, default="parallax-pi-basic")
+    repo = db.Column(db.String(200), nullable=False, index=True)   # ORG/<cohort>-<slug>
+    attempt = db.Column(db.Integer, nullable=False, default=1)
+    # submitted -> grading -> graded | failed
+    status = db.Column(db.String(20), nullable=False, default="submitted", index=True)
+    # Immutable artifact anchor (what was submitted).
+    commit_sha = db.Column(db.String(64), nullable=False)
+    tree_sha = db.Column(db.String(64), nullable=True)
+    tag = db.Column(db.String(80), nullable=True)
+    content_digest = db.Column(db.String(64), nullable=False)      # sha256 of the repo tarball at commit
+    hf_repo = db.Column(db.String(200), nullable=True)             # optional model-weights portfolio
+    hf_revision = db.Column(db.String(64), nullable=True)
+    # Signed submission manifest (Ed25519, domain parallax.submission.v1).
+    manifest = db.Column(db.Text, nullable=False)                  # canonical JSON
+    manifest_sig = db.Column(db.Text, nullable=False)
+    signing_kid = db.Column(db.String(80), nullable=True)
+    # Transient, digest-verified snapshot handed to the grader over private networking;
+    # never exposed to the candidate and nulled once grading records a result.
+    snapshot_b64 = db.Column(db.Text, nullable=True)
+    # Grade (written by the grader via the portal; the portal signs grade_record).
+    score = db.Column(db.Float, nullable=True)
+    metrics = db.Column(db.Text, nullable=True)                    # JSON: harness.compute_metrics
+    grade_detail = db.Column(db.Text, nullable=True)               # JSON: grader_version, evidence index
+    grade_record = db.Column(db.Text, nullable=True)               # JSON: signed graded record
+    grade_sig = db.Column(db.Text, nullable=True)                  # Ed25519 over grade_record (parallax.grade.v1)
+    grade_kid = db.Column(db.String(80), nullable=True)
+    grading_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    graded_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_now)
