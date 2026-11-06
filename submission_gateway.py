@@ -504,8 +504,14 @@ def register(app, candidate_model, db, helpers=None):
                 m.status = "active"
                 db.session.commit()
             session["cand"] = c.id
+            _csrf = None
+            try:
+                from flask_wtf.csrf import generate_csrf
+                _csrf = generate_csrf()
+            except Exception:
+                _csrf = None
             _log("test_login", cand=c.id, handle=handle)
-            return jsonify(ok=True, cand=c.id)
+            return jsonify(ok=True, cand=c.id, csrf=_csrf)
 
     _log("gateway_registered", org=ORG, enabled=_enabled(),
          grader_auth=bool(_grader_token()), max_snapshot=MAX_SNAPSHOT_BYTES)
