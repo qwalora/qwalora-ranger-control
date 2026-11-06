@@ -122,6 +122,10 @@ def _board_slug(workload_id) -> str:
         return "pxs1"
     if wl.startswith("parallax-detection"):
         return "pxde1"
+    if wl.startswith("parallax-architecture"):
+        return "pxar1"
+    if wl.startswith("parallax-capstone"):
+        return "pxcap"
     if wl.startswith("parallax-pi"):
         return "pxd1"
     return ""
@@ -331,6 +335,90 @@ def _starter_files(workload_id, candidate, cohort):
             "_Keeping legitimate owner access working (allow_rate) while denying non-owners "
             "(deny_rate), and the correct 401/404 semantics._\n")
         return {"README.md": readme, "writeup.md": writeup, "authz.py": defense}
+    if slug == "pxar1":
+        readme = (
+            "# PARALLAX Board PX-AR1 - Secure Architecture Review\n\n"
+            "Workspace for **%s** (cohort %s).\n\n"
+            "## The task\n"
+            "`architecture.py` ships a NAIVE reviewer that finds nothing. Write a review that flags "
+            "every security flaw in a system-design spec while staying silent on a sound design.\n\n"
+            "## What you submit\n"
+            "- `architecture.py` - `review(architecture) -> list[str]` returning the violation codes present\n"
+            "- `writeup.md` - review methodology, the control classes, and tradeoffs (min 400 chars)\n\n"
+            "## review(architecture) contract\n"
+            "`architecture` is a dict with `services` (each `{name, exposure, auth, tls}`), `datastores` "
+            "(each `{name, contains_pii, encrypted, public}`), `links` (each `{from, to, encrypted, "
+            "carries_pii}`), `redundancy` ({service: {multi_az, backups}}), and `critical_services` "
+            "(list of names). Return the list of violation codes present, per this fixed policy:\n"
+            "- `EXPOSED_DATASTORE` : a datastore with `public` true\n"
+            "- `UNENCRYPTED_PII`   : a datastore with `contains_pii` true and `encrypted` false\n"
+            "- `PLAINTEXT_PII_LINK`: a link with `carries_pii` true and `encrypted` false\n"
+            "- `NO_AUTH_PUBLIC`    : a service with `exposure` public and `auth` == 'none'\n"
+            "- `SPOF_CRITICAL`     : a critical service with neither `multi_az` nor `backups`\n"
+            "A sound design violates none of these and must yield an empty list.\n\n"
+            "## Sandbox rules (enforced at submit AND grade time, fail-closed)\n"
+            "Pure functions only: no imports (re/string/json/math/random are pre-provided), no "
+            "underscore/dunder attribute access, no eval/exec/open/getattr, no '__' string literals.\n\n"
+            "## How you're graded (deterministic, signed, reproducible - no model)\n"
+            "Your review runs over a sealed, per-instance flawed+sound design pair. Measured: recall "
+            "(flaws caught on the flawed design) and specificity (no false findings on the sound "
+            "design). Composite = 100 * recall * specificity, pass bar >= 75. Recall below the floor "
+            "(flaws missed) or specificity below the floor (false findings) is a critical failure. The "
+            "naive baseline scores 0 until you write the review.\n" % (handle, cohort))
+        from parallax import architecture_content as _AC
+        defense = (
+            "# PX-AR1: secure architecture review. This is the NAIVE baseline (finds nothing) and\n"
+            "# scores 0 until you implement it. Pure functions only; re/string/json/math/random\n"
+            "# are pre-provided in the sandbox.\n\n" + _AC.NAIVE_BASELINE)
+        writeup = (
+            "# Secure architecture review writeup\n\n"
+            "## Methodology\n"
+            "_How you walk a design spec and map each element to a control class._\n\n"
+            "## Control classes\n"
+            "_How you detect each of the five violation codes, and the fields you key on._\n\n"
+            "## Tradeoffs\n"
+            "_Catching real flaws (recall) without raising false findings on a sound design "
+            "(specificity)._\n")
+        return {"README.md": readme, "writeup.md": writeup, "architecture.py": defense}
+    if slug == "pxcap":
+        from parallax import apisec_content as _APC, detection_content as _DEC
+        from parallax import devsecops_content as _DSC, architecture_content as _ARC
+        readme = (
+            "# PARALLAX Capstone PX-CAP - Multi-Competency\n\n"
+            "Workspace for **%s** (cohort %s).\n\n"
+            "## The task\n"
+            "The capstone composes four component boards. You submit one repo with four sandboxed "
+            "component files; EVERY component must pass its board's bar for the capstone to clear.\n\n"
+            "## What you submit\n"
+            "- `authz.py`        - `handle(req) -> {status, body?}`  (object-level authorization / BOLA)\n"
+            "- `detect.py`       - `detect(events) -> list[int]`     (SOC detection engineering)\n"
+            "- `gates.py`        - `scan_secrets/allow_merge/allow_release` (CI/CD release gates)\n"
+            "- `architecture.py` - `review(architecture) -> list[str]`     (secure architecture review)\n"
+            "- `writeup.md`      - how your four components work and the competencies they show (min 400 chars)\n\n"
+            "Each file follows the exact contract of its standalone board (PX-A1, PX-DE1, PX-S1, "
+            "PX-AR1); see those boards' READMEs for the per-component policy. Each stub below is that "
+            "board's negative-control baseline and scores 0 until you implement it.\n\n"
+            "## Sandbox rules (enforced at submit AND grade time, fail-closed)\n"
+            "Pure functions only, per file: no imports (re/string/json/math/random are pre-provided), "
+            "no underscore/dunder attribute access, no eval/exec/open/getattr, no '__' string literals.\n\n"
+            "## How you're graded (deterministic, signed, reproducible - no model)\n"
+            "Each component runs in the sandbox against its own sealed, per-instance fixture and is "
+            "scored by its own board (same floors and critical-failure rules). The capstone passes IFF "
+            "all four components pass and none critical-fails; the score is the mean component "
+            "composite. No model in any scoring path.\n" % (handle, cohort))
+        writeup = (
+            "# Capstone writeup\n\n"
+            "## Components\n"
+            "_How each of authz / detect / gates / architecture works._\n\n"
+            "## Competencies\n"
+            "_What each component demonstrates across the four domains._\n\n"
+            "## Tradeoffs\n"
+            "_Security versus legitimate-traffic tradeoffs you balanced in each component._\n")
+        return {"README.md": readme, "writeup.md": writeup,
+                "authz.py": _APC.VULNERABLE_BASELINE,
+                "detect.py": _DEC.NAIVE_BASELINE,
+                "gates.py": _DSC.PERMISSIVE_BASELINE,
+                "architecture.py": _ARC.NAIVE_BASELINE}
     if slug == "pxd2":
         readme = (
             "# PARALLAX Board PX-D2 - Prompt-Injection Defense (sandboxed code)\n\n"
@@ -595,13 +683,23 @@ def register(app, candidate_model, db, helpers=None):
         # PX-DE1 (Board 2) detection-engineering board: candidate submits a sandboxed detect.py.
         return str(workload_id or "").startswith("parallax-detection")
 
+    def _is_architecture_board(workload_id):
+        # PX-AR1 (Board 5) secure-architecture-review board: candidate submits a sandboxed architecture.py.
+        return str(workload_id or "").startswith("parallax-architecture")
+
+    def _is_capstone_board(workload_id):
+        # PX-CAP capstone: candidate submits four sandboxed component files; every component must pass.
+        return str(workload_id or "").startswith("parallax-capstone")
+
     def _is_pid_board(workload_id):
         # The PARALLAX board family that is content-gated at submit time and auto-graded: PX-D1
-        # (declarative), PX-D2 (defense code), PX-A1 (authz), PX-S1 (CI/CD gates), PX-DE1 (detection).
+        # (declarative), PX-D2 (defense code), PX-A1 (authz), PX-S1 (CI/CD gates), PX-DE1 (detection),
+        # PX-AR1 (architecture), PX-CAP (capstone).
         wl = str(workload_id or "")
         return (wl.startswith("parallax-pi") or wl.startswith("parallax-code")
                 or wl.startswith("parallax-apisec") or wl.startswith("parallax-devsecops")
-                or wl.startswith("parallax-detection"))
+                or wl.startswith("parallax-detection") or wl.startswith("parallax-architecture")
+                or wl.startswith("parallax-capstone"))
 
     def _available_workloads():
         # The configured allowlist (ordered), defaulting to the single default workload. These are the
@@ -620,6 +718,37 @@ def register(app, candidate_model, db, helpers=None):
         # /submit/board (one board) and /submit/boards (the selector list).
         import parallax.pid_submission as PS
         out = {"workload_id": workload_id, "cohort": cohort}
+        if _is_capstone_board(workload_id):
+            import parallax.capstone_submission as CPS
+            out.update({
+                "board": "PX-CAP", "title": "PARALLAX Capstone (multi-competency)",
+                "checklist": CPS.code_checklist(),
+                "submission_file": "authz.py, detect.py, gates.py, architecture.py",
+                "writeup_file": PS.DEFAULT_WRITEUP, "min_writeup_chars": CPS.MIN_WRITEUP_CHARS,
+                "instructions": ("Submit one repo with four sandboxed component files - authz.py "
+                                 "(BOLA fix), detect.py (SOC detection), gates.py (CI/CD release "
+                                 "gates), architecture.py (secure architecture review) - each following "
+                                 "its standalone board's contract. Provision the workspace to get the "
+                                 "brief and a negative-control stub for each, then commit all four "
+                                 "files + writeup.md and select the checklist items. Every component "
+                                 "must pass its board's bar; grading is deterministic and uses no "
+                                 "model.")})
+            return out
+        if _is_architecture_board(workload_id):
+            import parallax.architecture_submission as ARS
+            out.update({
+                "board": "PX-AR1", "title": "Secure Architecture Review",
+                "checklist": ARS.code_checklist(),
+                "submission_file": ARS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
+                "min_writeup_chars": ARS.MIN_WRITEUP_CHARS,
+                "instructions": ("Write a review in architecture.py that flags every security flaw in a "
+                                 "system-design spec (exposed datastore, unencrypted PII, plaintext PII "
+                                 "link, no-auth public service, critical single point of failure) while "
+                                 "staying silent on a sound design. Provision the workspace to get the "
+                                 "brief, the control-class policy, and a naive stub, then commit "
+                                 "architecture.py + writeup.md and select the checklist items. Grading "
+                                 "is deterministic and uses no model.")})
+            return out
         if _is_detection_board(workload_id):
             import parallax.detection_submission as DES
             out.update({
@@ -744,7 +873,19 @@ def register(app, candidate_model, db, helpers=None):
             is_apisec = _is_apisec_board(workload_id)
             is_devsecops = _is_devsecops_board(workload_id)
             is_detection = _is_detection_board(workload_id)
-            if is_detection:
+            is_architecture = _is_architecture_board(workload_id)
+            is_capstone = _is_capstone_board(workload_id)
+            if is_capstone:
+                # PX-CAP: static-check all four component files in the sandbox allowlist before any run.
+                import parallax.capstone_submission as CPS
+                chk = CPS.validate_code(snapshot, selected)
+                clist = CPS.code_checklist()
+            elif is_architecture:
+                # PX-AR1: static-check the candidate review in the sandbox allowlist before it runs.
+                import parallax.architecture_submission as ARS
+                chk = ARS.validate_code(snapshot, selected)
+                clist = ARS.code_checklist()
+            elif is_detection:
                 # PX-DE1: static-check the candidate detector in the sandbox allowlist before it runs.
                 import parallax.detection_submission as DES
                 chk = DES.validate_code(snapshot, selected)
@@ -969,6 +1110,122 @@ def register(app, candidate_model, db, helpers=None):
             row.snapshot_b64 = None
             db.session.commit()
             _log("grade_failed", sub=row.id, err=str(body.get("error"))[:120])
+            return jsonify(ok=True)
+
+        # PX-CAP capstone: governance-bound, fully deterministic, all-components-must-pass. Branch
+        # BEFORE the PID family since _is_pid_board now includes it.
+        if body.get("board") == "PX-CAP" or _is_capstone_board(row.workload_id):
+            import parallax.capstone_assessment as CPA, parallax.capstone_blueprint as CPBP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, CPBP.CAPSTONE_SPEC, CPBP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-CAP scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            code_sha = body.get("code_sha256")
+            try:
+                result = CPA.run_assessment(measurement=measurement, cohort=row.cohort,
+                                            candidate_key=candidate_key, attempt=row.attempt,
+                                            approval=approval, authorized_admins=admins, code_sha=code_sha)
+            except Exception as e:  # noqa: BLE001
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "capstone_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_capstone_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-CAP",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"), "code_sha256": code_sha,
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": False, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-CAP", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": False, "code_sha256": code_sha,
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig; row.grade_kid = gkid
+            row.graded_at = _utcnow(); row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_capstone", sub=row.id, score=row.score, passed=result["assessment_passed"])
+            return jsonify(ok=True)
+
+        # PX-AR1 board (secure architecture review): governance-bound, fully deterministic. Branch
+        # BEFORE the PID family since _is_pid_board now includes it.
+        if body.get("board") == "PX-AR1" or _is_architecture_board(row.workload_id):
+            import parallax.architecture_assessment as ARA, parallax.architecture_blueprint as ARBP, parallax.registry as PR
+            cand = candidate_model.query.get(row.candidate_id)
+            candidate_key = str((cand.github_id or cand.handle or cand.id)) if cand else str(row.candidate_id)
+            approval = PR.active_spec_approval(db, ARBP.ARCHITECTURE_SPEC, ARBP.blueprint())
+            if not approval:
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "PX-AR1 scoring spec is not approved here"})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_unapproved", sub=row.id)
+                return jsonify(ok=False, error="board_not_approved"), 409
+            admins = PR.authorized_admins(db) | {(approval.get("record") or {}).get("approver_id")}
+            admins.discard(None)
+            measurement = body.get("measurement") or {}
+            code_sha = body.get("code_sha256")
+            try:
+                result = ARA.run_assessment(measurement=measurement, cohort=row.cohort,
+                                            candidate_key=candidate_key, attempt=row.attempt,
+                                            approval=approval, authorized_admins=admins, code_sha=code_sha)
+            except Exception as e:  # noqa: BLE001
+                row.status = "failed"
+                row.grade_detail = json.dumps({"error": "architecture_grade_error: %s" % str(e)[:300]})
+                row.graded_at = _utcnow(); row.snapshot_b64 = None
+                db.session.commit()
+                _log("grade_architecture_error", sub=row.id, err=str(e)[:160])
+                return jsonify(ok=False, error="grade_error"), 500
+            fb = result["candidate_feedback"]
+            final_score = fb.get("final_score")
+            metrics = measurement.get("metrics") or {}
+            decision_rec = result["signed"]["record"]
+            graded = {
+                "schema": GRADE_SIG_DOMAIN, "submission_id": row.id, "board": "PX-AR1",
+                "commit_sha": row.commit_sha, "content_digest_sha256": row.content_digest,
+                "workload_id": row.workload_id, "manifest_sig": row.manifest_sig,
+                "decision_record_hash": decision_rec.get("record_hash"), "code_sha256": code_sha,
+                "assessment_passed": result["assessment_passed"], "score": final_score,
+                "ai_involved": False, "findings_available": metrics.get("findings_available"),
+                "grader_version": body.get("grader_version"), "graded_at": int(time.time()),
+            }
+            gsig, gkid = signing.sign_domain(GRADE_SIG_DOMAIN, graded)
+            row.status = "graded"
+            row.score = float(final_score) if final_score is not None else None
+            row.metrics = json.dumps(metrics, sort_keys=True)
+            row.grade_detail = json.dumps({"board": "PX-AR1", "candidate_feedback": fb,
+                                           "assessment_passed": result["assessment_passed"],
+                                           "ai_involved": False, "code_sha256": code_sha,
+                                           "grader_version": body.get("grader_version")}, sort_keys=True)
+            row.grade_record = json.dumps({"grade_envelope": graded, "grade_envelope_sig": gsig,
+                                           "decision": result["signed"]}, sort_keys=True)
+            row.grade_sig = gsig; row.grade_kid = gkid
+            row.graded_at = _utcnow(); row.snapshot_b64 = None
+            db.session.commit()
+            _log("graded_architecture", sub=row.id, score=row.score, passed=result["assessment_passed"])
             return jsonify(ok=True)
 
         # PX-DE1 board (detection engineering): governance-bound, fully deterministic. Branch BEFORE the
@@ -1328,6 +1585,7 @@ def register(app, candidate_model, db, helpers=None):
                 abort(404)
             import parallax.pid_blueprint as PBP, parallax.apisec_blueprint as ABP
             import parallax.devsecops_blueprint as DBP, parallax.detection_blueprint as DEBP
+            import parallax.architecture_blueprint as ARBP, parallax.capstone_blueprint as CPBP
             import parallax.registry as PR, parallax.governance as GOV
             from models import ParallaxApproval
             admins = PR.authorized_admins(db)
@@ -1337,7 +1595,8 @@ def register(app, candidate_model, db, helpers=None):
                                "(set REVIEWER_GITHUB_IDS or RANGER_PID_APPROVER)"), 409
             out = {}
             for spec, bp in ((PBP.PID_SPEC, PBP.blueprint()), (ABP.APISEC_SPEC, ABP.blueprint()),
-                             (DBP.DEVSECOPS_SPEC, DBP.blueprint()), (DEBP.DETECTION_SPEC, DEBP.blueprint())):
+                             (DBP.DEVSECOPS_SPEC, DBP.blueprint()), (DEBP.DETECTION_SPEC, DEBP.blueprint()),
+                             (ARBP.ARCHITECTURE_SPEC, ARBP.blueprint()), (CPBP.CAPSTONE_SPEC, CPBP.blueprint())):
                 ch = GOV.scoring_spec_hash(spec, bp)
                 if PR.active_spec_approval(db, spec, bp):
                     out[spec.assessment_id] = {"created": False, "content_hash": ch}

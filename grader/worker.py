@@ -152,6 +152,16 @@ def _is_detection(workload_id):
     return str(workload_id or "").startswith("parallax-detection")
 
 
+def _is_architecture(workload_id):
+    # PX-AR1 (Board 5) secure-architecture-review board: candidate submits a sandboxed architecture.py.
+    return str(workload_id or "").startswith("parallax-architecture")
+
+
+def _is_capstone(workload_id):
+    # PX-CAP capstone: candidate submits four sandboxed component files; every component must pass.
+    return str(workload_id or "").startswith("parallax-capstone")
+
+
 def _is_code_board(workload_id, spec=None):
     # Board selection is authoritative from the portal-set workload_id ONLY. The candidate's own
     # submission spec is never trusted to pick the code-execution path (`spec` kept for signature
@@ -356,7 +366,81 @@ def _grade_detection(job, workload_id):
             "code_sha256": code_sha, "grader_version": GRADER_VERSION}
 
 
+def _grade_architecture(job, workload_id):
+    """PX-AR1 (Board 5): run the candidate's architecture review in the sandbox against the sealed,
+    per-instance flawed+sound design pair and measure recall/specificity. Deterministic; no model.
+    Posts {measurement, code_sha256}; the PORTAL runs the objective gate (ai_involved=False) and signs."""
+    import hashlib
+    from parallax import architecture_evaluator as AE, architecture_content as AC
+    from parallax import pid_submission as PS, pid_sandbox as SB
+
+    raw = _snapshot_bytes(job)
+    code = PS.read_file(raw, "architecture.py") or ""
+    errs = SB.static_check(code, interface=("review",))
+    if errs:
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-AR1",
+                "error": "unsafe_code: " + "; ".join(errs[:4]), "grader_version": GRADER_VERSION}
+    code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    seed = int(job.get("instance_seed") or 0)
+    instance = AC.generate_instance(seed)
+    try:
+        measurement = AE.measure_review(code, instance, defense_hash=code_sha)
+    except Exception as e:  # noqa: BLE001 - a sandbox failure fails closed, never a silent pass
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-AR1",
+                "error": "sandbox_runtime: " + str(e)[:200], "grader_version": GRADER_VERSION}
+    m = measurement["metrics"]
+    _log("architecture_measured", sub=job.get("submission_id"), board="PX-AR1",
+         recall=m.get("security_rate"), specificity=m.get("task_rate"))
+    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-AR1",
+            "workload_id": workload_id,
+            "measurement": {"metrics": m, "defense_hash": measurement["defense_hash"]},
+            "code_sha256": code_sha, "grader_version": GRADER_VERSION}
+
+
+def _grade_capstone(job, workload_id):
+    """PX-CAP capstone: read the four component files, run each through its own board's sandboxed
+    measurement against that component's sealed per-instance fixture, and require EVERY component to
+    pass. Deterministic; no model. Posts {measurement{metrics,components}, code_sha256}; the PORTAL
+    runs the objective gate (ai_involved=False) and signs."""
+    from parallax import capstone_content as CC, capstone_harness as CH, capstone_submission as CS
+
+    raw = _snapshot_bytes(job)
+    code_map = CS.read_code_map(raw)
+    # Fail closed on an unsafe component BEFORE anything runs (the harness also re-checks per component).
+    from parallax import pid_sandbox as SB
+    for name, fname, iface, _cid in CS.COMPONENTS:
+        code = code_map.get(name) or ""
+        if not code.strip():
+            return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-CAP",
+                    "error": "missing_component: %s" % fname, "grader_version": GRADER_VERSION}
+        errs = SB.static_check(code, interface=iface)
+        if errs:
+            return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-CAP",
+                    "error": "unsafe_code (%s): %s" % (fname, "; ".join(errs[:3])),
+                    "grader_version": GRADER_VERSION}
+    code_sha = CS.combined_sha(code_map)
+    seed = int(job.get("instance_seed") or 0)
+    instance = CC.generate_instance(seed)
+    try:
+        res = CH.run_components(code_map, instance)
+    except Exception as e:  # noqa: BLE001 - a sandbox failure fails the whole capstone closed
+        return {"submission_id": job["submission_id"], "status": "failed", "board": "PX-CAP",
+                "error": "sandbox_runtime: " + str(e)[:200], "grader_version": GRADER_VERSION}
+    m = res["metrics"]
+    _log("capstone_measured", sub=job.get("submission_id"), board="PX-CAP",
+         passed=m.get("passed_components"), total=m.get("total_components"),
+         any_critical=m.get("any_critical"))
+    return {"submission_id": job["submission_id"], "status": "graded", "board": "PX-CAP",
+            "workload_id": workload_id,
+            "measurement": {"metrics": m, "components": res["components"], "defense_hash": code_sha},
+            "code_sha256": code_sha, "grader_version": GRADER_VERSION}
+
+
 def _grade(job):
+    if _is_capstone(job.get("workload_id")):
+        return _grade_capstone(job, job.get("workload_id"))
+    if _is_architecture(job.get("workload_id")):
+        return _grade_architecture(job, job.get("workload_id"))
     if _is_detection(job.get("workload_id")):
         return _grade_detection(job, job.get("workload_id"))
     if _is_devsecops(job.get("workload_id")):
