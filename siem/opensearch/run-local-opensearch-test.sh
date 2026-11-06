@@ -26,12 +26,12 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # Authenticated HTTP status for a request; prints only the numeric code (never the password).
 http_code() {
   local method="$1" path="$2"
-  curl -sk -o /dev/null -w '%{http_code}' -u "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" \
+  curl -sk --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' -u "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" \
     -X "$method" "${URL}${path}"
 }
 # Authenticated body (used for identity/plugin checks). Caller must not echo secrets.
 http_body() {
-  curl -sk -u "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" "${URL}$1"
+  curl -sk --connect-timeout 5 --max-time 15 -u "admin:${OPENSEARCH_INITIAL_ADMIN_PASSWORD}" "${URL}$1"
 }
 
 cmd="${1:-up}"
