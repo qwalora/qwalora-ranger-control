@@ -132,35 +132,57 @@ def ensure_index():
 
 
 def ensure_candidate_user():
-    """A read-only Wazuh login candidates use to investigate the telemetry (no admin rights)."""
+    """A read-only Wazuh login candidates use to investigate the telemetry (no admin rights).
+    Custom (non-reserved) role + mapping so the PUTs are permitted: read on ranger-telemetry and
+    .kibana, plus global-tenant dashboard read."""
     if not CAND_PW:
         log("no RANGER_CANDIDATE_PW set; skipping candidate user")
         return
+    sec = "%s/_plugins/_security/api" % INDEXER_URL
+    hdr = {"Content-Type": "application/json"}
+
+    def put(path, body):
+        r = requests.put("%s/%s" % (sec, path), auth=(USER, PW), verify=False, json=body, headers=hdr, timeout=30)
+        log("sec PUT", path, r.status_code, str(r.text)[:140])
+        return r
     try:
-        r = requests.put("%s/_plugins/_security/api/internalusers/%s" % (INDEXER_URL, CAND_USER),
-                         auth=(USER, PW), verify=False,
-                         json={"password": CAND_PW, "opendistro_security_roles": ["readall", "kibana_user"],
-                               "attributes": {"ranger": "candidate"}},
-                         headers={"Content-Type": "application/json"}, timeout=30)
-        log("candidate user '%s':" % CAND_USER, r.status_code, str(r.text)[:160])
+        put("roles/ranger_candidate", {
+            "cluster_permissions": ["cluster_composite_ops_ro"],
+            "index_permissions": [
+                {"index_patterns": ["ranger-telemetry*"],
+                 "allowed_actions": ["read", "indices:admin/mappings/get", "indices:admin/get"]},
+                {"index_patterns": [".kibana*"], "allowed_actions": ["read"]},
+            ],
+            "tenant_permissions": [{"tenant_patterns": ["global_tenant"], "allowed_actions": ["kibana_all_read"]}],
+        })
+        put("internalusers/%s" % CAND_USER, {"password": CAND_PW, "attributes": {"ranger": "candidate"}})
+        put("rolesmapping/ranger_candidate", {"users": [CAND_USER]})
     except Exception as e:  # noqa: BLE001
         log("candidate user error:", str(e)[:200])
 
 
 def ensure_index_pattern():
-    """So the ranger-telemetry data is browsable in the dashboard the moment a candidate opens it."""
+    """So the ranger-telemetry data is browsable in the dashboard the moment a candidate opens it.
+    The dashboard terminates TLS at the Railway edge and serves plain HTTP on 5601 internally, so an
+    https:// internal URL fails the handshake; try the URL as given, then the other scheme."""
     if not DASHBOARD_URL:
         log("no DASHBOARD_URL set; skipping index pattern")
         return
-    try:
-        r = requests.post("%s/api/saved_objects/index-pattern/ranger-telemetry" % DASHBOARD_URL,
-                          auth=(USER, PW), verify=False,
-                          headers={"osd-xsrf": "true", "Content-Type": "application/json"},
-                          json={"attributes": {"title": "ranger-telemetry*", "timeFieldName": "@timestamp"}},
-                          timeout=40)
-        log("index pattern:", r.status_code, str(r.text)[:160])
-    except Exception as e:  # noqa: BLE001
-        log("index pattern error:", str(e)[:200])
+    alt = ("http://" + DASHBOARD_URL[len("https://"):]) if DASHBOARD_URL.startswith("https://") \
+        else ("https://" + DASHBOARD_URL[len("http://"):]) if DASHBOARD_URL.startswith("http://") \
+        else None
+    for base in [u for u in (DASHBOARD_URL, alt) if u]:
+        try:
+            r = requests.post("%s/api/saved_objects/index-pattern/ranger-telemetry" % base,
+                              auth=(USER, PW), verify=False,
+                              headers={"osd-xsrf": "true", "Content-Type": "application/json"},
+                              json={"attributes": {"title": "ranger-telemetry*", "timeFieldName": "@timestamp"}},
+                              timeout=40)
+            log("index pattern (%s):" % base, r.status_code, str(r.text)[:160])
+            if r.status_code < 500:
+                return
+        except Exception as e:  # noqa: BLE001
+            log("index pattern error (%s):" % base, str(e)[:160])
 
 
 def wait_indexer():
