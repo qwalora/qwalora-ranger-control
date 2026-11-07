@@ -400,12 +400,25 @@
             </div>
             <div id="pxd1-msg" style="display:none;font-size:12.5px"></div>
             <div id="pxd1-result" style="display:none;border:1px solid var(--line2);border-radius:10px;padding:12px 14px"></div>
+            <div id="pxd1-history" style="display:none;margin-top:4px"></div>
           </div>
+        </div>
+        <div class="card" id="pxc-profile-card" style="display:none"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your competency profile</span><span class="pill" style="flex:none"><span class="dot dot-ok"></span>measured from your scores</span></div>
+          <div class="card-body" id="pxc-profile" style="display:flex;flex-direction:column;gap:10px;font-size:12.5px"></div>
         </div>
         <script>
         (function(){
           var CSRF = "{{ csrf_token }}";
           var card=document.getElementById('pxd1-card'); if(!card) return;
+          var BOARD_META={
+            'parallax-pi-basic':{axis:'AI security',label:'prompt-injection defense',lean:'defensive'},
+            'parallax-code-basic':{axis:'AI security',label:'prompt-injection defense (code)',lean:'defensive'},
+            'parallax-apisec-basic':{axis:'Application security',label:'object-level authorization',lean:'defensive'},
+            'parallax-devsecops-basic':{axis:'DevSecOps',label:'CI/CD release gates',lean:'defensive'},
+            'parallax-detection-basic':{axis:'SOC / detection',label:'detection engineering',lean:'defensive'},
+            'parallax-architecture-basic':{axis:'Security architecture',label:'architecture review',lean:'defensive'},
+            'parallax-capstone-basic':{axis:'Capstone',label:'multi-competency',lean:'composite'}
+          };
           var elList=document.getElementById('pxd1-checklist'), elMsg=document.getElementById('pxd1-msg'),
               elRes=document.getElementById('pxd1-result'), elRepo=document.getElementById('pxd1-repo');
           var board=null;
@@ -439,11 +452,51 @@
             elRes.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">Attempt '+esc(sub.attempt)+' · <span class="mono">'+esc((sub.commit_sha||'').slice(0,12))+'</span></b>'+pill+'</div>'+rows+
               '<p class="dim" style="font-size:11px;margin:8px 0 0">Signed record · <a href="/submit/verify/'+esc(sub.submission_id)+'">verify</a></p>';
           }
+          function renderHistory(mine){
+            var h=document.getElementById('pxd1-history');
+            var past=mine.slice(1).filter(function(s){return s.status==='graded';});
+            if(!past.length){h.style.display='none';h.innerHTML='';return;}
+            h.style.display='block';
+            h.innerHTML='<div class="muted" style="font-size:11px;margin:6px 0 2px">Past attempts (your best attempt counts)</div>'+
+              past.map(function(s){var fb=s.feedback||{};var sc=(fb.final_score!=null?fb.final_score:s.score);
+                return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:11.5px;border-top:1px solid var(--line2);padding:5px 0">'+
+                  '<span class="muted">Attempt '+esc(s.attempt)+' · <span class="mono">'+esc((s.commit_sha||'').slice(0,10))+'</span></span>'+
+                  '<span>'+(sc==null?'critical':'<b style="color:var(--ink)">'+num(sc)+'</b>')+' · '+(s.assessment_passed?'passed':'not passed')+
+                  ' · <a href="/submit/verify/'+esc(s.submission_id)+'">verify</a></span></div>';
+              }).join('');
+          }
+          function renderProfile(subs){
+            var pcard=document.getElementById('pxc-profile-card'), box=document.getElementById('pxc-profile');
+            var best={};
+            subs.forEach(function(s){ if(s.status!=='graded') return; var m=BOARD_META[s.workload_id]; if(!m) return;
+              var fb=s.feedback||{}; var sc=(fb.final_score!=null?fb.final_score:s.score);
+              var cur=best[s.workload_id];
+              if(!cur || (sc!=null && (cur.score==null || sc>cur.score))) best[s.workload_id]={score:sc,passed:!!s.assessment_passed,meta:m};
+            });
+            var keys=Object.keys(best);
+            if(!keys.length){pcard.style.display='none';return;}
+            pcard.style.display='block';
+            var rows=keys.map(function(k){var b=best[k];
+              return '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center">'+
+                '<span><b style="color:var(--ink)">'+esc(b.meta.axis)+'</b> <span class="muted">· '+esc(b.meta.label)+'</span></span>'+
+                '<span>'+(b.score==null?'—':'<b style="color:var(--ink)">'+num(b.score)+'</b>')+' '+
+                (b.passed?'<span class="pill pill-ok" style="flex:none"><span class="dot dot-ok"></span>cleared</span>':'<span class="pill" style="flex:none"><span class="dot"></span>not cleared</span>')+'</span></div>';
+            }).join('');
+            var off=keys.filter(function(k){return best[k].meta.lean==='offensive';}).length;
+            var summary = (off===0)
+              ? 'Every competency you have attempted is <b>defensive</b> (blue): detection, hardening, authorization, architecture. Offensive (red) competencies are measured by the STRATA red boards, which have not opened yet, so there is no offensive-vs-defensive comparison to draw.'
+              : 'Your measured results span both leans; the offensive-vs-defensive balance is computed from your scores on each.';
+            box.innerHTML=rows+
+              '<div style="border-left:2px solid var(--violet);padding:6px 0 6px 10px;margin-top:2px" class="muted">'+summary+'</div>'+
+              '<p class="dim" style="font-size:11px;margin:0">Computed only from your signed board scores. It reflects what you have done, not a personality assessment.</p>';
+          }
           function refresh(){fetch('/submit/status',{credentials:'same-origin'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
             var subs=(d&&d.submissions)||[];
             var wl=board&&board.workload_id;
             var mine=wl?subs.filter(function(s){return s.workload_id===wl;}):subs;
             renderResult(mine.length?mine[0]:null);
+            renderHistory(mine);
+            renderProfile(subs);
           });}
           function renderBoard(b){
             if(!b||!b.board) return; board=b;
