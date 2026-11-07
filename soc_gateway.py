@@ -534,18 +534,27 @@ def register(app, candidate_model, db, helpers=None):
             if request.args.get("key") != test_key:
                 abort(404)
             handle = request.args.get("cand", "soc-test-a")
+            # Optional board param so an isolated test env can exercise any SOC console board
+            # (1/3/4 soc-dataset or 2 soc-opensearch), not only the enterprise hunt. Still the same
+            # /soc authorization on every subsequent request; never a production auth bypass.
+            try:
+                board = int(request.args.get("board", SIEM_BOARD))
+            except (TypeError, ValueError):
+                board = SIEM_BOARD
+            if _board_kind(board) not in _SOC_CONSOLE_KINDS:
+                board = SIEM_BOARD
             c = candidate_model.query.filter_by(handle=handle).first()
             if not c:
                 c = candidate_model(handle=handle, github_id="test-" + handle,
                                     name="SOC Test " + handle,
                                     email=handle + "@synthetic.ranger.local",
-                                    status="active", current_board=SIEM_BOARD,
+                                    status="active", current_board=board,
                                     cohort=os.environ.get("DEFAULT_COHORT", "2026-A"))
                 db.session.add(c)
                 db.session.commit()
             else:
                 c.status = "active"
-                c.current_board = SIEM_BOARD
+                c.current_board = board
                 db.session.commit()
             session["cand"] = c.id
             _log("test_login", cand=c.id, handle=handle)
