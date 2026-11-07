@@ -4369,6 +4369,15 @@ def create_app():
     # structural (the dataset is derived from the SESSION candidate's own seed), and the answer
     # key is never sent to the browser - grading stays server-side.
     SOC_WORKSPACE_BOARD = 1
+    # The soc-dataset boards that have a browser worksheet: 1 (triage), 3 (detection
+    # engineering), 4 (incident response). Each investigates in the SOC console and submits
+    # here; grading dispatches by board in scenarios.grade. Boards 2/5/6 are not here.
+    WORKSHEET_BOARDS = (1, 3, 4)
+    _WS_TEMPLATE = {1: "board1_workspace.html", 3: "board3_workspace.html", 4: "board4_workspace.html"}
+
+    def _ws_kind(n):
+        # Per-board draft kind; board 1 keeps its original key so existing drafts are preserved.
+        return "board1_triage" if int(n) == 1 else "board%d_ws" % int(n)
 
     def _dataset_version(seed):
         """A short, stable identifier for the candidate's current dataset attempt, derived from the
@@ -4441,15 +4450,16 @@ def create_app():
     @app.get("/me/workspace")
     @require_program("strata")
     def candidate_workspace():
-        """The Board-1 SOC alert-triage workspace page. Entitlement+active gated; the triage
-        surface is Board 1 (other boards use their own flow)."""
+        """The SOC board workspace page. Entitlement+active gated. Serves the triage (board 1),
+        detection-engineering (board 3) and incident-response (board 4) worksheets; other boards
+        use their own flow."""
         c = _current_candidate()
         if not c:
             abort(401)
         if not c.is_active:
             abort(403)
-        n = c.current_board
-        if int(n) != SOC_WORKSPACE_BOARD:
+        n = int(c.current_board)
+        if n not in WORKSHEET_BOARDS:
             return redirect(url_for("candidate_mission"))
         seed = _current_seed(c)
         if not seed:
@@ -4460,7 +4470,7 @@ def create_app():
               "case_ref": _scenario_ref(c, n, seed or ""),
               "severities": ["low", "medium", "high", "critical"],
               "mission": _soc_mission_vm(n), "soc": _soc_status_vm(c, n)}
-        return render_template("board1_workspace.html", vm=vm)
+        return render_template(_WS_TEMPLATE[n], vm=vm)
 
     @app.get("/me/workspace/data")
     @require_program("strata")
@@ -4472,9 +4482,9 @@ def create_app():
             abort(401)
         if not c.is_active:
             abort(403)
-        n = c.current_board
-        if int(n) != SOC_WORKSPACE_BOARD:
-            return jsonify(error="no triage workspace for this board"), 404
+        n = int(c.current_board)
+        if n not in WORKSHEET_BOARDS:
+            return jsonify(error="no workspace for this board"), 404
         if _strata_portfolios_on():
             return jsonify(error="this cohort uses the bound-portfolio flow; use the standard lab endpoints"), 409
         if not scenarios.has_board(n):
@@ -4485,13 +4495,15 @@ def create_app():
             seed = _current_seed(c)
         _touch(c, n)
         db.session.commit()
-        ds = scenarios.dataset(n, seed)   # answer-free (public_board1 strips the key)
+        ds = scenarios.dataset(n, seed)   # answer-free (public_board* strips the answer key)
         case_ref = _scenario_ref(c, n, seed)
         # restore the candidate's own in-progress draft (answer-free; their inputs only)
         import drafts as _drafts
-        draft = _drafts.load(c.id, "strata", n, "board1_triage", case_ref)
+        draft = _drafts.load(c.id, "strata", n, _ws_kind(n), case_ref)
+        # `dataset` carries the full answer-free view each board's worksheet needs (board 1/4 alerts;
+        # board 3 threats + baseline + detectable_fields). `alerts` is kept for board 1/4 back-compat.
         return jsonify(ok=True, board=n, case_ref=case_ref,
-                       theme=ds.get("theme"), alerts=ds.get("alerts", []),
+                       theme=ds.get("theme"), dataset=ds, alerts=ds.get("alerts", []),
                        status=_soc_status_vm(c, n),
                        dataset_version=_dataset_version(seed),
                        draft=draft), 200
@@ -4507,9 +4519,9 @@ def create_app():
             abort(401)
         if not c.is_active:
             return jsonify(error="candidate is %s" % c.status), 409
-        n = c.current_board
-        if int(n) != SOC_WORKSPACE_BOARD:
-            return jsonify(error="no triage workspace for this board"), 404
+        n = int(c.current_board)
+        if n not in WORKSHEET_BOARDS:
+            return jsonify(error="no workspace for this board"), 404
         if _strata_portfolios_on():
             return jsonify(error="this cohort uses the bound-portfolio flow"), 409
         body = request.get_json(silent=True) or {}
@@ -4526,13 +4538,16 @@ def create_app():
         if not seed:
             _ensure_seed(c, n)
             seed = _current_seed(c)
-        score, per_alert = scenarios.grade(n, seed, submission)   # per_alert = correctness flags only
+        # Graded server-side against the candidate's own seed. The second value is a per-item
+        # feedback list whose shape is board-specific (board 1: per-alert correctness flags;
+        # board 3: detection validation metrics; board 4: per-section IR correctness).
+        score, detail = scenarios.grade(n, seed, submission)
         br = _record_objective(c, n, score)
         _touch(c, n)
         promoted = _evaluate_gate(c)
         db.session.commit()
         return jsonify(ok=True, board=n, score=score, passed=bool(br.objective_passed),
-                       pass_bar=P.PASS_BAR, per_alert=per_alert, promoted=promoted,
+                       pass_bar=P.PASS_BAR, per_alert=detail, feedback=detail, promoted=promoted,
                        status=_soc_status_vm(c, n),
                        note="Report approval is also required to clear the board."), 200
 
@@ -4549,9 +4564,9 @@ def create_app():
             abort(401)
         if not c.is_active:
             return jsonify(error="candidate is %s" % c.status), 409
-        n = c.current_board
-        if int(n) != SOC_WORKSPACE_BOARD:
-            return jsonify(error="no triage workspace for this board"), 404
+        n = int(c.current_board)
+        if n not in WORKSHEET_BOARDS:
+            return jsonify(error="no workspace for this board"), 404
         if _strata_portfolios_on():
             return jsonify(error="this cohort uses the bound-portfolio flow"), 409
         body = request.get_json(silent=True) or {}
@@ -4569,7 +4584,7 @@ def create_app():
         case_ref = _scenario_ref(c, n, seed)
         import drafts as _drafts
         try:
-            res = _drafts.save(c.id, "strata", n, "board1_triage", case_ref,
+            res = _drafts.save(c.id, "strata", n, _ws_kind(n), case_ref,
                                _dataset_version(seed), payload, base_version)
         except _drafts.DraftError as e:
             return jsonify(ok=False, error="invalid draft: %s" % e), 400

@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
+{% block title %}Detection Engineering · Board 3 · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('workspace', vm) }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>STRATA · Board 3 · Detection Engineer</div>
+          <div class="ttl" style="margin-top:6px">{{ vm.mission.title }}</div>
+          <div class="rg-sub">{{ vm.mission.business_context }}</div>
+        </div>
+        <div class="iw-head-side">
+          <div class="muted" style="font-size:11px">Case reference</div>
+          <code class="mono" id="case-ref" style="font-size:12px">{{ vm.case_ref }}</code>
+          <span id="status-pill-wrap">
+            {% if vm.soc.submitted %}
+            <span class="pill {% if vm.soc.passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot"></span>{{ vm.soc.score }}% {% if vm.soc.passed %}· cleared{% else %}· need {{ vm.soc.pass_bar }}%{% endif %}</span>
+            {% else %}<span class="pill pill-violet"><span class="dot"></span>awaiting ruleset</span>{% endif %}
+          </span>
+        </div>
+      </div>
+
+      <div class="iw">
+        <div id="ws-error" class="note-err" hidden style="margin-bottom:12px"></div>
+
+        <div class="card iw-card" style="margin-bottom:14px">
+          <details class="soc-brief" open>
+            <summary><span class="role">{{ vm.mission.role }}</span></summary>
+            <div class="soc-brief-grid">
+              <div><span class="label">Objectives</span><ul>{% for o in vm.mission.objectives %}<li>{{ o }}</li>{% endfor %}</ul></div>
+              <div><span class="label">Authorized scope</span><p>{{ vm.mission.scope }}</p>
+                <span class="label" style="margin-top:8px">Deliverables</span><ul>{% for d in vm.mission.deliverables %}<li>{{ d }}</li>{% endfor %}</ul></div>
+              <div><span class="label">Evidence &amp; evaluation</span><p>{{ vm.mission.evidence }}</p><p style="margin-top:6px">{{ vm.mission.evaluation }}</p></div>
+            </div>
+          </details>
+        </div>
+
+        <div id="ws-loading" class="iw-empty card iw-card">Loading your threat intel. The malicious samples are labeled on purpose; the holdout you are scored on stays on the server.</div>
+
+        <div id="work" hidden>
+          <div class="card iw-card" style="margin-bottom:14px">
+            <div class="iw-card-h"><h2>{{ ic('activity','ic ic-sm') }} Threat intel — behaviors to detect</h2>
+              <span class="mono dim" id="th-meta"></span></div>
+            <div class="iw-tbl-wrap" style="max-height:38vh">
+              <table class="iw-tbl soc-tbl">
+                <thead><tr><th>Technique</th><th>Name</th><th>Image / parent</th><th>Command / network</th><th style="width:90px"></th></tr></thead>
+                <tbody id="th-rows"></tbody>
+              </table>
+            </div>
+            <details class="base-wrap"><summary>{{ ic('layers','ic ic-sm') }} Benign baseline (<span id="bl-n">0</span>) — your rules must stay quiet on these</summary>
+              <div class="iw-tbl-wrap" style="max-height:30vh">
+                <table class="iw-tbl soc-tbl"><thead><tr><th>Type</th><th>Host</th><th>Image / parent</th><th>Command / network</th></tr></thead>
+                <tbody id="bl-rows"></tbody></table>
+              </div>
+            </details>
+          </div>
+
+          <div class="card iw-card">
+            <div class="iw-card-h"><h2>{{ ic('edit','ic ic-sm') }} Detection ruleset</h2>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span class="save-status" id="save-status" aria-live="polite"></span>
+                <label class="iw-chk"><input type="checkbox" id="adv-toggle"> advanced (JSON)</label>
+              </div>
+            </div>
+
+            <div id="builder" class="rb">
+              <div class="dim" style="font-size:12px;padding:0 0 10px">Each rule fires when <b>all</b> of its conditions match an event. Detectable fields: <code class="mono" id="field-hint"></code>. A value with commas is matched as "any of".</div>
+              <div id="rules-box"></div>
+              <button class="btn btn-outline btn-sm" type="button" id="add-rule">{{ ic('plus','ic ic-sm') }} Add rule</button>
+            </div>
+
+            <div id="advbox" class="rb" hidden>
+              <div class="dim" style="font-size:12px;padding:0 0 8px">Full ruleset as JSON (Sigma subset). When non-empty, this overrides the builder above.</div>
+              <textarea id="raw-json" class="raw-ta" spellcheck="false" placeholder='{"rules":[{"name":"lsass_minidump","detection":{"sel":{"image":"rundll32.exe","command|contains|all":["comsvcs.dll","MiniDump"]},"condition":"sel"}}]}'></textarea>
+            </div>
+
+            <div class="iw-submit">
+              <div class="muted" style="font-size:12px">Scored as the F1 of per-technique recall and benign precision on a holdout. Pass bar {{ vm.soc.pass_bar }}%.</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-outline btn-sm" id="btn-save" type="button">{{ ic('inbox','ic ic-sm') }} Save progress</button>
+                <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit ruleset</button>
+              </div>
+            </div>
+            <div id="result-panel" class="iw-result" hidden>
+              <div class="iw-result-h"><span class="pill" id="result-pill"></span> <span class="dim" id="result-note" style="font-size:11.5px"></span></div>
+              <div class="ir-score" id="result-breakdown"></div>
+              <div id="rule-feedback" class="rule-fb"></div>
+              <p class="dim" id="result-next" style="font-size:12px;margin:8px 0 0"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  [hidden]{display:none!important}
+  .ranges-main .rg-head{display:flex;gap:20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+  .rg-head .ttl{font:700 20px/1.1 var(--f);letter-spacing:-.4px;color:var(--ink)}
+  .rg-head .rg-sub{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:6px;max-width:820px}
+  .iw-head-side{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+  .iw{padding:18px 24px 28px}
+  .iw-card{max-width:none;box-shadow:none;border:1px solid var(--line)}
+  .iw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .iw-card-h h2{font:600 13px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .soc-brief{padding:12px 15px}
+  .soc-brief summary{cursor:pointer;font:600 12.5px/1.4 var(--f);color:var(--ink)}
+  .soc-brief-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:12px}
+  .soc-brief-grid ul{margin:4px 0 0;padding-left:16px;display:flex;flex-direction:column;gap:3px}
+  .soc-brief-grid li,.soc-brief-grid p{font-size:12px;color:var(--mut);line-height:1.5;margin:0}
+  .iw-chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer}
+  .iw-empty{padding:26px 16px;color:var(--mut);font-size:12.5px;text-align:center}
+  .iw-tbl-wrap{overflow:auto}
+  .iw-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .iw-tbl th{position:sticky;top:0;background:var(--sub);text-align:left;font:600 10.5px/1 var(--f);letter-spacing:.6px;text-transform:uppercase;color:var(--dim);padding:9px 10px;border-bottom:1px solid var(--line);z-index:1}
+  .iw-tbl td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink)}
+  .iw-tbl .mono,.iw-tbl code{font-family:var(--m);font-size:11px}
+  .iw-tbl .tq{font-family:var(--m);font-weight:600;white-space:nowrap}
+  .base-wrap{border-top:1px solid var(--line)}
+  .base-wrap summary{cursor:pointer;font:600 12px/1 var(--f);color:var(--mut);padding:11px 15px}
+  .rb{padding:13px 15px}
+  .raw-ta{width:100%;min-height:180px;border:1px solid var(--line2);border-radius:9px;padding:11px;font:500 12px/1.5 var(--m);color:var(--ink);background:var(--light);resize:vertical}
+  .rule-card{border:1px solid var(--line);border-radius:10px;padding:11px;margin-bottom:10px;background:#fff}
+  .rule-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .rule-top input{flex:1;height:32px;border:1px solid var(--line2);border-radius:7px;padding:0 10px;font:600 12.5px/1 var(--m);color:var(--ink)}
+  .cond-row{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+  .cond-row select,.cond-row input{height:30px;border:1px solid var(--line2);border-radius:7px;padding:0 8px;font:500 11.5px/1 var(--f);background:#fff;color:var(--ink)}
+  .cond-row .cf{width:118px}.cond-row .co{width:112px}.cond-row .cv{flex:1;min-width:140px;font-family:var(--m)}
+  .xbtn{border:1px solid var(--line2);background:#fff;border-radius:6px;cursor:pointer;color:var(--dim);width:28px;height:28px;font-size:13px}
+  .andlbl{font:700 9.5px/1 var(--f);letter-spacing:.5px;color:var(--dim);padding:0 2px}
+  .soc-sel,.soc-in{height:32px;border:1px solid var(--line2);border-radius:7px;padding:0 9px;font:500 12px/1 var(--f);background:#fff;color:var(--ink)}
+  .iw-submit{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid var(--line);flex-wrap:wrap}
+  .save-status{font:600 11px/1 var(--f)} .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48} .save-status.failed{color:#b4232b}
+  .iw-result{border-top:1px solid var(--line);padding:12px 15px}
+  .iw-result-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ir-score{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .ir-score .chip{font:600 11px/1 var(--m);border-radius:7px;padding:5px 8px;border:1px solid var(--line2);background:var(--sub);color:var(--mut)}
+  .ir-score .chip.ok{background:var(--ok-bg);color:#0f7a48;border-color:#bfe6cf}
+  .ir-score .chip.bad{background:#fdecee;color:#b4232b;border-color:#f3b9bf}
+  .rule-fb{margin-top:10px;display:flex;flex-direction:column;gap:4px}
+  .rule-fb .rf{font:500 11.5px/1.4 var(--m);color:var(--mut);display:flex;gap:8px}
+  .rule-fb .rf b{color:var(--ink);font-weight:600}
+  .rule-fb .rf .bad{color:#b4232b}
+  .note-err{background:#fdecee;border:1px solid #f3b9bf;color:#b4232b;border-radius:9px;padding:10px 13px;font-size:12.5px}
+  .label{font:600 10.5px/1 var(--f);letter-spacing:.3px;color:var(--dim);text-transform:uppercase}
+  @media (max-width:1080px){.soc-brief-grid{grid-template-columns:1fr}}
+  @media (max-width:860px){.app.app-2col{grid-template-columns:1fr}.nav{display:none}.iw-tbl-wrap{max-height:none}}
+</style>
+
+<script>
+(function(){
+  var CSRF="{{ csrf_token }}", PASS={{ vm.soc.pass_bar|default(95) }};
+  var $=function(id){return document.getElementById(id);};
+  var threats=[], baseline=[], FIELDS=["event_type","host","user","image","parent","command","dest","domain"];
+  var OPS=[["is","is"],["contains","contains"],["startswith","starts with"],["endswith","ends with"]];
+  var rules=[], rawJSON="", adv=false;
+  var draftVersion=0, saveTimer=null, retryTimer=null, saving=false, dirty=false;
+
+  function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+  async function getJSON(u){var r=await fetch(u,{headers:{'Accept':'application/json'},credentials:'same-origin'});
+    if(r.status!==200){throw new Error('('+r.status+') '+(await r.text()).slice(0,160));}return r.json();}
+  async function postJSON(u,b){var r=await fetch(u,{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(b)});
+    var j=null;try{j=await r.json();}catch(e){}return {status:r.status,body:j};}
+
+  function setStatus(cls,txt){var el=$('save-status');if(!el)return;el.className='save-status '+cls;el.textContent=txt;}
+  function fmtTime(iso){try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
+  function scheduleSave(){clearTimeout(saveTimer);saveTimer=setTimeout(doSave,900);}
+  function scheduleRetry(){clearTimeout(retryTimer);retryTimer=setTimeout(doSave,4000);}
+  function markDirty(){dirty=true;setStatus('saving','Saving…');scheduleSave();}
+  function saveNow(){clearTimeout(saveTimer);doSave();}
+  function draftPayload(){return {rules:rules,rawJSON:rawJSON,adv:adv};}
+  async function doSave(){
+    if(saving){scheduleSave();return;} saving=true; var res;
+    try{res=await postJSON('/me/workspace/draft',{payload:draftPayload(),base_version:draftVersion});}
+    catch(e){saving=false;setStatus('failed','Save failed — retrying');scheduleRetry();return;}
+    saving=false;
+    if(res.status===200&&res.body&&res.body.ok){draftVersion=res.body.version;dirty=false;setStatus('saved','Saved '+fmtTime(res.body.saved_at));}
+    else if(res.status===409&&res.body&&res.body.conflict){var cur=res.body.current;if(cur&&cur.payload){rules=cur.payload.rules||rules;rawJSON=cur.payload.rawJSON||rawJSON;draftVersion=cur.version||0;renderRules();}setStatus('saving','Merging…');scheduleSave();}
+    else{setStatus('failed','Save failed — retrying');scheduleRetry();}
+  }
+
+  function evCells(e){return '<td><code>'+esc(e.image||'')+'</code>'+(e.parent?'<br><span class="dim mono">&#8617; '+esc(e.parent)+'</span>':'')+'</td>'
+      +'<td><code>'+esc(e.command||'')+'</code>'+((e.dest||e.domain)?'<br><span class="dim mono">'+esc(e.dest||'')+' '+esc(e.domain||'')+'</span>':'')+'</td>';}
+  function renderIntel(){
+    $('th-rows').innerHTML=threats.map(function(t){return '<tr><td class="tq">'+esc(t.technique)+'</td><td>'+esc(t.name)+'</td>'+evCells(t)
+      +'<td><button type="button" class="btn btn-outline btn-sm" data-seed="'+esc(t.technique)+'">rule</button></td></tr>';}).join('');
+    $('bl-rows').innerHTML=baseline.map(function(e){return '<tr><td>'+esc(e.event_type)+'</td><td class="mono">'+esc(e.host)+'</td>'+evCells(e)+'</tr>';}).join('');
+    $('th-meta').textContent=threats.length+' techniques';$('bl-n').textContent=baseline.length;
+    document.querySelectorAll('[data-seed]').forEach(function(b){b.addEventListener('click',function(){seedRule(b.dataset.seed);});});
+  }
+
+  function seedRule(tech){var t=threats.find(function(x){return x.technique===tech;})||{};
+    var conds=[];
+    if(t.image)conds.push({field:'image',op:'is',value:t.image});
+    if(t.command){var c=String(t.command).split(/\s+/).filter(function(w){return w.length>3;})[0]||t.command;conds.push({field:'command',op:'contains',value:c});}
+    if(!conds.length)conds.push({field:'command',op:'contains',value:''});
+    rules.push({name:(t.name||tech||'rule').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40)||'rule',conds:conds});
+    markDirty();renderRules();}
+
+  function condRow(ri,ci,c){
+    var fo=FIELDS.map(function(f){return '<option value="'+f+'"'+(c.field===f?' selected':'')+'>'+f+'</option>';}).join('');
+    var oo=OPS.map(function(o){return '<option value="'+o[0]+'"'+(c.op===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('');
+    return (ci>0?'<span class="andlbl">AND</span>':'')
+      +'<div class="cond-row" data-r="'+ri+'" data-c="'+ci+'">'
+      +'<select class="cf" data-k="field">'+fo+'</select>'
+      +'<select class="co" data-k="op">'+oo+'</select>'
+      +'<input class="cv" data-k="value" value="'+esc(c.value||'')+'" placeholder="value (comma = any of)">'
+      +'<button type="button" class="xbtn" data-delc="'+ri+':'+ci+'">×</button></div>';}
+
+  function renderRules(){
+    $('field-hint').textContent=FIELDS.join(', ');
+    $('rules-box').innerHTML=rules.map(function(r,ri){
+      return '<div class="rule-card"><div class="rule-top"><input data-rn="'+ri+'" value="'+esc(r.name||'')+'" placeholder="rule name (e.g. lsass_minidump)">'
+        +'<button type="button" class="xbtn" data-delr="'+ri+'">🗑</button></div>'
+        +r.conds.map(function(c,ci){return condRow(ri,ci,c);}).join('')
+        +'<button type="button" class="btn btn-ghost btn-sm" data-addc="'+ri+'">+ condition</button></div>';}).join('')
+      ||'<div class="dim" style="font-size:12px;padding:6px 0">No rules yet. Click "rule" on a threat above to scaffold one, or "Add rule".</div>';
+    document.querySelectorAll('[data-rn]').forEach(function(el){el.addEventListener('input',function(){rules[+el.dataset.rn].name=el.value;markDirty();});});
+    document.querySelectorAll('[data-delr]').forEach(function(b){b.addEventListener('click',function(){rules.splice(+b.dataset.delr,1);markDirty();renderRules();});});
+    document.querySelectorAll('[data-addc]').forEach(function(b){b.addEventListener('click',function(){rules[+b.dataset.addc].conds.push({field:'command',op:'contains',value:''});markDirty();renderRules();});});
+    document.querySelectorAll('[data-delc]').forEach(function(b){b.addEventListener('click',function(){var p=b.dataset.delc.split(':');rules[+p[0]].conds.splice(+p[1],1);if(!rules[+p[0]].conds.length)rules[+p[0]].conds.push({field:'command',op:'contains',value:''});markDirty();renderRules();});});
+    document.querySelectorAll('.cond-row [data-k]').forEach(function(el){var cr=el.closest('.cond-row'),ri=+cr.dataset.r,ci=+cr.dataset.c;
+      el.addEventListener(el.tagName==='SELECT'?'change':'input',function(){rules[ri].conds[ci][el.dataset.k]=el.value;markDirty();});});
+  }
+
+  function toRule(r,idx){var det={};var n=0;
+    (r.conds||[]).forEach(function(c){if(!c.field||!String(c.value).trim())return;
+      var key=(c.op&&c.op!=='is')?(c.field+'|'+c.op):c.field;
+      var vals=String(c.value).split(',').map(function(x){return x.trim();}).filter(Boolean);
+      det['c'+n]={}; det['c'+n][key]=vals.length>1?vals:vals[0]; n++;});
+    det.condition='all of them';
+    return {name:(r.name||('rule'+(idx+1))),detection:det};}
+
+  function build(){
+    if(adv&&rawJSON.trim()){var o=JSON.parse(rawJSON);return (o&&o.rules)?o:{rules:o};}
+    return {rules:rules.map(toRule).filter(function(r){return Object.keys(r.detection).length>1;})};}
+
+  function result(res){var p=$('result-panel');p.hidden=false;
+    var pill=$('result-pill');pill.className='pill '+(res.passed?'pill-ok':'pill-amber');
+    pill.innerHTML='<span class="dot"></span>'+res.score+'% '+(res.passed?'· objective cleared':'· need '+res.pass_bar+'%');
+    $('result-note').textContent=res.note||'';
+    var f=(res.feedback&&res.feedback[0])||{};
+    function chip(label,cls){return '<span class="chip '+cls+'">'+label+'</span>';}
+    var cov=(f.techniques_covered||'0/0'),covn=cov.split('/'),full=(covn[0]===covn[1]);
+    $('result-breakdown').innerHTML=
+      chip('techniques '+cov,full?'ok':'bad')
+      +chip('macro recall '+(f.macro_recall!=null?f.macro_recall:'—'),(f.macro_recall>=0.9?'ok':'bad'))
+      +chip('precision '+(f.precision!=null?f.precision:'—'),(f.precision>=0.9?'ok':'bad'))
+      +chip('false positives '+(f.validation_false_positives!=null?f.validation_false_positives:'—'),(f.validation_false_positives===0?'ok':'bad'));
+    var fb=[];
+    (f.rules||[]).forEach(function(r){fb.push('<div class="rf"><b>'+esc(r.name)+'</b> fired on '+r.fired_malicious+' malicious'+(r.fired_benign?', <span class="bad">'+r.fired_benign+' benign</span>':', 0 benign')+'</div>');});
+    (f.rule_errors||[]).forEach(function(e){fb.push('<div class="rf bad">⚠ '+esc(e.rule)+': '+esc(e.error)+'</div>');});
+    $('rule-feedback').innerHTML=fb.join('');
+    $('result-next').textContent=res.passed?(res.promoted?'Objective met and you have been promoted. Return to your dashboard for the next board.':'Objective met. A report approval is also required to clear the board — submit it from your dashboard.'):'Objective not yet met. Cover every technique without firing on benign events, then resubmit; your holdout attempt is preserved.';
+    var sp=$('status-pill-wrap');sp.innerHTML='<span class="pill '+(res.passed?'pill-ok':'pill-amber')+'"><span class="dot"></span>'+res.score+'% '+(res.passed?'· cleared':'· need '+res.pass_bar+'%')+'</span>';}
+
+  async function submit(){var b=$('btn-submit');var sub;
+    try{sub=build();}catch(e){$('ws-error').hidden=false;$('ws-error').textContent='Could not parse your ruleset: '+e.message;return;}
+    $('ws-error').hidden=true;b.disabled=true;b.textContent='Grading…';
+    var r=await postJSON('/me/workspace/submit',{submission:sub});b.disabled=false;b.innerHTML='Submit ruleset';
+    if(r.status!==200||!r.body||!r.body.ok){$('ws-error').hidden=false;$('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status));return;}
+    $('ws-error').hidden=true;result(r.body);}
+
+  function setAdv(on){adv=on;$('adv-toggle').checked=on;$('builder').hidden=on;$('advbox').hidden=!on;
+    if(on){try{$('raw-json').value=rawJSON||JSON.stringify(build(),null,2);}catch(e){$('raw-json').value=rawJSON;}}}
+
+  async function load(){try{var d=await getJSON('/me/workspace/data');
+    var ds=d.dataset||{};threats=ds.threats||[];baseline=ds.baseline||[];
+    if(ds.detectable_fields&&ds.detectable_fields.length)FIELDS=ds.detectable_fields;
+    if(d.draft&&d.draft.payload){rules=d.draft.payload.rules||[];rawJSON=d.draft.payload.rawJSON||"";draftVersion=d.draft.version||0;setStatus('saved','Saved '+fmtTime(d.draft.updated_at));if(d.draft.payload.adv)setAdv(true);}
+    $('ws-loading').hidden=true;$('work').hidden=false;
+    renderIntel();renderRules();
+  }catch(e){$('ws-loading').textContent='Could not load your intel: '+e.message+'. Re-open your workspace to retry.';}}
+
+  $('add-rule').addEventListener('click',function(){rules.push({name:'',conds:[{field:'command',op:'contains',value:''}]});markDirty();renderRules();});
+  $('btn-submit').addEventListener('click',submit);$('btn-save').addEventListener('click',saveNow);
+  $('adv-toggle').addEventListener('change',function(){setAdv($('adv-toggle').checked);});
+  $('raw-json').addEventListener('input',function(){rawJSON=$('raw-json').value;markDirty();});
+  function flush(){if(!dirty)return;clearTimeout(saveTimer);
+    try{fetch('/me/workspace/draft',{method:'POST',credentials:'same-origin',keepalive:true,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},
+      body:JSON.stringify({payload:draftPayload(),base_version:draftVersion})});}catch(e){}}
+  window.addEventListener('pagehide',flush);
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush();});
+  load();
+})();
+</script>
+{% endblock %}
