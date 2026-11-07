@@ -266,6 +266,29 @@ def provision_candidate_soc(key, board, alerts, password):
     return {"index": idx, "user": user, "pattern": idx + "*", "loaded": n}
 
 
+def verify_scope(key_a, password_a, key_b):
+    """Prove the anti-cheat boundary: authenticate to the indexer AS candidate A and confirm A can
+    read their OWN scenario index but is denied candidate B's. Enforcement is OpenSearch's, so this
+    is a real authz probe, not a re-read of what we wrote."""
+    idx_a = "ranger-soc-" + key_a
+    idx_b = "ranger-soc-" + key_b
+    user_a = "soc-" + key_a
+
+    def _status(idx):
+        try:
+            r = requests.get("%s/%s/_search?size=0" % (INDEXER_URL, idx), auth=(user_a, password_a),
+                             verify=False, timeout=30)
+            return r.status_code
+        except Exception as e:  # noqa: BLE001
+            return "error:" + str(e)[:80]
+
+    own = _status(idx_a)
+    cross = _status(idx_b)
+    isolated = (own == 200 and cross == 403)
+    return {"candidate": user_a, "own_index": idx_a, "own_status": own,
+            "cross_index": idx_b, "cross_status": cross, "isolated": isolated}
+
+
 def wait_indexer():
     for _ in range(60):
         try:
@@ -349,15 +372,19 @@ class _Health(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(STATE).encode("utf-8"))
 
     def do_POST(self):  # noqa: N802
-        if self.path.split("?")[0] != "/provision":
+        path = self.path.split("?")[0]
+        if path not in ("/provision", "/verify-scope"):
             self.send_response(404); self.end_headers(); return
         if not SOC_TOKEN or self.headers.get("X-Soc-Token", "") != SOC_TOKEN:
             self.send_response(403); self.end_headers(); return
         try:
             ln = int(self.headers.get("Content-Length", "0") or "0")
             body = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
-            res = provision_candidate_soc(body["candidate_key"], int(body.get("board", 1)),
-                                          body.get("alerts", []), body["password"])
+            if path == "/verify-scope":
+                res = verify_scope(body["key_a"], body["password_a"], body["key_b"])
+            else:
+                res = provision_candidate_soc(body["candidate_key"], int(body.get("board", 1)),
+                                              body.get("alerts", []), body["password"])
             out = json.dumps({"ok": True, **res}).encode("utf-8")
             self.send_response(200)
         except Exception as e:  # noqa: BLE001
