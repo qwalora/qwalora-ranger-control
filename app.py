@@ -3950,7 +3950,7 @@ def create_app():
             obj_done = bool(br and br.objective_score is not None)
             obj_passed = bool(br and br.objective_passed)
             if n == 1 and not obj_passed:
-                next_action = ("Launch your SOC workspace and triage the alert queue"
+                next_action = ("Open your SOC console (Wazuh), investigate the intrusion, then record your triage"
                                if not obj_done else
                                "Refine your triage adjudication and resubmit to reach %g%%" % P.PASS_BAR)
             elif P.tier_of(n) == "isolated" and rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
@@ -4044,6 +4044,8 @@ def create_app():
             "resources": (_candidate_resources(c) if c.is_active else []),
             "board_coverage": (_board_coverage(c.cohort, n) if c.is_active else None),
             "mission": (_mission_summary(n) if c.is_active else None),
+            "environment": (_board_environment(c, n)
+                            if (c.is_active and selected == pathways.PATHWAY_STRATA) else None),
         }
 
     def _mission_summary(n):
@@ -4059,6 +4061,39 @@ def create_app():
                 "env_state": desc["state"], "env_message": desc["message"],
                 "env_label": desc["label"], "env_platform": desc["platform"],
                 "env_launch": desc["launch"]}
+
+    def _board_environment(c, n):
+        """One unified per-board environment descriptor so every board presents the SAME
+        'Your environment' panel with a single launch. SOC boards (1,3,4) launch the real Wazuh
+        console over live ATT&CK telemetry; the hunt/case board opens the OpenSearch case; the red
+        boards start an isolated range."""
+        import strata_catalog as _sc
+        kind = _sc.ENVIRONMENT.get(n)
+        if kind == "soc-dataset":
+            wz = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")
+            return {"kind": "wazuh", "name": "SOC console (Wazuh)",
+                    "platform": "Live Wazuh SIEM over real Windows/Sysmon telemetry, ATT&CK-labeled.",
+                    "launch_url": wz, "launch_label": "Open the SOC console", "new_tab": True,
+                    "available": bool(wz),
+                    "console_user": os.environ.get("RANGER_WAZUH_CANDIDATE_USER", ""),
+                    "console_pw": os.environ.get("RANGER_WAZUH_CANDIDATE_PW", ""),
+                    "note": ("Sign in read-only, open the 'ranger-telemetry' index pattern, and "
+                             "investigate the intrusion. What you find is what you submit to clear the board.")}
+        if kind == "soc-opensearch":
+            return {"kind": "opensearch", "name": "Enterprise case (OpenSearch)",
+                    "platform": "OpenSearch Dashboards over your assigned enterprise case.",
+                    "launch_url": "/case", "launch_label": "Open your assigned case", "new_tab": False,
+                    "available": True, "console_user": "", "console_pw": "",
+                    "note": ("Pivot through the evidence in OpenSearch, build your findings, and submit "
+                             "a signed evidence record to clear the board.")}
+        if kind == "goad-range":
+            return {"kind": "range", "name": "Isolated range (GOAD)",
+                    "platform": "A dedicated, isolated Active Directory range reached over WireGuard.",
+                    "launch_url": None, "launch_label": "Start lab", "new_tab": False,
+                    "available": True, "console_user": "", "console_pw": "",
+                    "note": ("Start your range, connect over WireGuard, work the mission, and submit "
+                             "your written report to clear the board.")}
+        return None
 
     def _demo_vm(n, graduated):
         """A synthetic dashboard for the admin demo preview: no real candidate,
@@ -4106,7 +4141,7 @@ def create_app():
             "open_practice": False, "soc_badge": None,
             "submitted_count": (0 if not graduated else 6), "cve_queue": cve_feed.queue(4),
             "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
-            "mission": _mission_summary(n),
+            "mission": _mission_summary(n), "environment": _board_environment(None, n),
         }
 
     @app.get("/admin/preview")
