@@ -4080,16 +4080,18 @@ def create_app():
         import strata_catalog as _sc
         kind = _sc.ENVIRONMENT.get(n)
         if kind == "soc-dataset":
-            prov = os.environ.get("RANGER_SOC_PROVISIONER_URL", "")
-            console = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")
-            key = _soc_candidate_key(c) if c else "preview"
-            return {"kind": "wazuh", "name": "SOC console (Wazuh)",
-                    "platform": "Live Wazuh SIEM; your own scenario loaded as a private per-candidate index.",
-                    "launch_url": "/me/soc/launch", "launch_label": "Open the SOC console", "new_tab": True,
-                    "available": bool(prov and console),
-                    "console_user": "soc-" + key, "console_pw": (_soc_console_pw(key) if c else ""),
-                    "note": ("Click to load your scenario into your private SOC index, then sign in and "
-                             "investigate it in the real console. Record your triage to clear the board.")}
+            # Unified SOC console: the portal's own authenticated /soc gateway mints a short-lived
+            # JWT server-side, forces the candidate into their own private tenant, and proxies the
+            # private OpenSearch Dashboards. One launch provisions the candidate's own per-candidate
+            # index (the same answer-free scenario the triage worksheet grades) and opens it in
+            # Discover. No basic-auth console, no shared tenant, no cross-candidate visibility.
+            gw = bool(os.environ.get("RANGER_JWT_PRIVATE_B64") and os.environ.get("OPENSEARCH_ADMIN_PASSWORD"))
+            return {"kind": "soc", "name": "SOC console (OpenSearch)",
+                    "platform": "Live OpenSearch Dashboards; your own scenario loaded as a private per-candidate index.",
+                    "launch_url": "/soc/launch", "launch_label": "Open the SOC console", "new_tab": True,
+                    "available": gw, "console_user": "", "console_pw": "",
+                    "note": ("Open the console to investigate your own scenario in Discover, then record "
+                             "your triage to clear the board.")}
         if kind == "soc-opensearch":
             return {"kind": "opensearch", "name": "Enterprise case (OpenSearch)",
                     "platform": "OpenSearch Dashboards over your assigned enterprise case.",
@@ -4867,7 +4869,9 @@ def create_app():
     if os.environ.get("RANGER_JWT_PRIVATE_B64") and os.environ.get("OPENSEARCH_ADMIN_PASSWORD"):
         try:
             import soc_gateway
-            soc_gateway.register(app, Candidate, db, {"program_active": _program_active})
+            soc_gateway.register(app, Candidate, db, {"program_active": _program_active,
+                                                      "current_seed": _current_seed,
+                                                      "ensure_seed": _ensure_seed})
             app.logger.info("SOC gateway registered at /soc")
         except Exception as e:  # noqa: BLE001
             app.logger.warning("SOC gateway not registered: %s", e)

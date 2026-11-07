@@ -34,6 +34,29 @@ PROXY_TIMEOUT = int(os.environ.get("SOC_PROXY_TIMEOUT", "30"))
 MAX_RESP = int(os.environ.get("SOC_MAX_RESP_BYTES", str(40 * 1024 * 1024)))
 SIEM_BOARD = 2
 TS_FIELD = "@timestamp"  # the normalized event timestamp (schema.INDEX_MAPPING)
+# The SOC console serves every blue board: the enterprise hunt (board 2, soc-opensearch) and the
+# answer-free triage boards (1/3/4, soc-dataset). Both provision a PRIVATE per-candidate index on
+# the one shared OpenSearch, investigated through this gateway; red boards (goad-range) are not here.
+_SOC_CONSOLE_KINDS = ("soc-dataset", "soc-opensearch")
+# Mapping for a soc-dataset per-candidate index: the answer-free triage alerts
+# (scenarios.dataset) plus the per-candidate DLS tag. @timestamp carries the alert time so Discover's
+# time picker lands on the scenario window.
+_SOC_DATASET_MAPPING = {
+    "mappings": {"properties": {
+        "@timestamp": {"type": "date"},
+        "timestamp": {"type": "date"},
+        "id": {"type": "keyword"},
+        "host": {"type": "keyword"},
+        "signal": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+        "raw": {"type": "text"},
+        "ranger": {"properties": {"candidate_id": {"type": "keyword"}, "board": {"type": "integer"}}},
+    }}
+}
+
+
+def _board_kind(board):
+    import strata_catalog as _sc
+    return _sc.ENVIRONMENT.get(int(board))
 # The scenario dataset is anchored to a fixed historical window (enterprise.generate
 # starts at 2026-03-01 and spans a couple of weeks). Discover's default "Last 15
 # minutes" / "Last 90 days" never overlaps it, so set the tenant's default time range
@@ -123,12 +146,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def _dash_as_user(subject, cohort, method, path, body=None, tenant="__user__"):
+def _dash_as_user(subject, cohort, method, path, body=None, tenant="__user__", board=SIEM_BOARD):
     """Call the private Dashboards API AS the subject (short-lived JWT) in the given
     tenant (default the subject's own private tenant). Used to provision tenant-scoped
     saved objects (data views). The token never leaves the server; it is injected into
     the upstream header only."""
-    token = ranger_jwt.mint(subject, _jwt_priv(), board=SIEM_BOARD, cohort=cohort, ttl=600)
+    token = ranger_jwt.mint(subject, _jwt_priv(), board=int(board), cohort=cohort, ttl=600)
     url = DASH + BASE + path
     hdrs = {"Authorization": "Bearer " + token, "securitytenant": tenant,
             "osd-xsrf": "osd-fetch", "Content-Type": "application/json",
@@ -144,7 +167,7 @@ def _dash_as_user(subject, cohort, method, path, body=None, tenant="__user__"):
         return -1, str(e)[:160]
 
 
-def _ensure_dataview(subject, cohort, dv_id, title):
+def _ensure_dataview(subject, cohort, dv_id, title, board=SIEM_BOARD, time_field=TS_FIELD):
     """Idempotently ensure the subject's private tenant holds a data view (index
     pattern) scoped to `title`, with the correct time field, and make it the default
     so Discover opens on it. Deterministic id means a repeat launch is a no-op (409).
@@ -155,12 +178,12 @@ def _ensure_dataview(subject, cohort, dv_id, title):
     # plugin keys by username (authinfo tenants map), not the literal "__user__".
     code, body = _dash_as_user(subject, cohort, "POST",
                                "/api/saved_objects/index-pattern/" + dv_id,
-                               {"attributes": {"title": title, "timeFieldName": TS_FIELD}},
-                               tenant=subject)
+                               {"attributes": {"title": title, "timeFieldName": time_field}},
+                               tenant=subject, board=board)
     created = code in (200, 201, 409)  # 409 = already exists -> idempotent
     # Best-effort: set it as the tenant default so Discover lands on it.
     _dash_as_user(subject, cohort, "POST", "/api/index_patterns/default",
-                  {"index_pattern_id": dv_id, "force": True}, tenant=subject)
+                  {"index_pattern_id": dv_id, "force": True}, tenant=subject, board=board)
     # NOTE: the Discover default time range is NOT written to tenant config here.
     # Writing timepicker:timeDefaults into the tenant config correlated with a
     # Dashboards capabilities/readonly failure, so the scenario window is applied in
@@ -230,8 +253,9 @@ def register(app, candidate_model, db, helpers=None):
         if session.get("admin"):
             c = _actas_candidate()
             if c:
-                return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
-            return ("admin", None, "ranger_soc_admin", _DEFCO)
+                return ("candidate", c, authz.user_name(_candidate_slug(c)),
+                        c.cohort or _DEFCO, int(c.current_board or SIEM_BOARD))
+            return ("admin", None, "ranger_soc_admin", _DEFCO, SIEM_BOARD)
         c = _current_candidate()
         if not c:
             _log("deny", reason="no-session", path=request.path)
@@ -242,14 +266,17 @@ def register(app, candidate_model, db, helpers=None):
         if not _strata_ok(c):
             _log("deny", reason="program", cand=c.id)
             abort(403)   # authenticated + active, but not entitled to the STRATA program
-        if int(c.current_board or 0) != SIEM_BOARD:
-            _log("deny", reason="board", board=c.current_board, cand=c.id)
+        board = int(c.current_board or 0)
+        if _board_kind(board) not in _SOC_CONSOLE_KINDS:
+            # The SOC console serves only the blue boards; red/range boards launch elsewhere.
+            _log("deny", reason="board", board=board, cand=c.id)
             abort(403)
-        return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO)
+        return ("candidate", c, authz.user_name(_candidate_slug(c)), c.cohort or _DEFCO, board)
 
-    def _provision(kind, cand, subject, cohort):
+    def _provision(kind, cand, subject, cohort, board=SIEM_BOARD):
         """Idempotent: ensure the subject's role, roles-mapping, and (candidates)
         their seeded index exist. Separate from proxy requests."""
+        board = int(board)
         cl = _admin_cluster()
         if kind == "admin":
             cl.put_role("ranger_soc_admin",
@@ -267,29 +294,66 @@ def register(app, candidate_model, db, helpers=None):
             return {"role": "ranger_soc_admin", "data_view": "ranger-*"}
         slug = _candidate_slug(cand)
         role = authz.role_name(slug)
+        # One role per candidate, pattern -b* (all of their boards), DLS to their own
+        # candidate_id, write only in their own private tenant. Unchanged across boards.
         cl.put_role(role, [authz.candidate_index_pattern(cohort, slug)],
                     dls={"ranger.candidate_id": slug},
                     tenant_permissions=[{"tenant_patterns": ["__user__"],
                                          "allowed_actions": ["kibana_all_write"]}])
         cl.put_rolesmapping(role, users=[subject])
+
+        # Blue triage boards (1/3/4, soc-dataset): load THIS candidate's answer-free scenario
+        # (the same seed the triage worksheet grades) into their own private per-candidate index,
+        # investigated in Discover. Fresh-loaded each launch so the console always matches the
+        # current seed. Isolation is index + role + DLS; the console never shows another candidate.
+        if _board_kind(board) == "soc-dataset":
+            import scenarios
+            cs = (helpers or {}).get("current_seed")
+            es = (helpers or {}).get("ensure_seed")
+            seed = cs(cand) if cs else None
+            if not seed and es:
+                es(cand, board)
+                seed = cs(cand) if cs else None
+            seed = seed or f"{cohort}-{slug}-b{board}"
+            ds = scenarios.dataset(board, seed)
+            idx = authz.index_name(cohort, slug, board)
+            if cl.index_exists(idx):
+                cl.delete_index(idx)
+            cl.create_index(idx, _SOC_DATASET_MAPPING)
+            docs = []
+            for a in ds.get("alerts", []):
+                src = dict(a)
+                src["@timestamp"] = a.get("timestamp")
+                src["ranger"] = {"candidate_id": slug, "board": board}
+                docs.append({"_id": str(a.get("id")), "_source": src})
+            if docs:
+                cl.bulk_index(idx, docs)
+                cl.refresh(idx)
+            # Data view titled to the EXACT per-candidate index, in the candidate's own
+            # private tenant and set default, so Discover opens on only this board's alerts.
+            _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}", idx, board=board)
+            return {"role": role, "index": idx, "data_view": idx,
+                    "board": board, "alerts": len(docs), "theme": ds.get("theme")}
+
         # S5: when the binding integration is on, Board 2 qualification is provisioned from the
         # candidate's authoritative, pinned ScenarioBinding (approved cohort scenario), into the
         # separate qualification index, idempotently and fingerprint-verified. The legacy per-candidate
-        # seed is NOT the source of truth here. Other SIEM boards keep the legacy operational index.
-        if _s5_binding_on() and int(SIEM_BOARD) == 2 and kind == "candidate":
+        # seed is NOT the source of truth here.
+        if _s5_binding_on() and board == 2 and kind == "candidate":
             import strata_board2 as b2
             a = b2.resolve_assignment(db, cand)         # fail-closed on missing/revoked/corrupt
             info = b2.provision(cl, a)
             idx = a.index_name
-            _ensure_dataview(subject, cohort, f"cand-{slug}-b{SIEM_BOARD}-q{a.attempt}", idx)
+            _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}-q{a.attempt}", idx, board=board)
             return {"role": role, "index": idx, "data_view": idx,
                     "scenario_version": a.spec_version, "action": info.get("action")}
-        idx = authz.index_name(cohort, slug, SIEM_BOARD)
+        # Board 2 (soc-opensearch) legacy operational hunt: the enterprise dataset.
+        idx = authz.index_name(cohort, slug, board)
         if not cl.index_exists(idx):
             from siem import enterprise, schema
             cl.create_index(idx, schema.INDEX_MAPPING)
-            events, _truth = enterprise.generate(slug, SIEM_BOARD,
-                                                 f"{cohort}-{slug}-b{SIEM_BOARD}", "B")
+            events, _truth = enterprise.generate(slug, board,
+                                                 f"{cohort}-{slug}-b{board}", "B")
             for i in range(0, len(events), 1000):
                 cl.bulk_index(idx, events[i:i + 1000])
             cl.refresh(idx)
@@ -297,7 +361,7 @@ def register(app, candidate_model, db, helpers=None):
         # their own index pattern only. It is a query definition, not an access grant:
         # the candidate's role + DLS still bound every search to their own data.
         pattern = authz.candidate_index_pattern(cohort, slug)
-        _ensure_dataview(subject, cohort, f"cand-{slug}-b{SIEM_BOARD}", pattern)
+        _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}", pattern, board=board)
         return {"role": role, "index": idx, "data_view": pattern}
 
     @app.before_request
@@ -326,12 +390,19 @@ def register(app, candidate_model, db, helpers=None):
 
     @app.get("/soc/launch")
     def soc_launch():
-        kind, cand, subject, cohort = _authorize()
-        info = _provision(kind, cand, subject, cohort)
-        _log("launch", kind=kind, subject=subject,
+        kind, cand, subject, cohort, board = _authorize()
+        info = _provision(kind, cand, subject, cohort, board)
+        _log("launch", kind=kind, subject=subject, board=board,
              actas_admin=session.get("soc_act_as_admin") if session.get("soc_act_as") else None,
-             **{k: v for k, v in info.items() if k != "index"})
-        return redirect(BASE + "/app/home")
+             **{k: v for k, v in info.items() if k not in ("index", "board")})
+        # Triage boards (soc-dataset) land straight in Discover on the candidate's own data view
+        # (set default for their tenant), so the first screen is their scenario, not a home page.
+        # The enterprise hunt (board 2) keeps the console home, where its own flow begins.
+        if _board_kind(board) == "soc-dataset":
+            dest = os.environ.get("RANGER_SOC_DISCOVER_PATH", "/app/discover")
+        else:
+            dest = "/app/home"
+        return redirect(BASE + dest)
 
     @app.route("/soc", methods=["GET"])
     def soc_root():
@@ -391,7 +462,7 @@ def register(app, candidate_model, db, helpers=None):
     @app.route("/soc/<path:subpath>",
                methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     def soc_proxy(subpath):
-        kind, cand, subject, cohort = _authorize()
+        kind, cand, subject, cohort, board = _authorize()
         if not _rate_ok(subject):
             _log("rate_limited", subject=subject)
             abort(429)
@@ -406,7 +477,7 @@ def register(app, candidate_model, db, helpers=None):
             if not (request.headers.get("osd-xsrf") or request.headers.get("kbn-xsrf")):
                 _log("csrf_missing", subject=subject, method=request.method, path=subpath)
                 abort(403)
-        token = ranger_jwt.mint(subject, _jwt_priv(), board=SIEM_BOARD, cohort=cohort, ttl=600)
+        token = ranger_jwt.mint(subject, _jwt_priv(), board=int(board), cohort=cohort, ttl=600)
 
         # Build upstream request: only ever the private Dashboards, under /soc.
         upstream = DASH + BASE + "/" + subpath
