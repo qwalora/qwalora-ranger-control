@@ -1,51 +1,211 @@
 {% extends "base.html" %}
-{% from "_brand.html" import authnav, authfoot %}
-{% block title %}Enroll · Qwalora Ranger{% endblock %}
+{% block title %}Step up · Qwalora Ranger{% endblock %}
+{% block bodyclass %}login-scene{% endblock %}
+{% block head %}
+<style>
+  .login-scene{--ink:#eef0ff;--dim:#9aa0c4;--indigo:#5b6cff;--peri:#8b9cff;--violet:#7a3cff;--teal:#35e0d0;--amber:#ffb24a;--pill:#f4f4fb;--pill-ink:#0b0b16;
+    margin:0;background:#07060e;color:var(--ink);overflow:hidden;
+    font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;}
+  .login-scene *{box-sizing:border-box}
+  .scene{position:fixed;inset:0;overflow:hidden}
+  .room{position:absolute;inset:0;background:
+      radial-gradient(90% 70% at 78% 40%, rgba(122,60,255,.28), transparent 60%),
+      radial-gradient(60% 50% at 82% 34%, rgba(53,224,208,.16), transparent 55%),
+      radial-gradient(120% 90% at 50% 120%, rgba(91,108,255,.10), transparent 60%),
+      linear-gradient(180deg,#07060e 0%, #0a0918 55%, #0b0a1a 100%);}
+  .wall{position:absolute;right:0;top:0;bottom:28%;width:46%;background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.028) 0 2px, transparent 2px 26px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.03) 0 2px, transparent 2px 52px),
+      linear-gradient(180deg, rgba(38,30,66,.5), rgba(18,16,38,.2));
+    -webkit-mask-image:linear-gradient(90deg, transparent, #000 35%);mask-image:linear-gradient(90deg, transparent, #000 35%);opacity:.6;}
+  .door{position:absolute;right:7%;top:20%;width:190px;height:62%;border-radius:92px 92px 10px 10px/120px 120px 10px 10px;
+    background:linear-gradient(180deg,#120a2e,#1a0f44 40%,#0c0820);
+    box-shadow:0 0 90px 24px rgba(122,60,255,.45), inset 0 0 60px rgba(53,224,208,.22);border:2px solid rgba(139,156,255,.25);overflow:hidden;}
+  .door::before{content:"";position:absolute;inset:0;background:
+      radial-gradient(60% 40% at 50% 18%, rgba(53,224,208,.5), transparent 60%),
+      radial-gradient(120% 80% at 50% 120%, rgba(122,60,255,.55), transparent 60%);animation:rbreathe 5.5s ease-in-out infinite;}
+  .disco{position:absolute;right:12%;top:16%;width:34px;height:34px;border-radius:50%;
+    background:conic-gradient(from 0deg,#8b9cff,#35e0d0,#7a3cff,#ffb24a,#8b9cff);filter:blur(.3px) saturate(1.2);opacity:.85;
+    box-shadow:0 0 26px rgba(139,156,255,.7);animation:rspin 9s linear infinite;}
+  .disco::after{content:"";position:absolute;inset:0;border-radius:50%;background:repeating-conic-gradient(rgba(0,0,0,.35) 0 8deg, transparent 8deg 16deg);}
+  .beam{position:absolute;right:3%;top:26%;width:36%;height:60%;background:conic-gradient(from 210deg at 100% 0%, transparent 0 18deg, rgba(53,224,208,.10) 18deg 24deg, transparent 24deg 40deg, rgba(122,60,255,.10) 40deg 46deg, transparent 46deg);
+    mix-blend-mode:screen;opacity:.8;pointer-events:none;animation:rsweep 7s ease-in-out infinite;}
+  .lamp{position:absolute;left:58%;top:0;width:3px;height:128px;background:linear-gradient(#000,#2a2740);transform-origin:top center;animation:rswing 6s ease-in-out infinite;}
+  .lampshade{position:absolute;left:calc(58% - 26px);top:118px;width:56px;height:26px;background:linear-gradient(180deg,#2a2033,#120c18);
+    border-radius:40% 40% 50% 50%/70% 70% 100% 100%;box-shadow:0 10px 60px 18px rgba(255,178,74,.28);}
+  .lampglow{position:absolute;left:calc(58% - 150px);top:120px;width:300px;height:300px;
+    background:radial-gradient(circle at 50% 10%, rgba(255,178,74,.4), rgba(255,178,74,.08) 42%, transparent 62%);animation:rflicker 4.2s ease-in-out infinite;pointer-events:none;}
+  .floor{position:absolute;left:0;right:0;bottom:0;height:30%;background:
+      linear-gradient(180deg, rgba(10,8,22,0), #06050d 30%),
+      repeating-linear-gradient(90deg, rgba(139,156,255,.05) 0 1px, transparent 1px 64px),
+      linear-gradient(180deg,#0a0818,#050409);box-shadow:inset 0 1px 0 rgba(139,156,255,.12);}
+  .floorglow{position:absolute;left:0;right:0;bottom:0;height:30%;pointer-events:none;background:
+      radial-gradient(40% 80% at 80% 0%, rgba(122,60,255,.22), transparent 60%),
+      radial-gradient(26% 70% at 58% 0%, rgba(255,178,74,.14), transparent 60%);
+    -webkit-mask-image:linear-gradient(180deg,#000,transparent);mask-image:linear-gradient(180deg,#000,transparent);}
+  .rope{position:absolute;left:20%;right:34%;bottom:24%;height:120px;pointer-events:none}
+  .rope svg{width:100%;height:100%;overflow:visible}
+  .cast{position:absolute;left:0;right:0;bottom:22%;height:180px;pointer-events:none}
+  .sprite{position:absolute;bottom:0;image-rendering:pixelated;filter:drop-shadow(0 10px 10px rgba(0,0,0,.6))}
+  .sprite canvas{display:block}
+  .refl{position:absolute;top:100%;left:0;transform:scaleY(-1);opacity:.16;
+    -webkit-mask-image:linear-gradient(#000,transparent 70%);mask-image:linear-gradient(#000,transparent 70%);}
+  .bob{animation:rbob 3.4s ease-in-out infinite}
+  .bob2{animation:rbob 3.9s ease-in-out .4s infinite}
+  .sway{animation:rsway 3.6s ease-in-out infinite;transform-origin:50% 90%}
+  .float{animation:rfloat 4.4s ease-in-out infinite}
+  .login{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;z-index:5}
+  .mark{display:flex;align-items:center;gap:9px;margin-bottom:30px;opacity:.95}
+  .mark .glyph{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--indigo),var(--violet));display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px rgba(91,108,255,.55)}
+  .mark .glyph svg{width:15px;height:15px}
+  .mark b{font-weight:650;letter-spacing:.16em;font-size:13px;text-transform:uppercase;color:#cfd4ff}
+  .mark b span{color:var(--teal)}
+  .login h1{margin:0 0 22px;font-size:30px;line-height:1.15;font-weight:680;letter-spacing:-.01em;text-shadow:0 2px 30px rgba(122,60,255,.35);color:var(--ink)}
+  .cta{display:inline-flex;align-items:center;gap:11px;padding:14px 26px;border-radius:999px;background:var(--pill);color:var(--pill-ink);font-weight:620;font-size:15.5px;text-decoration:none;border:1px solid rgba(255,255,255,.7);
+    box-shadow:0 10px 40px rgba(0,0,0,.5), 0 0 0 6px rgba(139,156,255,.08);transition:transform .14s ease, box-shadow .14s ease;cursor:pointer}
+  .cta:hover{transform:translateY(-2px);box-shadow:0 16px 48px rgba(91,108,255,.4), 0 0 0 8px rgba(139,156,255,.12)}
+  .cta svg{width:19px;height:19px}
+  .fine{margin:18px auto 0;max-width:360px;font-size:12.5px;line-height:1.5;color:var(--dim)}
+  .fine a{color:var(--peri);text-decoration:underline;text-underline-offset:2px}
+  .idbar{margin-top:12px;font-size:11.5px;color:#6f74a0;letter-spacing:.02em}
+  .lerr{margin:0 auto 16px;max-width:360px;font-size:13px;color:#ffd0d0;background:rgba(150,30,50,.25);border:1px solid rgba(255,90,120,.4);border-radius:10px;padding:10px 14px}
+  .lform{display:flex;flex-direction:column;gap:12px;width:min(360px,86vw);text-align:left;background:rgba(16,16,32,.55);border:1px solid rgba(139,156,255,.22);border-radius:16px;padding:20px;backdrop-filter:blur(8px)}
+  .lform .label{font-size:12px;color:var(--peri);margin-bottom:5px;display:block;letter-spacing:.02em}
+  .lform input{width:100%;background:#0b0b1a;border:1px solid rgba(139,156,255,.25);border-radius:9px;color:var(--ink);padding:10px 12px;font-size:14px;font-family:inherit}
+  .lform input:focus{outline:none;border-color:var(--indigo);box-shadow:0 0 0 3px rgba(91,108,255,.2)}
+  .lform .row{display:flex;gap:10px}
+  .lform button{margin-top:4px;padding:12px;border:none;border-radius:999px;background:var(--pill);color:var(--pill-ink);font-weight:620;font-size:15px;cursor:pointer}
+  @keyframes rbreathe{0%,100%{opacity:.75}50%{opacity:1}}
+  @keyframes rspin{to{transform:rotate(360deg)}}
+  @keyframes rflicker{0%,100%{opacity:1}42%{opacity:.86}46%{opacity:1}70%{opacity:.92}}
+  @keyframes rbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+  @keyframes rsway{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+  @keyframes rfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+  @keyframes rswing{0%,100%{transform:rotate(-1.4deg)}50%{transform:rotate(1.4deg)}}
+  @keyframes rsweep{0%,100%{opacity:.5;transform:translateX(0)}50%{opacity:.95;transform:translateX(-10px)}}
+  @media (max-width:760px){
+    .login h1{font-size:25px}
+    .door{right:-4%;width:150px}
+    .lamp,.lampshade,.lampglow{left:66%}
+    .rope{left:4%;right:52%;bottom:15%}
+    .cast{bottom:13%}
+    .idbar{display:none}
+    .hide-sm{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .door::before,.disco,.lampglow,.bob,.bob2,.sway,.float,.lamp,.beam{animation:none}
+  }
+</style>
+{% endblock %}
 {% block body %}
-<div class="page">
-{{ authnav('Reviewer sign-in', '/admin/login') }}
-<div class="page-main">
-  <div class="card">
-    <div class="card-head">
-      <span class="eyebrow"><span class="d"></span>Cohort {{ cohort }}</span>
-      <h1 class="t">Enroll a ranger</h1>
-      <p class="lead">{% if oauth_enabled %}Sign in with GitHub to join. We verify your account is real before you start.{% else %}You receive a submission token and a queued range on completion.{% endif %}</p>
-    </div>
-    <div class="card-body">
-      {% if error %}<div class="note note-err" style="margin-bottom:16px">{{ error }}</div>{% endif %}
-      {% if oauth_enabled %}
-      <a class="btn btn-primary btn-block" href="/auth/github/login?role=candidate" style="display:flex;align-items:center;justify-content:center;gap:9px">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>
-        Sign in with GitHub
-      </a>
-      <p class="foothint">Requires two-factor authentication and a verified email on your GitHub account. Objective scoring is answer-free; nothing here contains answers.</p>
-      {% else %}
-      <form method="post" action="/enroll" style="display:flex;flex-direction:column;gap:16px">
-        <input type="hidden" name="csrf" value="{{ csrf_token }}">
-        <div class="field">
-          <label class="label">GitHub handle</label>
-          <input class="input mono" name="handle" required placeholder="cloudcwfranck" autocomplete="off">
-        </div>
-        <div class="field">
-          <label class="label">Full name</label>
-          <input class="input" name="name" required placeholder="Franck Kengne">
-        </div>
-        <div class="rowline">
-          <div class="field"><label class="label">Email</label>
-            <input class="input" type="email" name="email" required placeholder="you@qwalora.com"></div>
-          <div class="field"><label class="label">Organization <span class="dim">· optional</span></label>
-            <input class="input" name="org" value="{{ org or '' }}" placeholder="Acme Corp" autocomplete="off"></div>
-        </div>
-        <div class="field"><label class="label">Fork repo <span class="dim">· optional</span></label>
-          <input class="input mono" name="repo" placeholder="qwalora/handle"></div>
-        <input type="hidden" name="cohort" value="{{ cohort }}">
-        <button class="btn btn-primary btn-block">Enroll ranger</button>
-      </form>
-      <p class="foothint">Objective scoring is answer-free and program-side. Nothing here contains the answers.</p>
-      {% endif %}
-    </div>
+<div class="scene" aria-hidden="true">
+  <div class="room"></div>
+  <div class="wall"></div>
+  <div class="beam"></div>
+  <div class="door"></div>
+  <div class="disco"></div>
+  <div class="lamp"></div>
+  <div class="lampshade"></div>
+  <div class="lampglow"></div>
+  <div class="floor"></div>
+  <div class="floorglow"></div>
+  <div class="rope">
+    <svg viewBox="0 0 600 120" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="gold" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="#ffd789"/><stop offset=".5" stop-color="#d79a2e"/><stop offset="1" stop-color="#7a5415"/>
+        </linearGradient>
+        <linearGradient id="velvet" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#6a1030"/><stop offset=".5" stop-color="#b21d4e"/><stop offset="1" stop-color="#6a1030"/>
+        </linearGradient>
+      </defs>
+      <path d="M44,26 C 180,120 420,120 556,26" fill="none" stroke="#3a0a1c" stroke-width="12" stroke-linecap="round"/>
+      <path d="M44,24 C 180,116 420,116 556,24" fill="none" stroke="url(#velvet)" stroke-width="9" stroke-linecap="round"/>
+      <g><rect x="38" y="24" width="12" height="92" rx="5" fill="url(#gold)"/><circle cx="44" cy="20" r="9" fill="url(#gold)"/><rect x="30" y="112" width="28" height="7" rx="3" fill="url(#gold)"/></g>
+      <g><rect x="550" y="24" width="12" height="92" rx="5" fill="url(#gold)"/><circle cx="556" cy="20" r="9" fill="url(#gold)"/><rect x="542" y="112" width="28" height="7" rx="3" fill="url(#gold)"/></g>
+    </svg>
   </div>
+  <div class="cast" id="cast"></div>
 </div>
-{{ authfoot() }}
-</div>
+
+<main class="login">
+  <div class="mark">
+    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l5-5-5-5"/><path d="M12 19h8"/></svg></span>
+    <b>QWALORA <span>RANGER</span></b>
+  </div>
+  <h1>Step up to the line</h1>
+  {% if error %}<div class="lerr">{{ error }}</div>{% endif %}
+  {% if oauth_enabled %}
+  <a class="cta" href="/auth/github/login?role=candidate">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>
+    Continue with GitHub
+  </a>
+  <p class="fine">Qwalora Ranger uses GitHub to verify you are real before you step up. We check for two-factor auth and a verified email. Review our <a href="https://ranger.qwalora.com">Privacy Policy</a>.</p>
+  <p class="idbar">Objective scoring is answer-free. Nothing here contains the answers. Cohort {{ cohort }}.</p>
+  {% else %}
+  <form class="lform" method="post" action="/enroll">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    <div><label class="label">GitHub handle</label><input name="handle" required placeholder="cloudcwfranck" autocomplete="off"></div>
+    <div><label class="label">Full name</label><input name="name" required placeholder="Franck Kengne"></div>
+    <div class="row">
+      <div style="flex:1"><label class="label">Email</label><input type="email" name="email" required placeholder="you@qwalora.com"></div>
+      <div style="flex:1"><label class="label">Org · optional</label><input name="org" value="{{ org or '' }}" placeholder="Acme Corp" autocomplete="off"></div>
+    </div>
+    <input type="hidden" name="cohort" value="{{ cohort }}">
+    <button>Enroll ranger</button>
+  </form>
+  <p class="idbar">Objective scoring is answer-free. Nothing here contains the answers.</p>
+  {% endif %}
+</main>
+
+<script>
+const P = 7;
+function frameCanvas(map, pal){
+  const rows = map.replace(/^\n/,"").split("\n").map(r=>r.replace(/\s+$/,""));
+  while(rows.length && rows[rows.length-1]==="") rows.pop();
+  const h = rows.length, w = Math.max.apply(null, rows.map(r=>r.length));
+  const c = document.createElement("canvas"); c.width=w*P; c.height=h*P;
+  const x = c.getContext("2d"); x.imageSmoothingEnabled=false;
+  for(let j=0;j<h;j++){const row=rows[j];for(let i=0;i<row.length;i++){const col=pal[row[i]]; if(!col)continue; x.fillStyle=col; x.fillRect(i*P,j*P,P,P);}}
+  return c;
+}
+const duckPal={w:"#dfe3f2",D:"#141427",o:"#ffb24a",t:"#5b6cff",k:"#8a6b3a",".":null};
+const duckA="\n....wwww....\n..wwwwwwww..\n.wwwwwwwwww.\n.wwwDwwDwww.\n.wwwwwwwwww.\noowwwwwwwwoo\n.oowwwwwwoo.\n.wwwwwwwwww.\n.wwwwwwwwww.\n..wwttttww..\n...wwwwww...\n...k....k...";
+const duckBlink="\n....wwww....\n..wwwwwwww..\n.wwwwwwwwww.\n.wwwwwwwwww.\n.wwwDDwDDww.\noowwwwwwwwoo\n.oowwwwwwoo.\n.wwwwwwwwww.\n.wwwwwwwwww.\n..wwttttww..\n...wwwwww...\n...k....k...";
+const flamePal={a:"#ff7a1a",y:"#ffd24a",o:"#ff5a1a",D:"#2a1400",g:"#7a2e00",".":null};
+const flameA="\n.....aa.....\n....ayya....\n...ayyyya...\n..ayyyyyya..\n..ayyDyDya..\n.ayyyyyyyya.\n.ayyyggyyya.\n.aoyyyyyyoa.\n..aoyyyyoa..\n...aooooa...\n....aaaa....";
+const flameB="\n....aa......\n...ayya.....\n...ayyya.aa.\n..ayyyyyaya.\n..ayyDyDya..\n.ayyyyyyyya.\n.ayyyggyyya.\n.aoyyyyyyoa.\n..aoyyyyoa..\n...aooooa...\n....aaaa....";
+const sproutPal={l:"#3fcf6a",g:"#57d97a",D:"#0d2a16",t:"#2a6b3f",k:"#1a5a2c",".":null," ":null};
+const sproutA="\n....l.......\n...lll..ll..\n..lllll.ll..\n...lll.lll..\n.....llll...\n....gggg....\n...ggDggDg..\n...gggggggg.\n...ggggttg..\n....gg.gg...\n....k...k...";
+const sproutBlink="\n....l.......\n...lll..ll..\n..lllll.ll..\n...lll.lll..\n.....llll...\n....gggg....\n...ggDggDg..\n...gggggggg.\n...ggggttg..\n....gg.gg...\n....k...k...";
+const orbPal={d:"#171a33",t:"#35e0d0",w:"#2a2f55",".":null};
+const orbA="\n...dddd...\n..dddddd..\n.dddddddd.\n.ddtddtdd.\n.dddddddd.\n.dddddddd.\n.ddwwwwdd.\n..dddddd..\n...d..d...";
+const orbBlink="\n...dddd...\n..dddddd..\n.dddddddd.\n.ddddtddd.\n.dddddddd.\n.dddddddd.\n.ddwwwwdd.\n..dddddd..\n...d..d...";
+const bPal={b:"#0a0a1a",B:"#23214a",s:"#05140f",S:"#0a2018",">":"#35e0d0","_":"#35e0d0",g:"#9af7c9",u:"#15152b",w:"#e8e8f6",t:"#5b6cff",h:"#caa07a",c:"#d8c48a",k:"#0b0b16",".":null};
+const bouncerOn="\n....bbbbbbbb....\n...bBBBBBBBBb...\n...bBsssssSBb...\n...bBs>_g.sBb...\n...bBsssssSBb...\n...bBBBBBBBBb...\n.....u.uu.u.....\n....uuuuuuuu....\n...uuuwttwuuu...\n..huuuwttwuuuc..\n..huuuuwwuuuuc..\n...uuuuuuuuuc...\n...uuu....uuu...\n...uu......uu...\n...kk......kk...";
+const bouncerOff=bouncerOn.replace("...bBs>_g.sBb...","...bBs>.g.sBb...");
+function makeSprite(frames, pal, leftPct, scale, cls, anim){
+  const cast=document.getElementById("cast"); if(!cast) return null;
+  const wrap=document.createElement("div"); wrap.className="sprite "+(cls||""); wrap.style.left=leftPct+"%";
+  const cv=frames.map(function(m){return frameCanvas(m,pal);});
+  const main=cv[0]; const W=(main.width/P)*(P*scale)+"px", H=(main.height/P)*(P*scale)+"px";
+  cv.forEach(function(c){c.style.width=W;c.style.height=H;c.style.position="absolute";c.style.left="0";c.style.bottom="0";c.style.display="none";});
+  const holder=document.createElement("div"); holder.style.position="relative"; holder.style.width=W; holder.style.height=H;
+  cv.forEach(function(c){holder.appendChild(c);}); cv[0].style.display="block";
+  wrap.appendChild(holder);
+  const refl=document.createElement("div"); refl.className="refl";
+  const rc=frameCanvas(frames[0],pal); rc.style.width=W; rc.style.height=H; refl.appendChild(rc); wrap.appendChild(refl);
+  cast.appendChild(wrap);
+  return {cv:cv, anim:anim, show:function(i){cv.forEach(function(c,k){c.style.display=k===i?"block":"none";});}};
+}
+const sprites=[];
+[["duck",[duckA,duckBlink],duckPal,23,0.9,"bob",function(t){return t%26===6?1:0;}],
+ ["flame",[flameA,flameB],flamePal,30,1.0,"bob2",function(t){return t%2;}],
+ ["sprout",[sproutA,sproutBlink],sproutPal,37,0.95,"sway hide-sm",function(t){return t%30===9?1:0;}],
+ ["orb",[orbA,orbBlink],orbPal,44,0.85,"float hide-sm",function(t){return t%22===4?1:0;}],
+ ["bouncer",[bouncerOn,bouncerOff],bPal,63,1.15,"bob2",function(t){return t%2;}]
+].forEach(function(d){var s=makeSprite(d[1],d[2],d[3],d[4],d[5],d[6]); if(s) sprites.push(s);});
+var tick=0;
+setInterval(function(){tick++; sprites.forEach(function(s){s.show(s.anim(tick));});}, 260);
+</script>
 {% endblock %}
