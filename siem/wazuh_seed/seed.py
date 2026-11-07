@@ -45,6 +45,9 @@ DEFAULT_SOURCES = ",".join([
 ])
 SOURCES = [s.strip() for s in os.environ.get("RANGER_SEED_SOURCES", DEFAULT_SOURCES).split(",") if s.strip()]
 HF_SOURCES = [s.strip() for s in os.environ.get("RANGER_SEED_HF", "").split(",") if s.strip()]
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
+CAND_USER = os.environ.get("RANGER_CANDIDATE_USER", "ranger-candidate")
+CAND_PW = os.environ.get("RANGER_CANDIDATE_PW", "")
 
 STATE = {"status": "starting", "loaded": 0, "sources": [], "errors": []}
 
@@ -128,6 +131,38 @@ def ensure_index():
         log("ensure_index:", str(e)[:200])
 
 
+def ensure_candidate_user():
+    """A read-only Wazuh login candidates use to investigate the telemetry (no admin rights)."""
+    if not CAND_PW:
+        log("no RANGER_CANDIDATE_PW set; skipping candidate user")
+        return
+    try:
+        r = requests.put("%s/_plugins/_security/api/internalusers/%s" % (INDEXER_URL, CAND_USER),
+                         auth=(USER, PW), verify=False,
+                         json={"password": CAND_PW, "opendistro_security_roles": ["readall", "kibana_user"],
+                               "attributes": {"ranger": "candidate"}},
+                         headers={"Content-Type": "application/json"}, timeout=30)
+        log("candidate user '%s':" % CAND_USER, r.status_code, str(r.text)[:160])
+    except Exception as e:  # noqa: BLE001
+        log("candidate user error:", str(e)[:200])
+
+
+def ensure_index_pattern():
+    """So the ranger-telemetry data is browsable in the dashboard the moment a candidate opens it."""
+    if not DASHBOARD_URL:
+        log("no DASHBOARD_URL set; skipping index pattern")
+        return
+    try:
+        r = requests.post("%s/api/saved_objects/index-pattern/ranger-telemetry" % DASHBOARD_URL,
+                          auth=(USER, PW), verify=False,
+                          headers={"osd-xsrf": "true", "Content-Type": "application/json"},
+                          json={"attributes": {"title": "ranger-telemetry*", "timeFieldName": "@timestamp"}},
+                          timeout=40)
+        log("index pattern:", r.status_code, str(r.text)[:160])
+    except Exception as e:  # noqa: BLE001
+        log("index pattern error:", str(e)[:200])
+
+
 def wait_indexer():
     for _ in range(60):
         try:
@@ -194,6 +229,8 @@ def seed():
         requests.post("%s/%s/_refresh" % (INDEXER_URL, INDEX), auth=(USER, PW), verify=False, timeout=30)
     except Exception:
         pass
+    ensure_candidate_user()
+    ensure_index_pattern()
     STATE.update(status="done", loaded=total)
     log("SEED COMPLETE: %d events into index '%s' across %d datasets"
         % (total, INDEX, len(STATE["sources"])))
