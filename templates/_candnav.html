@@ -23,6 +23,9 @@
     <div class="nav-group">
       <div class="gl">{% if vm and vm.selected_program %}{{ vm.program_brands[vm.selected_program] }}{% else %}Ranger{% endif %}</div>
       <a class="nav-item {% if active=='dashboard' %}on{% endif %}" href="/me"><span class="l">{{ ic('grid') }}</span><span class="lbl">Dashboard</span></a>
+      {% if vm and vm.selected_program and vm.status == 'active' %}
+      <a class="nav-item {% if active=='foundation' %}on{% endif %}" href="/me/foundation"><span class="l">{{ ic('medal') }}</span><span class="lbl">Foundation</span></a>
+      {% endif %}
       {% if vm and vm.selected_program == 'strata' and vm.status == 'active' %}
       {% if vm.board == 1 %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">SOC workspace</span></a>
       <a class="nav-item {% if active=='incident' %}on{% endif %}" href="/me/workspace/incident"><span class="l">{{ ic('layers') }}</span><span class="lbl">Incident investigation</span></a>{% endif %}

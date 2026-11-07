@@ -4138,6 +4138,22 @@ def create_app():
             db.session.commit()
         return resp
 
+    @app.get("/me/foundation")
+    def candidate_foundation():
+        """The NetAcad foundation track on its own tab, so the dashboard stays metrics-focused."""
+        c = _current_candidate()
+        if not c:
+            if githuboauth.enabled():
+                return redirect(url_for("gh_login"))
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        nav = _cand_nav_vm(c)
+        sel = nav["selected_program"]
+        vm = {**nav, "foundation": (netacad_foundation.build_vm(sel, _foundation_attested(c.id, sel))
+                                    if sel else None)}
+        return render_template("candidate_foundation.html", vm=vm)
+
     @app.post("/me/foundation/attest")
     def candidate_foundation_attest():
         """Toggle a candidate's self-attestation that they completed a NetAcad foundation course.

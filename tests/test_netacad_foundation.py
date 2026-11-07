@@ -35,10 +35,19 @@ def _csrf(client):
         return s.get("csrf") or ""
 
 
+def test_dashboard_shows_compact_foundation_tile(client):
+    _login(client, _mkcand("naf-tile", "strata"))
+    html = client.get("/me").get_data(as_text=True)
+    # the dashboard carries only a compact metric tile linking to the Foundation tab,
+    # not the full course list (that moved off the metrics-focused dashboard)
+    assert 'href="/me/foundation"' in html
+    assert "Foundation" in html
+    assert "self-enroll/m/course-1605348" not in html
+
+
 def test_strata_foundation_card_renders_with_real_links(client):
     _login(client, _mkcand("naf-strata", "strata"))
-    html = client.get("/me").get_data(as_text=True)
-    assert "Cisco NetAcad foundation" in html
+    html = client.get("/me/foundation").get_data(as_text=True)
     assert "Must take" in html
     # verified public self-enroll deep link for the universal entry course
     assert "self-enroll/m/course-1605348" in html
@@ -49,8 +58,7 @@ def test_strata_foundation_card_renders_with_real_links(client):
 
 def test_parallax_foundation_is_security_fundamentals(client):
     _login(client, _mkcand("naf-parallax", "parallax"))
-    html = client.get("/me").get_data(as_text=True)
-    assert "Cisco NetAcad foundation" in html
+    html = client.get("/me/foundation").get_data(as_text=True)
     assert "Cybersecurity Essentials" in html
     assert "self-enroll/m/course-650455" in html
     # PARALLAX foundation is the 2-course fundamentals set, not the full STRATA ladder path
@@ -100,5 +108,5 @@ def test_full_completion_flips_gate(client):
                         data={"program": "parallax", "course": k, "done": "1"},
                         headers={"X-CSRF-Token": tok})
     assert r.get_json()["complete"] is True
-    html = client.get("/me").get_data(as_text=True)
+    html = client.get("/me/foundation").get_data(as_text=True)
     assert "Foundation complete" in html

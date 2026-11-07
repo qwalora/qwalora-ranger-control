@@ -64,68 +64,16 @@
 
         {% if vm.foundation and vm.status == 'active' and not vm.no_access and not vm.rejected %}
         {% set f = vm.foundation %}
-        <div class="card" id="fdn-card" data-program="{{ f.program }}" data-done="{{ f.done }}" data-total="{{ f.total }}">
-          <div class="card-head">
-            <span class="eyebrow"><span class="d"></span>{{ ic('medal','ic ic-sm') }} Cisco NetAcad foundation</span>
-            <span class="pill {% if f.complete %}pill-ok{% else %}pill-amber{% endif %}" style="flex:none">
-              <span class="dot {% if f.complete %}dot-ok{% else %}dot-amber{% endif %}"></span>
-              {% if f.complete %}Foundation complete{% else %}Must take{% endif %} · <span id="fdn-count">{{ f.done }}/{{ f.total }}</span>
-            </span>
-          </div>
-          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-            <p class="muted" style="font-size:12.5px;margin:0">{{ f.intro }} Qwalora partners with {{ f.provider }}: you build your baseline there first. This is required before your {{ f.title.split()[0] }} ladder work counts.</p>
-            <div style="display:flex;flex-direction:column;gap:8px">
-              {% for s in f.steps %}
-              <div class="fdn-step{% if s.done %} is-done{% endif %}" id="fdn-step-{{ s.key }}" style="display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line,#23262d);border-radius:10px;padding:10px 12px">
-                <span class="fdn-num" style="flex:none;width:22px;height:22px;border-radius:6px;border:1px solid var(--violet);color:var(--violet);font:600 12px/22px var(--f);text-align:center">{{ s.n }}</span>
-                <div style="flex:1;min-width:0">
-                  <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
-                    <b style="color:var(--ink);font-size:13px">{{ s.title }}</b>
-                    <span class="muted" style="font-size:11px">{{ s.level }} · ~{{ s.hours }}h</span>
-                  </div>
-                  <div class="muted" style="font-size:11.5px;margin-top:2px"><span style="color:var(--violet)">Maps to:</span> {{ s.maps_to }}</div>
-                  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
-                    <a class="btn btn-ghost btn-sm" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ ic('ext','ic ic-sm') }} {% if s.verified_direct %}Enroll on NetAcad{% else %}Open in NetAcad catalog{% endif %}</a>
-                    <label class="fdn-chk" style="display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);cursor:{% if vm.preview %}default{% else %}pointer{% endif %}">
-                      <input type="checkbox" {% if s.done %}checked{% endif %} {% if vm.preview %}disabled{% endif %}
-                             onchange="fdnAttest(this,'{{ f.program }}','{{ s.key }}')">
-                      <span>I have completed this course</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-              {% endfor %}
+        <a href="/me/foundation" class="card" style="text-decoration:none;display:block">
+          <div class="card-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <span class="pill {% if f.complete %}pill-ok{% else %}pill-amber{% endif %}" style="flex:none"><span class="dot {% if f.complete %}dot-ok{% else %}dot-amber{% endif %}"></span>{{ ic('medal','ic ic-sm') }} Foundation</span>
+            <div style="flex:1;min-width:0">
+              <b style="color:var(--ink);font-size:13px">Cisco NetAcad foundation {% if f.complete %}· complete{% else %}· {{ f.done }}/{{ f.total }}{% endif %}</b>
+              <span class="muted" style="display:block;font-size:12px">{% if f.complete %}Your baseline is done.{% else %}Required before your ladder work counts. Next: {{ f.next_title }}.{% endif %}</span>
             </div>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px" class="muted">
-              <a href="{{ f.catalog_url }}" target="_blank" rel="noopener noreferrer">All courses in the NetAcad cybersecurity catalog</a>
-              <span>·</span><span>Pathway: {{ f.pathway_name }}</span>
-            </div>
+            <span class="btn btn-ghost btn-sm" style="flex:none">{{ ic('arrow','ic ic-sm') }} Open</span>
           </div>
-        </div>
-        <script>
-        function fdnAttest(el, program, course){
-          var card=document.getElementById('fdn-card');
-          var body=new URLSearchParams({program:program,course:course,done:el.checked?'1':'0'});
-          el.disabled=true;
-          fetch('/me/foundation/attest',{method:'POST',credentials:'same-origin',
-            headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-Token':'{{ csrf_token }}'},
-            body:body.toString()})
-          .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
-          .then(function(j){
-            el.disabled=false;
-            document.getElementById('fdn-count').textContent=j.done+'/'+j.total;
-            var step=document.getElementById('fdn-step-'+course);
-            if(step){step.classList.toggle('is-done',el.checked)}
-            var pill=card.querySelector('.card-head .pill');
-            if(pill){
-              pill.classList.toggle('pill-ok',j.complete);pill.classList.toggle('pill-amber',!j.complete);
-              var dot=pill.querySelector('.dot');if(dot){dot.classList.toggle('dot-ok',j.complete);dot.classList.toggle('dot-amber',!j.complete)}
-              pill.childNodes[2].textContent=(j.complete?'Foundation complete':'Must take')+' · ';
-            }
-          })
-          .catch(function(){el.disabled=false;el.checked=!el.checked;});
-        }
-        </script>
+        </a>
         {% endif %}
 
         {% if vm.soc_badge %}
@@ -180,7 +128,7 @@
 
         {% if not vm.applied and not vm.rejected and vm.selected_program == 'strata' %}
         {% if vm.status == 'active' %}
-        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span></div>
+        <details class="card sh-collapse"><summary class="card-head" style="cursor:pointer"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span>{{ ic('chevdown','ic ic-sm') }}</summary>
           <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
             <p class="muted" style="font-size:12.5px;margin:0">STRATA is a staged qualification: you progress from SOC analyst up to the capstone across six boards. You clear a board only by meeting both an objective standard and a reviewed written report. Grading is answer-free and server-side; there are no answers to look up.</p>
             <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:12.5px">
@@ -212,7 +160,7 @@
             </div>
             {% if vm.board_coverage %}<p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>{% endif %}
           </div>
-        </div>
+        </details>
         {% endif %}
 
         {% if vm.notifications %}
@@ -415,7 +363,7 @@
         {% if vm.selected_program == 'parallax' %}
         {% set ov = vm.parallax.overview %}
         {% set stage_label = {'not_started':'Not started','experimenting':'Experimenting','under_review':'Investigation under review','reviewed':'Reviewed'} %}
-        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span></div>
+        <details class="card sh-collapse"><summary class="card-head" style="cursor:pointer"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span>{{ ic('chevdown','ic ic-sm') }}</summary>
           <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
             <p class="muted" style="font-size:12.5px;margin:0">Each board is an independent challenge, graded automatically the moment you submit. No one grades you by hand and no model judges your work: the score is computed from a sealed test and cryptographically signed, so it is deterministic and reproducible.</p>
             <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:12.5px">
@@ -451,7 +399,7 @@
               </div>
             </div>
           </div>
-        </div>
+        </details>
 
         {% endif %}
 
@@ -711,6 +659,9 @@
   .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48}
   .save-status.failed{color:#b4232b} .save-status.unsaved{color:#9a7b1f}
   .cand-body .card{max-width:none}
+  .sh-collapse>summary{list-style:none;display:flex;align-items:center;gap:8px}
+  .sh-collapse>summary::-webkit-details-marker{display:none}
+  .sh-collapse[open]>summary .ic{transform:rotate(180deg)}
   .cand-next{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px}
   .cand-next b{font:600 13px/1.35 var(--f);color:var(--ink)}
 </style>
