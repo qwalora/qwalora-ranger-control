@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Candidate Handbook · Qwalora Ranger</title>
+<meta name="description" content="The authoritative, end-to-end guide to the Qwalora Ranger qualification: how the boards work, what you submit, and how you are graded.">
+<style>
+  :root{
+    --bg:#ffffff;--ink:#14151a;--mut:#51565f;--dim:#878d97;--line:#e7e9ee;--line2:#d7dae1;
+    --sub:#f6f7f9;--light:#fafbfc;--violet:#5b4bd6;--violet-50:#efecfb;--ok:#0f7a48;--ok-bg:#e8f6ee;
+    --amber:#9a6b00;--amber-bg:#fdf4e3;--f:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --m:'SF Mono',ui-monospace,'Roboto Mono',Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --bg:#111318;--ink:#eef0f4;--mut:#aab0bb;--dim:#7e8593;--line:#262a32;--line2:#333843;
+    --sub:#171a20;--light:#15181d;--violet:#9b8cff;--violet-50:#201d3a;--ok:#5fd39a;--ok-bg:#132a1f;
+    --amber:#e3b25a;--amber-bg:#2a2112;
+  }}
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.65 var(--f);-webkit-font-smoothing:antialiased}
+  a{color:var(--violet);text-decoration:none}a:hover{text-decoration:underline}
+  code{font-family:var(--m);font-size:.88em;background:var(--sub);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink)}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:232px 1fr;gap:40px}
+  header.top{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:5}
+  header.top .wrap{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;gap:16px;max-width:1180px}
+  .brand{display:flex;align-items:center;gap:10px;font:800 16px/1 var(--f);letter-spacing:-.3px}
+  .brand .dot{width:11px;height:11px;border-radius:3px;background:var(--violet);display:inline-block}
+  .brand span{color:var(--violet)}
+  .top .meta{font-size:12px;color:var(--dim)}
+  main{padding:34px 0 90px}
+  nav.toc{position:sticky;top:78px;align-self:start;max-height:calc(100vh - 100px);overflow:auto;font-size:13px;padding-right:6px}
+  nav.toc .tl{font:700 10.5px/1 var(--f);letter-spacing:.7px;text-transform:uppercase;color:var(--dim);margin:16px 0 8px}
+  nav.toc a{display:block;color:var(--mut);padding:4px 0;line-height:1.4}
+  nav.toc a:hover{color:var(--ink);text-decoration:none}
+  article{min-width:0;max-width:760px}
+  article h1{font:800 32px/1.15 var(--f);letter-spacing:-.8px;margin:0 0 8px}
+  article .lede{font-size:16.5px;color:var(--mut);line-height:1.6;margin:0 0 10px}
+  article h2{font:700 21px/1.25 var(--f);letter-spacing:-.4px;margin:40px 0 10px;padding-top:12px;scroll-margin-top:84px}
+  article h3{font:700 15.5px/1.3 var(--f);margin:24px 0 6px;scroll-margin-top:84px}
+  article p{margin:0 0 12px}
+  article ul,article ol{margin:0 0 14px;padding-left:22px}
+  article li{margin:5px 0}
+  .eyebrow{display:inline-flex;align-items:center;gap:7px;font:700 11px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--violet);background:var(--violet-50);border-radius:20px;padding:6px 11px;margin-bottom:16px}
+  .card{border:1px solid var(--line);border-radius:14px;background:var(--light);padding:18px 20px;margin:16px 0}
+  .card.tight{padding:14px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kv{display:flex;gap:10px;font-size:13.5px;margin:3px 0}
+  .kv b{color:var(--ink);min-width:118px;font-weight:600}
+  .kv span{color:var(--mut)}
+  .note{border-left:3px solid var(--violet);background:var(--violet-50);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+  .note.warn{border-left-color:var(--amber);background:var(--amber-bg)}
+  .note .h{font-weight:700;color:var(--ink);display:block;margin-bottom:3px}
+  .board{border:1px solid var(--line);border-radius:14px;margin:14px 0;overflow:hidden}
+  .board .bh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--sub)}
+  .board .bn{font:800 13px/1 var(--f);color:#fff;background:var(--violet);border-radius:7px;padding:6px 9px;letter-spacing:.3px}
+  .board .bt{font:700 16px/1.2 var(--f);color:var(--ink)}
+  .board .br{font:600 12px/1 var(--f);color:var(--violet);background:var(--violet-50);border-radius:20px;padding:5px 10px}
+  .board .bb{padding:14px 18px}
+  .board .bb .label{font:700 10px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);display:block;margin:12px 0 3px}
+  .board .bb .label:first-child{margin-top:0}
+  .pill{display:inline-flex;align-items:center;gap:6px;font:600 11.5px/1 var(--f);border-radius:20px;padding:5px 10px;border:1px solid var(--line2);color:var(--mut)}
+  .pill.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+  .pill.lock{background:var(--amber-bg);color:var(--amber);border-color:transparent}
+  table.ref{width:100%;border-collapse:collapse;font-size:13.5px;margin:14px 0}
+  table.ref th{text-align:left;font:700 10.5px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line2)}
+  table.ref td{padding:9px 10px;border-bottom:1px solid var(--line);color:var(--mut);vertical-align:top}
+  table.ref td b{color:var(--ink);font-weight:600}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
+  .steps li{counter-increment:s;position:relative;padding:0 0 14px 38px;margin:0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:-2px;width:26px;height:26px;border-radius:8px;background:var(--violet-50);color:var(--violet);font:700 13px/26px var(--f);text-align:center}
+  .steps li b{color:var(--ink)}
+  footer{border-top:1px solid var(--line);color:var(--dim);font-size:12.5px;padding:22px 0;margin-top:50px}
+  @media (max-width:880px){.wrap{grid-template-columns:1fr;gap:0}nav.toc{display:none}.grid2{grid-template-columns:1fr}article{max-width:none}}
+  @media print{header.top{position:static}nav.toc{display:none}.wrap{display:block}article{max-width:none}a{color:var(--ink)}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>QWALORA <span>Ranger</span></div>
+    <div class="meta">Candidate Handbook</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <div class="tl">Start here</div>
+    <a href="#what">What Ranger is</a>
+    <a href="#how">How assessment works</a>
+    <a href="#start">Getting started</a>
+    <div class="tl">STRATA pathway</div>
+    <a href="#strata">The six boards</a>
+    <a href="#console">The SOC console</a>
+    <a href="#workspace">The board workspace</a>
+    <a href="#b1">Board 1 · Analyst</a>
+    <a href="#b2">Board 2 · Hunter</a>
+    <a href="#b3">Board 3 · Detection</a>
+    <a href="#b4">Board 4 · Incident</a>
+    <a href="#b56">Boards 5–6 · Range</a>
+    <div class="tl">PARALLAX pathway</div>
+    <a href="#parallax">AI security</a>
+    <div class="tl">Clearing &amp; conduct</div>
+    <a href="#clear">Clearing a board</a>
+    <a href="#cert">Your certificate</a>
+    <a href="#rules">Integrity rules</a>
+  </nav>
+
+  <main>
+  <article>
+    <div class="eyebrow"><span class="dot" style="width:7px;height:7px;border-radius:2px;background:var(--violet);display:inline-block"></span>Candidate Handbook</div>
+    <h1>The Qwalora Ranger qualification</h1>
+    <p class="lede">Ranger is an independent, hands-on technical qualification. You do real work in real tooling against a scenario that is unique to you, and every result is graded automatically, signed, and publicly verifiable. This handbook describes exactly what the platform asks of you and how it is scored — nothing more, nothing less.</p>
+
+    <h2 id="what">What Ranger is</h2>
+    <p>There are two independent pathways. You can hold either or both.</p>
+    <div class="grid2">
+      <div class="card tight"><b>STRATA</b> — the cyber-defense ladder. Six boards that run from blue-team operations (triage, hunting, detection, incident response) to offensive range work. You clear boards in sequence; clearing all six makes you a certified Qwalora Ranger.</div>
+      <div class="card tight"><b>PARALLAX</b> — AI security. Submission-based boards where you harden and attack AI systems (prompt-injection defense, API authorization, secure-release gates, detection, architecture review) and are scored on the artifact you submit.</div>
+    </div>
+    <p>Both pathways share the same assessment contract: your scenario is seeded uniquely to you, grading is deterministic and reproducible, and the answer key never leaves the server.</p>
+
+    <h2 id="how">How assessment works</h2>
+    <p>Five principles hold across every board. Read these once; they explain why the platform behaves the way it does.</p>
+    <div class="card">
+      <div class="kv"><b>Your own scenario</b><span>Every board's data is generated from a seed tied to you and your attempt. No two candidates face the same instance, and you only ever see your own.</span></div>
+      <div class="kv"><b>Answer-free</b><span>You are given the problem, never the solution. The grading key is derived on the server and is never sent to your browser or the console.</span></div>
+      <div class="kv"><b>Deterministic &amp; signed</b><span>Scoring is reproducible, not a matter of opinion. Each objective result and each board clearance is cryptographically signed, so it can be verified by anyone later.</span></div>
+      <div class="kv"><b>Isolated</b><span>In the console you can read only your own scenario index; every other index is denied by the engine. This is enforced, not merely by convention.</span></div>
+      <div class="kv"><b>Resubmittable</b><span>You can submit a board as many times as you need; your scenario and attempt are preserved, and your best result counts. Grading gives you feedback to iterate on, never the answer.</span></div>
+    </div>
+    <p>The bar to pass a board's objective is <b>{{ pass_bar|int }}%</b>. Clearing a board takes two things — a passing objective and an approved written report — described under <a href="#clear">Clearing a board</a>.</p>
+
+    <h2 id="start">Getting started</h2>
+    <ol class="steps">
+      <li><b>Enroll.</b> You sign in with GitHub and are admitted to a pathway and cohort. Your dashboard at <code>/me</code> is your home: it shows your current board, your scores, what you have submitted, and your next action.</li>
+      <li><b>Lay the foundation.</b> The <b>Foundation</b> tab lists the Cisco Networking Academy (NetAcad) courses aligned to your pathway. Complete them and mark them attested — this is your grounding before the boards, and it is tracked on your profile.</li>
+      <li><b>Open your current board.</b> STRATA candidates work the boards in order from the dashboard; PARALLAX candidates work from the research console. Each board tells you the mission, the environment to launch, and what to submit.</li>
+    </ol>
+
+    <h2 id="strata">STRATA · the six boards</h2>
+    <p>You progress one board at a time. Each board assigns you a role and a codename; you investigate in a live environment and submit your work for grading.</p>
+    <table class="ref">
+      <thead><tr><th>Board</th><th>Role</th><th>What you do</th><th>Environment</th></tr></thead>
+      <tbody>
+        <tr><td><b>1 · Sentinel</b></td><td>SOC Analyst</td><td>Triage an alert queue: call each alert, set severity, attribute technique</td><td>SOC console</td></tr>
+        <tr><td><b>2 · Tracker</b></td><td>Threat Hunter</td><td>Hunt an intrusion across an enterprise SIEM</td><td>SOC console</td></tr>
+        <tr><td><b>3 · Warden</b></td><td>Detection Engineer</td><td>Author detection rules that catch the threats and stay quiet on benign activity</td><td>SOC console + rule builder</td></tr>
+        <tr><td><b>4 · Reclaimer</b></td><td>Incident Responder</td><td>Reconstruct a breach: scope it, build the timeline, find the persistence</td><td>SOC console + IR report</td></tr>
+        <tr><td><b>5 · Raider</b></td><td>Red Teamer</td><td>Compromise an isolated Active Directory range</td><td>Live range (VPN)</td></tr>
+        <tr><td><b>6 · Vanguard</b></td><td>Capstone</td><td>A full-scope capstone engagement on an isolated range</td><td>Live range (VPN)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="console">The SOC console (boards 1–4)</h2>
+    <p>Boards 1 through 4 investigate in a live OpenSearch Dashboards console. From your board, choose <b>Open the SOC console</b>. One click provisions your own private copy of the scenario and opens it in <b>Discover</b>.</p>
+    <ul>
+      <li>You land on <b>your own data</b>. The index you see belongs only to you; the console shows every event in your scenario with no time-range to fight — your whole dataset is in front of you.</li>
+      <li>Other candidates' data is <b>not reachable</b>. Any attempt to read another index is refused by the engine, so there is nothing to find by wandering.</li>
+      <li>Investigate like an analyst: search, filter on fields, sort by time, expand records. Fields such as <code>@timestamp</code>, <code>host</code>, <code>user</code>, <code>command</code> and <code>signal</code> are there to pivot on.</li>
+    </ul>
+    <p>Investigation happens in the console; <b>recording your findings happens in the board workspace</b>, which is where grading occurs.</p>
+
+    <h2 id="workspace">The board workspace</h2>
+    <p>Each of boards 1, 3 and 4 has a workspace reached from your dashboard (and the sidebar). It loads the same answer-free scenario you investigate in the console and gives you the right form to submit. Your inputs autosave as a draft, so you can leave and come back. When you submit, the server grades you instantly and shows a breakdown — then you can refine and resubmit.</p>
+
+    <div class="board" id="b1">
+      <div class="bh"><span class="bn">BOARD 1</span><span class="bt">SOC Analyst — alert triage</span><span class="br">Sentinel</span></div>
+      <div class="bb">
+        <span class="label">Your task</span>
+        <p>A queue of alerts has landed — routine noise mixed with a real intrusion. Investigate in the console, then in the <b>SOC workspace</b> adjudicate each alert: call it a true or false positive, assign a severity, and for true positives attribute the ATT&amp;CK technique and record the indicators that justify the call.</p>
+        <span class="label">How it is graded</span>
+        <p>Your verdicts, severities and technique attributions are scored against the hidden ground truth. Pass at {{ pass_bar|int }}%.</p>
+      </div>
+    </div>
+
+    <div class="board" id="b2">
+      <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise hunt</span><span class="br">Tracker</span><span class="pill lock">cohort-activated</span></div>
+      <div class="bb">
+        <span class="label">Your task</span>
+        <p>Hunt a live intrusion across an enterprise-scale SIEM in the SOC console: form hypotheses, pivot across hosts and accounts, and evidence the campaign end to end.</p>
+        <span class="label">Good to know</span>
+        <p>Board 2 qualification is governed and is activated per cohort. Your dashboard will show when the board is open to you and exactly what to submit; until then, you can explore the environment but the board is not yet gradable.</p>
+      </div>
+    </div>
+
+    <div class="board" id="b3">
+      <div class="bh"><span class="bn">BOARD 3</span><span class="bt">Detection Engineer</span><span class="br">Warden</span></div>
+      <div class="bb">
+        <span class="label">Your task</span>
+        <p>You are given threat intel — labeled malicious behaviors — alongside benign baseline activity. In the <b>Detection workspace</b>, author detection rules that catch those behaviors on <i>unseen variants</i> while staying quiet on benign events. The builder lets you add a rule, then one or more conditions (a field, a match type — is / contains / starts with / ends with — and value(s)); a rule fires when all of its conditions match. An advanced JSON mode is available if you prefer to write the ruleset directly.</p>
+        <span class="label">How it is graded</span>
+        <p>Your rules run against a fresh holdout. Your score is the F1 of per-technique recall (every technique must be covered) and benign precision (false positives cost you). The feedback shows coverage, false positives, and how each rule fired — never the holdout itself. Pass at {{ pass_bar|int }}%.</p>
+      </div>
+    </div>
+
+    <div class="board" id="b4">
+      <div class="bh"><span class="bn">BOARD 4</span><span class="bt">Incident Responder / Forensics</span><span class="br">Reclaimer</span></div>
+      <div class="bb">
+        <span class="label">Your task</span>
+        <p>A breach has already happened. You are handed multi-host forensic evidence woven through benign noise. In the <b>IR workspace</b>, produce the incident report: name patient zero and the initial-access vector, scope the affected hosts and accounts, reconstruct the kill-chain timeline in order, and flag the persistence to remediate. The evidence table feeds the report — add events to your timeline and persistence directly from it.</p>
+        <span class="label">How it is graded</span>
+        <p>Each section is scored against the incident ground truth, with the timeline weighted most (both membership and correct ordering). Feedback tells you which sections are right. Pass at {{ pass_bar|int }}%.</p>
+      </div>
+    </div>
+
+    <div class="board" id="b56">
+      <div class="bh"><span class="bn">BOARDS 5–6</span><span class="bt">Red Team &amp; Capstone</span><span class="br">Raider · Vanguard</span></div>
+      <div class="bb">
+        <span class="label">Your task</span>
+        <p>The final boards move from the console to a live, <b>isolated</b> attack range — a self-contained Active Directory estate built for you. You start the range from your dashboard and connect over a private VPN; your range is yours alone and is torn down when you clear the board. Board 5 is a scoped red-team engagement; board 6 is the full capstone.</p>
+        <span class="label">How it is graded</span>
+        <p>Range work is evidenced and attested: the clearance records a signed attestation that your objectives were met on a real, governed range. Your dashboard walks you through starting the lab, connecting, and submitting.</p>
+      </div>
+    </div>
+
+    <h2 id="parallax">PARALLAX · AI security</h2>
+    <p>PARALLAX is submission-based. Instead of a live console, you work in a repository and submit an artifact; the platform runs it against a sealed, per-candidate fixture and scores it deterministically. Your artifact is the system under test — your score is a direct function of your work, and a near-empty submission is rejected before it is ever graded.</p>
+    <table class="ref">
+      <thead><tr><th>Board</th><th>What you harden / build</th><th>What you submit</th></tr></thead>
+      <tbody>
+        <tr><td><b>PX-D1</b></td><td>Prompt-injection defense</td><td>A declarative defense (system/developer prompts, input &amp; output guards) for a RAG assistant</td></tr>
+        <tr><td><b>PX-D2</b></td><td>Prompt-injection defense (code)</td><td>A sandboxed defense implementation</td></tr>
+        <tr><td><b>PX-A1</b></td><td>API authorization</td><td>Authorization logic enforced against an abuse suite</td></tr>
+        <tr><td><b>PX-S1</b></td><td>Secure-release gates</td><td>Release-gate checks that must pass real and catch planted failures</td></tr>
+        <tr><td><b>PX-DE1</b></td><td>Detection engineering</td><td>Detections scored against a labeled corpus</td></tr>
+        <tr><td><b>PX-AR1</b></td><td>Secure architecture review</td><td>A review that must find the seeded weaknesses</td></tr>
+        <tr><td><b>PX-CAP</b></td><td>Capstone</td><td>All components, each of which must pass</td></tr>
+      </tbody>
+    </table>
+    <p>You submit from the research console with a submit checklist; the grader measures your artifact, signs the result, and records it. You can resubmit to improve — each attempt is independently measured and signed, and your best attempt counts. Every board pass is a signed, verifiable record.</p>
+    <div class="note"><span class="h">On PARALLAX qualification</span>Each board you pass is recorded and verifiable. A single pathway-level PARALLAX credential is governed and is being rolled out in a later phase; your per-board passes stand on their own in the meantime.</div>
+
+    <h2 id="clear">Clearing a board</h2>
+    <p>Passing a board's objective is necessary but not sufficient. Clearing a board — and advancing — takes <b>two channels</b>:</p>
+    <ol>
+      <li><b>The objective.</b> Your machine-graded score for the board, which must reach {{ pass_bar|int }}%. This is deterministic and signed.</li>
+      <li><b>The report.</b> A written account of your work, reviewed and approved by an assessor. This is the human-adjudication half of the qualification: it is how Ranger stays credible rather than a score you can brute-force.</li>
+    </ol>
+    <p>When both are in hand, the board is marked cleared — a signed clearance is recorded, you earn the board's badge, and you advance to the next board automatically. You will see your objective pass immediately; the report approval follows review.</p>
+
+    <h2 id="cert">Your certificate</h2>
+    <p>Clearing all six STRATA boards makes you a <b>Qwalora Ranger, Certified</b>. You receive the terminal certified badge and a public, signed certificate with its own verification page and a human-readable certificate id. Anyone — an employer, a peer — can verify it independently, because the clearance behind it is cryptographically signed and reproducible. That verifiability is the point: your qualification is something others can check, not just a claim.</p>
+
+    <h2 id="rules">Integrity rules</h2>
+    <p>The platform is built so that the only way through is to do the work. A few things follow from that, and are worth stating plainly:</p>
+    <ul>
+      <li><b>Your scenario is yours.</b> Do not attempt to reach another candidate's data — it is denied by the engine, and your own work is all you are graded on.</li>
+      <li><b>The key is not available.</b> Grading runs on the server; the answer is never sent to you. There is no key to find in the console, the workspace, or the page.</li>
+      <li><b>Resubmit freely.</b> Iterate using the feedback. Attempts are preserved and your best result counts; there is no penalty for trying again.</li>
+      <li><b>The report matters.</b> A high objective score does not clear a board on its own — your written report must stand up to review. Explain your reasoning honestly.</li>
+    </ul>
+    <p>Every grade and clearance is signed, so your record is yours and is verifiable. Do good work, and it will show.</p>
+
+    <footer>
+      Qwalora Ranger — Candidate Handbook. This document describes the live platform and is the authoritative guide to what is asked and how it is graded. Questions go through your cohort's support channel.
+    </footer>
+  </article>
+  </main>
+</div>
+</body>
+</html>

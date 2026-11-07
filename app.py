@@ -3612,6 +3612,14 @@ def create_app():
               "count": len(rows)}
         return render_template("resources_public.html", vm=vm)
 
+    @app.get("/handbook")
+    def candidate_handbook():
+        """The candidate handbook: the authoritative, end-to-end guide to the Ranger
+        qualification (both pathways), describing exactly what the platform asks and
+        how it is graded. Self-contained and public so it serves the candidate nav and
+        the public site alike."""
+        return render_template("handbook.html", pass_bar=P.PASS_BAR, last_board=P.LAST_BOARD)
+
     @app.get("/resources.json")
     def resources_json():
         """Public JSON API for the resource library, for the public site to

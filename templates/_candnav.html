@@ -27,8 +27,8 @@
       <a class="nav-item {% if active=='foundation' %}on{% endif %}" href="/me/foundation"><span class="l">{{ ic('medal') }}</span><span class="lbl">Foundation</span></a>
       {% endif %}
       {% if vm and vm.selected_program == 'strata' and vm.status == 'active' %}
-      {% if vm.board == 1 %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">SOC workspace</span></a>
-      <a class="nav-item {% if active=='incident' %}on{% endif %}" href="/me/workspace/incident"><span class="l">{{ ic('layers') }}</span><span class="lbl">Incident investigation</span></a>{% endif %}
+      {% if vm.board in [1, 3, 4] %}<a class="nav-item {% if active=='workspace' %}on{% endif %}" href="/me/workspace"><span class="l">{{ ic('activity') }}</span><span class="lbl">{{ {1: 'SOC workspace', 3: 'Detection workspace', 4: 'IR workspace'}[vm.board] }}</span></a>{% endif %}
+      {% if vm.board == 1 %}<a class="nav-item {% if active=='incident' %}on{% endif %}" href="/me/workspace/incident"><span class="l">{{ ic('layers') }}</span><span class="lbl">Incident investigation</span></a>{% endif %}
       <a class="nav-item {% if active=='mission' %}on{% endif %}" href="/me/mission"><span class="l">{{ ic('flag') }}</span><span class="lbl">Mission brief</span></a>
       {% elif vm and vm.selected_program == 'parallax' and vm.status == 'active' %}
       <a class="nav-item {% if active=='research' %}on{% endif %}" href="/parallax/workspace"><span class="l">{{ ic('cpu') }}</span><span class="lbl">Research console</span></a>
@@ -40,7 +40,7 @@
     <div class="nav-group">
       <div class="gl">Account</div>
       <a class="nav-item {% if active=='account' %}on{% endif %}" href="/account"><span class="l">{{ ic('user') }}</span><span class="lbl">Program access</span></a>
-      <a class="nav-item" href="https://ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf" target="_blank" rel="noopener"><span class="l">{{ ic('help') }}</span><span class="lbl">Handbook</span></a>
+      <a class="nav-item {% if active=='handbook' %}on{% endif %}" href="/handbook" target="_blank" rel="noopener"><span class="l">{{ ic('help') }}</span><span class="lbl">Handbook</span></a>
     </div>
   </div>
 
