@@ -134,8 +134,8 @@
 
     <h2 id="start">Getting started</h2>
     <ol class="steps">
-      <li><b>Enroll.</b> You sign in with GitHub and are admitted to a pathway and cohort. Your dashboard at <code>/me</code> is your home: it shows your current board, your scores, what you have submitted, and your next action.</li>
-      <li><b>Lay the foundation.</b> The <b>Foundation</b> tab lists the Cisco Networking Academy (NetAcad) courses aligned to your pathway. Complete them and mark them attested — this is your grounding before the boards, and it is tracked on your profile.</li>
+      <li><b>Enroll.</b> You sign in with GitHub. For integrity, your GitHub account must have a verified email, two-factor authentication enabled, and be reasonably established. Your application starts as <b>pending</b>; an assessor admits you to a pathway and cohort, which opens board 1. Your dashboard at <code>/me</code> is your home: current board, scores, what you have submitted, and a single clear next action.</li>
+      <li><b>Lay the foundation.</b> The <b>Foundation</b> tab lists the Cisco Networking Academy (NetAcad) courses aligned to your pathway (a Junior Cybersecurity Analyst path for STRATA; security fundamentals for PARALLAX). Complete them and mark each attested — this is the required grounding before your ladder work, tracked on your profile.</li>
       <li><b>Open your current board.</b> STRATA candidates work the boards in order from the dashboard; PARALLAX candidates work from the research console. Each board tells you the mission, the environment to launch, and what to submit.</li>
     </ol>
 
@@ -179,9 +179,8 @@
       <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise hunt</span><span class="br">Tracker</span><span class="pill lock">cohort-activated</span></div>
       <div class="bb">
         <span class="label">Your task</span>
-        <p>Hunt a live intrusion across an enterprise-scale SIEM in the SOC console: form hypotheses, pivot across hosts and accounts, and evidence the campaign end to end.</p>
-        <span class="label">Good to know</span>
-        <p>Board 2 qualification is governed and is activated per cohort. Your dashboard will show when the board is open to you and exactly what to submit; until then, you can explore the environment but the board is not yet gradable.</p>
+        <p>Hunt a live intrusion across an enterprise-scale SIEM and build an evidence-backed case: form hypotheses, pivot across hosts and accounts, and cite the specific events that prove the campaign. Every citation you make is checked against your own authorized index for existence and scope — the case is graded on real, reproducible evidence, and once submitted it is locked and signed.</p>
+        <div class="note warn"><span class="h">Status: governed, cohort-activated</span>Board 2 qualification is governed and activated per cohort. On a given cohort the case workspace and clearing may not yet be open; your dashboard tells you when the board is gradable and exactly what to submit. Do not assume board 2 clears automatically — it is a deliberate, governed gate.</div>
       </div>
     </div>
 
@@ -209,14 +208,13 @@
       <div class="bh"><span class="bn">BOARDS 5–6</span><span class="bt">Red Team &amp; Capstone</span><span class="br">Raider · Vanguard</span></div>
       <div class="bb">
         <span class="label">Your task</span>
-        <p>The final boards move from the console to a live, <b>isolated</b> attack range — a self-contained Active Directory estate built for you. You start the range from your dashboard and connect over a private VPN; your range is yours alone and is torn down when you clear the board. Board 5 is a scoped red-team engagement; board 6 is the full capstone.</p>
-        <span class="label">How it is graded</span>
-        <p>Range work is evidenced and attested: the clearance records a signed attestation that your objectives were met on a real, governed range. Your dashboard walks you through starting the lab, connecting, and submitting.</p>
+        <p>The final boards move from the console to a live, <b>isolated</b> attack range — a self-contained Active Directory estate built for you alone, started from your dashboard and reached over a private VPN. Board 5 is a scoped red-team engagement; board 6 is the full capstone. Your work is evidenced and cleared by a signed attestation that your objectives were met on a real, governed range.</p>
+        <div class="note warn"><span class="h">Status: range access is being brought online</span>Live range provisioning is in activation. Until it is enabled for your cohort, boards 5 and 6 show <b>"Live range access is not yet available"</b> and cannot yet be cleared — the engine credits a range only when it can independently verify a real, governed deployment, and it fails closed until then. Your mission brief and dashboard will tell you the moment your range is ready.</div>
       </div>
     </div>
 
     <h2 id="parallax">PARALLAX · AI security</h2>
-    <p>PARALLAX is submission-based. Instead of a live console, you work in a repository and submit an artifact; the platform runs it against a sealed, per-candidate fixture and scores it deterministically. Your artifact is the system under test — your score is a direct function of your work, and a near-empty submission is rejected before it is ever graded.</p>
+    <p>PARALLAX is submission-based. You work in a platform-owned GitHub repository (it never holds any credentials), commit your artifact plus a <code>writeup.md</code>, tick the board's submit checklist, and submit from your dashboard. The platform snapshots your exact commit, validates it, signs a manifest binding that commit, and grades it against a sealed, per-candidate fixture in an isolated low-privilege grader. Your artifact is the system under test — your score is a direct function of your work, and a near-empty submission is rejected before it is ever graded. Separately, the <b>Research console</b> is your AI-security workbench for running benign and adversarial trials and building the investigations behind your submissions.</p>
     <table class="ref">
       <thead><tr><th>Board</th><th>What you harden / build</th><th>What you submit</th></tr></thead>
       <tbody>
@@ -229,8 +227,8 @@
         <tr><td><b>PX-CAP</b></td><td>Capstone</td><td>All components, each of which must pass</td></tr>
       </tbody>
     </table>
-    <p>You submit from the research console with a submit checklist; the grader measures your artifact, signs the result, and records it. You can resubmit to improve — each attempt is independently measured and signed, and your best attempt counts. Every board pass is a signed, verifiable record.</p>
-    <div class="note"><span class="h">On PARALLAX qualification</span>Each board you pass is recorded and verifiable. A single pathway-level PARALLAX credential is governed and is being rolled out in a later phase; your per-board passes stand on their own in the meantime.</div>
+    <p>PARALLAX boards pass at a per-board bar of <b>75%</b>. Most are graded <b>deterministically with no model in the loop</b> (API authorization, release gates, detection, architecture, capstone); the prompt-injection boards add a server-side behavioral measurement with a model judge. You can resubmit as often as you like — each attempt is independently measured and signed, an unchanged commit is a no-op, and your best attempt counts. Every board pass is a signed, verifiable record you can share.</p>
+    <div class="note"><span class="h">On PARALLAX qualification</span>Each board you pass is recorded and verifiable on its own. A single pathway-level PARALLAX credential is governed and is being rolled out in a later phase. Which boards are open to you depends on your cohort's configuration — your dashboard shows the ones available to you.</div>
 
     <h2 id="clear">Clearing a board</h2>
     <p>Passing a board's objective is necessary but not sufficient. Clearing a board — and advancing — takes <b>two channels</b>:</p>
@@ -241,7 +239,7 @@
     <p>When both are in hand, the board is marked cleared — a signed clearance is recorded, you earn the board's badge, and you advance to the next board automatically. You will see your objective pass immediately; the report approval follows review.</p>
 
     <h2 id="cert">Your certificate</h2>
-    <p>Clearing all six STRATA boards makes you a <b>Qwalora Ranger, Certified</b>. You receive the terminal certified badge and a public, signed certificate with its own verification page and a human-readable certificate id. Anyone — an employer, a peer — can verify it independently, because the clearance behind it is cryptographically signed and reproducible. That verifiability is the point: your qualification is something others can check, not just a claim.</p>
+    <p>Clearing all six STRATA boards makes you a <b>Qwalora Ranger, Certified</b>. You earn the terminal certified badge and a public, signed certificate with a human-readable id in the form <code>QR-XXXX-XXXX</code>. Anyone can verify it with no account at <code>/verify/&lt;your-handle&gt;</code> (or by certificate id at <code>/verify</code>): the page lists your badges and board clearances and checks each signature independently against the platform's public key. You can share your verification link, your certificate page, and your per-board rank badges (Sentinel through Vanguard). That verifiability is the point — your qualification is something others can check, not just a claim.</p>
 
     <h2 id="rules">Integrity rules</h2>
     <p>The platform is built so that the only way through is to do the work. A few things follow from that, and are worth stating plainly:</p>
