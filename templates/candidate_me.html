@@ -55,12 +55,25 @@
 
       <div class="cand-body">
 
+        {% if vm.status == 'active' and not vm.no_access %}
+        <div style="margin-bottom:2px">
+          <div style="font:650 21px/1.2 var(--f);color:var(--ink)">Welcome{% if vm.name %}, {{ vm.name.split()[0] }}{% endif %}.</div>
+          <div class="muted" style="font-size:13px;margin-top:3px">{% if vm.selected_program == 'parallax' %}Pick a board below, provision its workspace, do the work in your repo, then submit. The steps are in "Start here".{% else %}Here is where you stand and the single next thing to do.{% endif %}</div>
+        </div>
+        {% endif %}
+
         {% if vm.applied %}
         <div class="verify-banner vb-warn">{{ ic('clock','ic') }}
           <div><b>Application pending review</b>
             <span>An admin reviews each applicant before a seat and environment are granted. You will be notified by email when it is decided. Nothing is provisioned yet.</span></div>
         </div>
-        {% elif vm.rejected %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>While you wait</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:10px;font-size:12.5px">
+            <p class="muted" style="margin:0">Qwalora Ranger is an independent technical qualification. Once you are approved, your dashboard opens your assigned board with its brief, a workspace, and a clear path to submit. Nothing you do here is graded until you submit.</p>
+            <p class="muted" style="margin:0">Make sure your GitHub account keeps two-factor authentication on and a verified email, which the identity bar checks at sign-in. The <a href="https://ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf">candidate handbook</a> explains the program and how boards are graded.</p>
+          </div>
+        </div>{% endif %}
+        {% if vm.rejected %}
         <div class="verify-banner vb-warn">{{ ic('shield','ic') }}
           <div><b>Not accepted for this cohort</b>
             <span>Thank you for applying. Your application was not accepted this time. You're welcome to apply again for a future cohort.</span></div>
@@ -314,6 +327,20 @@
         {% if vm.selected_program == 'parallax' %}
         {% set ov = vm.parallax.overview %}
         {% set stage_label = {'not_started':'Not started','experimenting':'Experimenting','under_review':'Investigation under review','reviewed':'Reviewed'} %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+            <p class="muted" style="font-size:12.5px;margin:0">Each board is an independent challenge, graded automatically the moment you submit. No one grades you by hand and no model judges your work: the score is computed from a sealed test and cryptographically signed, so it is deterministic and reproducible.</p>
+            <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:12.5px">
+              <li><b style="color:var(--ink)">Pick a board</b> in the submission card below. Each one shows its task, its pass bar, and exactly what to submit.</li>
+              <li><b style="color:var(--ink)">Provision your workspace.</b> This creates a private GitHub repo for you, seeded with the brief, a starter file to complete, and a writeup template.</li>
+              <li><b style="color:var(--ink)">Do the work in that repo.</b> Open it on GitHub or clone it, complete the code file (for the SOC board, investigate the live Wazuh console first), write your writeup, then commit and push.</li>
+              <li><b style="color:var(--ink)">Submit for grading.</b> Come back here, tick the required checklist items, and click Submit. The grader runs your code against a sealed test and signs the result.</li>
+              <li><b style="color:var(--ink)">Read your score.</b> You will see your score against the pass bar, pass or fail, and specific feedback.</li>
+            </ol>
+            <div style="border-left:2px solid var(--violet);padding:6px 0 6px 10px;font-size:12.5px"><b style="color:var(--ink)">When do I submit?</b> <span class="muted">As soon as you have pushed your completed files and ticked the required items. Resubmitting is free: push improvements and submit again, and your best attempt counts.</span></div>
+          </div>
+        </div>
+
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your assignment</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
             <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
