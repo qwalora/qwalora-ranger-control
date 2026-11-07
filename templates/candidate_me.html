@@ -98,6 +98,8 @@
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
               {% if vm.status == 'graduated' %}
               <span class="pill pill-ok"><span class="dot dot-ok"></span>Graduated · certified</span>
+              <a class="btn btn-sm" href="/verify/{{ vm.handle }}" style="margin-left:auto">{{ ic('medal','ic ic-sm') }} View your certificate</a>
+              <a class="btn btn-sm" href="/verify/{{ vm.handle }}">{{ ic('shield','ic ic-sm') }} Share verification link</a>
               {% else %}
               <b style="font:600 15px/1 var(--f)">Board {{ vm.board }}</b><span class="muted">{{ vm.role_title }}</span>
               <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
@@ -165,17 +167,21 @@
                 {% if vm.preview %}
                 {% if vm.board == 1 %}<span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</span>
                 <span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('layers','ic ic-sm') }} Incident investigation</span>{% endif %}
+                {% if vm.board == 2 %}<span class="btn btn-primary" style="opacity:.5;pointer-events:none">{{ ic('layers','ic ic-sm') }} Open your assigned case</span>{% endif %}
                 {% if vm.tier == 'isolated' and vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('server','ic ic-sm') }} Start lab</span>{% endif %}
                 {% if vm.has_wg %}<span class="btn btn-outline" style="opacity:.5;pointer-events:none">{{ ic('key','ic ic-sm') }} Download WireGuard</span>{% endif %}
                 {% else %}
                 {% if vm.board == 1 %}<a class="btn btn-primary" href="/me/workspace">{{ ic('activity','ic ic-sm') }} Launch SOC workspace</a>
                 <a class="btn btn-outline" href="/me/workspace/incident">{{ ic('layers','ic ic-sm') }} Incident investigation</a>{% endif %}
+                {% if vm.board == 2 %}<a class="btn btn-primary" href="/case">{{ ic('layers','ic ic-sm') }} Open your assigned case</a>{% endif %}
                 {% if vm.tier == 'isolated' and vm.range_status in ('none','configured','failed','destroyed','queued_slot') %}<form method="post" action="/me/start"><input type="hidden" name="csrf" value="{{ csrf_token }}"><button class="btn btn-primary">{{ ic('server','ic ic-sm') }} Start lab</button></form>{% endif %}
                 {% if vm.has_wg %}<a class="btn btn-outline" href="/me/wireguard">{{ ic('key','ic ic-sm') }} Download WireGuard</a>{% endif %}
                 {% endif %}
               </div>
               {% if vm.board == 1 %}
               <p class="dim" style="font-size:12px;margin-top:8px">Launch your SOC workspace to triage this board's seeded alert queue in the browser: adjudicate each alert, assign severity, attribute technique and indicators. Incident investigation is an additional, non-graded reconstruction exercise. Grading is answer-free and server-side.</p>
+              {% elif vm.board == 2 %}
+              <p class="dim" style="font-size:12px;margin-top:8px">Open your assigned case to work the threat-hunt in the browser: pivot through the evidence, build your findings, and submit a signed evidence record. Grading is answer-free and server-side.</p>
               {% elif vm.tier == 'isolated' and vm.range_status == 'deployed' %}
               <p class="dim" style="font-size:12px;margin-top:8px">Your isolated range is deployed. Connect over WireGuard and work the mission; grading is answer-free and server-side.</p>
               {% endif %}
@@ -311,8 +317,8 @@
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your assignment</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
             <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px">
-              <b style="font:600 13.5px/1.3 var(--f);color:var(--ink)">RAG prompt-injection trust-boundary investigation</b>
-              <span class="muted" style="font-size:12px;display:block;margin-top:3px">Determine whether attacker-controlled text in a low-trust retrieved document can make a genuine, locally hosted model violate its trust boundary. You control only the retrieved document.</span>
+              <b style="font:600 13.5px/1.3 var(--f);color:var(--ink)">PARALLAX AI-security boards</b>
+              <span class="muted" style="font-size:12px;display:block;margin-top:3px">A set of independent, deterministically graded challenges: prompt-injection defense, API object-level authorization, CI/CD release gates, SOC detection engineering, secure architecture review, and a multi-competency capstone. Pick a board in the submission card below, provision its workspace to get the brief and a stub, then submit for automatic grading. No model scores your work; each board has a published pass bar.</span>
             </div>
             <div>
               <label class="label">Lab access</label>
@@ -339,6 +345,7 @@
               <select id="pxd1-board" class="input" style="max-width:360px;padding:6px 8px;font-size:12.5px"></select>
             </div>
             <p class="muted" id="pxd1-instructions" style="font-size:12.5px;margin:0"></p>
+            <div id="pxd1-passbar" style="display:none;border-left:2px solid var(--violet);padding:4px 0 4px 10px;font-size:12px"></div>
             <div>
               <label class="label">Submission checklist <span class="muted" style="font-weight:400">— select the deliverables you are submitting</span></label>
               <div id="pxd1-checklist" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
@@ -371,11 +378,20 @@
               (passed?'<span class="pill pill-ok"><span class="dot dot-ok"></span>passed</span>':'<span class="pill"><span class="dot"></span>not passed</span>');
             var rows='';
             if(sub.status==='graded'){
-              rows+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px" class="muted">'+
-                '<span><b style="color:var(--ink)">'+num(fb.final_score!=null?fb.final_score:sub.score)+'</b> score</span>'+
-                '<span>ASR '+num(fb.measured_asr)+'</span><span>TCR '+num(fb.measured_tcr)+'</span><span>FPR '+num(fb.measured_fpr)+'</span>'+
-                '<span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>model-scored</span></div>';
-              if(fb.rubric_feedback) rows+='<p style="font-size:12.5px;margin:10px 0 0;color:var(--ink)">'+esc(fb.rubric_feedback)+'</p>';
+              var bar=(board&&board.pass_bar!=null)?board.pass_bar:75;
+              var chips=[];
+              function chip(lbl,v){if(v!=null)chips.push('<span>'+lbl+' '+num(v)+'</span>');}
+              chip('recall',fb.measured_recall); chip('specificity',fb.measured_specificity);
+              chip('ASR',fb.measured_asr); chip('TCR',fb.measured_tcr); chip('FPR',fb.measured_fpr);
+              if(fb.mean_composite!=null) chips.push('<span>mean '+num(fb.mean_composite)+'</span>');
+              var scorePill=(fb.ai_involved===false)
+                ? '<span class="pill" style="flex:none"><span class="dot dot-ok"></span>deterministic · no model</span>'
+                : '<span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>model-scored</span>';
+              rows+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px;align-items:center" class="muted">'+
+                '<span><b style="color:var(--ink)">'+num(fb.final_score!=null?fb.final_score:sub.score)+'</b> score (need '+esc(bar)+')</span>'+
+                chips.join('')+scorePill+'</div>';
+              var fbtext=fb.feedback||fb.rubric_feedback;
+              if(fbtext) rows+='<p style="font-size:12.5px;margin:10px 0 0;color:var(--ink)">'+esc(fbtext)+'</p>';
             }
             elRes.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">Attempt '+esc(sub.attempt)+' · <span class="mono">'+esc((sub.commit_sha||'').slice(0,12))+'</span></b>'+pill+'</div>'+rows+
               '<p class="dim" style="font-size:11px;margin:8px 0 0">Signed record · <a href="/submit/verify/'+esc(sub.submission_id)+'">verify</a></p>';
@@ -390,6 +406,11 @@
             if(!b||!b.board) return; board=b;
             document.getElementById('pxd1-title').textContent=b.title||'Board submission';
             document.getElementById('pxd1-instructions').textContent=b.instructions||'';
+            var pb=document.getElementById('pxd1-passbar');
+            if(b.pass_bar!=null){pb.style.display='block';
+              pb.innerHTML='<b style="color:var(--ink)">Pass bar: '+esc(b.pass_bar)+'+</b> '+
+                '<span class="muted">'+esc(b.pass_rule||'Deterministic, signed, reproducible scoring. No model.')+'</span>';}
+            else{pb.style.display='none';}
             elList.innerHTML=(b.checklist||[]).map(function(it){
               return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;cursor:pointer">'+
                 '<input type="checkbox" value="'+esc(it.id)+'"'+(it.required?' checked':'')+' style="margin-top:2px">'+

@@ -722,6 +722,7 @@ def register(app, candidate_model, db, helpers=None):
             import parallax.capstone_submission as CPS
             out.update({
                 "board": "PX-CAP", "title": "PARALLAX Capstone (multi-competency)",
+                "pass_bar": 75, "pass_rule": "Every one of the four component boards must pass its own 75 bar; none may critical-fail. Score is the mean component composite.",
                 "checklist": CPS.code_checklist(),
                 "submission_file": "authz.py, detect.py, gates.py, architecture.py",
                 "writeup_file": PS.DEFAULT_WRITEUP, "min_writeup_chars": CPS.MIN_WRITEUP_CHARS,
@@ -738,6 +739,7 @@ def register(app, candidate_model, db, helpers=None):
             import parallax.architecture_submission as ARS
             out.update({
                 "board": "PX-AR1", "title": "Secure Architecture Review",
+                "pass_bar": 75, "pass_rule": "composite = 100 x recall x specificity; pass at 75+. Missing flaws (low recall) or false findings on the sound design (low specificity) below floor is a critical failure.",
                 "checklist": ARS.code_checklist(),
                 "submission_file": ARS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": ARS.MIN_WRITEUP_CHARS,
@@ -753,6 +755,7 @@ def register(app, candidate_model, db, helpers=None):
             import parallax.detection_submission as DES
             out.update({
                 "board": "PX-DE1", "title": "Detection Engineering (SOC)",
+                "pass_bar": 75, "pass_rule": "composite = 100 x recall x specificity; pass at 75+. Missing attacks (low recall) or flagging benign look-alikes (low specificity) below floor is a critical failure.",
                 "checklist": DES.code_checklist(),
                 "submission_file": DES.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": DES.MIN_WRITEUP_CHARS,
@@ -767,6 +770,7 @@ def register(app, candidate_model, db, helpers=None):
             import parallax.devsecops_submission as DSS
             out.update({
                 "board": "PX-S1", "title": "Secure Release Gate (CI/CD DevSecOps)",
+                "pass_bar": 75, "pass_rule": "composite = 100 x security x task; pass at 75+. Letting threats through (low security) or blocking legitimate releases (low task) below floor is a critical failure.",
                 "checklist": DSS.code_checklist(),
                 "submission_file": DSS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": DSS.MIN_WRITEUP_CHARS,
@@ -781,6 +785,7 @@ def register(app, candidate_model, db, helpers=None):
             import parallax.apisec_submission as APS
             out.update({
                 "board": "PX-A1", "title": "API Object-Level Authorization (BOLA) Fix",
+                "pass_bar": 75, "pass_rule": "composite = 100 x allow x deny x status; pass at 75+. Leaking other users' objects (BOLA) or blocking the owner below floor is a critical failure.",
                 "checklist": APS.code_checklist(),
                 "submission_file": APS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": APS.MIN_WRITEUP_CHARS,
@@ -793,6 +798,7 @@ def register(app, candidate_model, db, helpers=None):
         if _is_code_board(workload_id):
             out.update({
                 "board": "PX-D2", "title": "Prompt-Injection Defense (sandboxed code)",
+                "pass_bar": 75, "pass_rule": "composite = 100 x security x task; pass at 75+. Letting injections through or breaking the legitimate task below floor is a critical failure.",
                 "checklist": PS.code_checklist(),
                 "submission_file": PS.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": PS.MIN_WRITEUP_CHARS,
@@ -804,6 +810,7 @@ def register(app, candidate_model, db, helpers=None):
         elif _is_pid_board(workload_id):
             out.update({
                 "board": "PX-D1", "title": "Prompt-Injection Defense of a RAG Assistant",
+                "pass_bar": 75, "pass_rule": "composite = 100 x security x task; pass at 75+. Letting injections through or breaking the legitimate task below floor is a critical failure.",
                 "checklist": PS.checklist(),
                 "submission_file": PS.SUBMISSION_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": PS.MIN_WRITEUP_CHARS,
