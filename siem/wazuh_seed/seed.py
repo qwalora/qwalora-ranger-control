@@ -48,6 +48,8 @@ HF_SOURCES = [s.strip() for s in os.environ.get("RANGER_SEED_HF", "").split(",")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
 CAND_USER = os.environ.get("RANGER_CANDIDATE_USER", "ranger-candidate")
 CAND_PW = os.environ.get("RANGER_CANDIDATE_PW", "")
+# Shared token the portal presents to POST /provision for per-candidate SOC scenarios.
+SOC_TOKEN = os.environ.get("RANGER_SOC_PROVISION_TOKEN", "")
 
 STATE = {"status": "starting", "loaded": 0, "sources": [], "errors": []}
 
@@ -185,6 +187,85 @@ def ensure_index_pattern():
             log("index pattern error (%s):" % base, str(e)[:160])
 
 
+def _ensure_index_named(idx):
+    try:
+        requests.put("%s/%s" % (INDEXER_URL, idx), auth=(USER, PW), verify=False,
+                     json={"settings": {"index": {"number_of_shards": 1, "number_of_replicas": 0}}},
+                     headers={"Content-Type": "application/json"}, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        log("ensure_index_named:", str(e)[:150])
+
+
+def _bulk_named(idx, docs):
+    buf = []
+    for _id, doc in docs:
+        buf.append(json.dumps({"index": {"_index": idx, "_id": _id}}))
+        buf.append(json.dumps(doc, default=str))
+    if not buf:
+        return 0
+    body = "\n".join(buf) + "\n"
+    r = requests.post("%s/_bulk" % INDEXER_URL, auth=(USER, PW), verify=False,
+                      data=body.encode("utf-8"), headers={"Content-Type": "application/x-ndjson"}, timeout=120)
+    r.raise_for_status()
+    return len(docs)
+
+
+def _index_pattern_named(title, pattern_id):
+    if not DASHBOARD_URL:
+        return
+    alt = ("http://" + DASHBOARD_URL[len("https://"):]) if DASHBOARD_URL.startswith("https://") else DASHBOARD_URL
+    for base in dict.fromkeys([DASHBOARD_URL, alt]):
+        try:
+            r = requests.post("%s/api/saved_objects/index-pattern/%s?overwrite=true" % (base, pattern_id),
+                              auth=(USER, PW), verify=False,
+                              headers={"osd-xsrf": "true", "Content-Type": "application/json"},
+                              json={"attributes": {"title": title, "timeFieldName": "@timestamp"}}, timeout=30)
+            if r.status_code < 500:
+                return
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def provision_candidate_soc(key, board, alerts, password):
+    """Load this candidate's board scenario into their OWN Wazuh index and provision a read-only
+    login scoped to it. Index-level isolation is the anti-cheat boundary: the per-candidate role can
+    read only ranger-soc-<key>*, so a candidate can never query another candidate's scenario."""
+    idx = "ranger-soc-" + key
+    try:
+        requests.delete("%s/%s" % (INDEXER_URL, idx), auth=(USER, PW), verify=False, timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+    _ensure_index_named(idx)
+    docs = []
+    for a in alerts:
+        doc = dict(a)
+        doc["@timestamp"] = a.get("timestamp")
+        doc["ranger"] = {"candidate": key, "board": board}
+        docs.append((a.get("id"), doc))
+    n = _bulk_named(idx, docs)
+    try:
+        requests.post("%s/%s/_refresh" % (INDEXER_URL, idx), auth=(USER, PW), verify=False, timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+    sec = "%s/_plugins/_security/api" % INDEXER_URL
+    hdr = {"Content-Type": "application/json"}
+    role = "soc_" + key.replace("-", "_")
+    user = "soc-" + key
+    requests.put("%s/roles/%s" % (sec, role), auth=(USER, PW), verify=False, headers=hdr, timeout=30, json={
+        "cluster_permissions": ["cluster_composite_ops_ro"],
+        "index_permissions": [{"index_patterns": [idx + "*"],
+                               "allowed_actions": ["read", "indices:admin/mappings/get", "indices:admin/get"]},
+                              {"index_patterns": [".kibana*"], "allowed_actions": ["read"]}],
+        "tenant_permissions": [{"tenant_patterns": ["global_tenant"], "allowed_actions": ["kibana_all_read"]}]})
+    requests.put("%s/internalusers/%s" % (sec, user), auth=(USER, PW), verify=False, headers=hdr, timeout=30,
+                 json={"password": password, "attributes": {"ranger": "soc-candidate"}})
+    requests.put("%s/rolesmapping/%s" % (sec, role), auth=(USER, PW), verify=False, headers=hdr, timeout=30,
+                 json={"users": [user]})
+    _index_pattern_named(idx + "*", idx)
+    log("provisioned SOC scenario", user, "board", board, "alerts", n)
+    return {"index": idx, "user": user, "pattern": idx + "*", "loaded": n}
+
+
 def wait_indexer():
     for _ in range(60):
         try:
@@ -266,6 +347,25 @@ class _Health(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(STATE).encode("utf-8"))
+
+    def do_POST(self):  # noqa: N802
+        if self.path.split("?")[0] != "/provision":
+            self.send_response(404); self.end_headers(); return
+        if not SOC_TOKEN or self.headers.get("X-Soc-Token", "") != SOC_TOKEN:
+            self.send_response(403); self.end_headers(); return
+        try:
+            ln = int(self.headers.get("Content-Length", "0") or "0")
+            body = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
+            res = provision_candidate_soc(body["candidate_key"], int(body.get("board", 1)),
+                                          body.get("alerts", []), body["password"])
+            out = json.dumps({"ok": True, **res}).encode("utf-8")
+            self.send_response(200)
+        except Exception as e:  # noqa: BLE001
+            out = json.dumps({"ok": False, "error": str(e)[:300]}).encode("utf-8")
+            self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(out)
 
     def log_message(self, *a):  # silence access logs
         return

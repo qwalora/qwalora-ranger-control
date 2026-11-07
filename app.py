@@ -4062,23 +4062,34 @@ def create_app():
                 "env_label": desc["label"], "env_platform": desc["platform"],
                 "env_launch": desc["launch"]}
 
+    def _soc_candidate_key(c):
+        return str(c.github_id or c.handle or c.id)
+
+    def _soc_console_pw(key):
+        """Deterministic per-candidate SOC console password (no storage): keyed HMAC of the
+        candidate key, so it is stable across visits and recomputable for display and provisioning."""
+        import hmac as _h
+        secret = (os.environ.get("RANGER_SOC_PW_SECRET") or os.environ.get("SECRET_KEY") or "ranger-soc").encode()
+        return "Soc-" + _h.new(secret, key.encode(), hashlib.sha256).hexdigest()[:20]
+
     def _board_environment(c, n):
         """One unified per-board environment descriptor so every board presents the SAME
         'Your environment' panel with a single launch. SOC boards (1,3,4) launch the real Wazuh
-        console over live ATT&CK telemetry; the hunt/case board opens the OpenSearch case; the red
-        boards start an isolated range."""
+        console over the candidate's OWN scenario (a private per-candidate index); the hunt/case
+        board opens the OpenSearch case; the red boards start an isolated range."""
         import strata_catalog as _sc
         kind = _sc.ENVIRONMENT.get(n)
         if kind == "soc-dataset":
-            wz = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")
+            prov = os.environ.get("RANGER_SOC_PROVISIONER_URL", "")
+            console = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")
+            key = _soc_candidate_key(c) if c else "preview"
             return {"kind": "wazuh", "name": "SOC console (Wazuh)",
-                    "platform": "Live Wazuh SIEM over real Windows/Sysmon telemetry, ATT&CK-labeled.",
-                    "launch_url": wz, "launch_label": "Open the SOC console", "new_tab": True,
-                    "available": bool(wz),
-                    "console_user": os.environ.get("RANGER_WAZUH_CANDIDATE_USER", ""),
-                    "console_pw": os.environ.get("RANGER_WAZUH_CANDIDATE_PW", ""),
-                    "note": ("Sign in read-only, open the 'ranger-telemetry' index pattern, and "
-                             "investigate the intrusion. What you find is what you submit to clear the board.")}
+                    "platform": "Live Wazuh SIEM; your own scenario loaded as a private per-candidate index.",
+                    "launch_url": "/me/soc/launch", "launch_label": "Open the SOC console", "new_tab": True,
+                    "available": bool(prov and console),
+                    "console_user": "soc-" + key, "console_pw": (_soc_console_pw(key) if c else ""),
+                    "note": ("Click to load your scenario into your private SOC index, then sign in and "
+                             "investigate it in the real console. Record your triage to clear the board.")}
         if kind == "soc-opensearch":
             return {"kind": "opensearch", "name": "Enterprise case (OpenSearch)",
                     "platform": "OpenSearch Dashboards over your assigned enterprise case.",
@@ -4380,6 +4391,50 @@ def create_app():
                 "pass_bar": P.PASS_BAR,
                 "report_status": (br.report_status if br else None),
                 "cleared": bool(br and br.cleared)}
+
+    @app.get("/me/soc/launch")
+    @require_program("strata")
+    def candidate_soc_launch():
+        """Load the candidate's OWN board scenario into their private Wazuh index via the shared
+        provisioner, then redirect to the real SOC console. The same scenario the triage worksheet
+        grades is what the candidate investigates in the console."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            abort(403)
+        n = c.current_board
+        import strata_catalog as _sc
+        if _sc.ENVIRONMENT.get(n) != "soc-dataset":
+            abort(404)
+        prov = os.environ.get("RANGER_SOC_PROVISIONER_URL", "").rstrip("/")
+        console = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")
+        if not prov or not console:
+            return redirect("/me?soc_error=not_configured")
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            seed = _current_seed(c)
+        try:
+            ds = scenarios.dataset(n, seed)
+        except Exception:  # noqa: BLE001
+            return redirect("/me?soc_error=scenario")
+        key = _soc_candidate_key(c)
+        payload = _json.dumps({"candidate_key": key, "board": int(n),
+                               "alerts": ds.get("alerts", []), "password": _soc_console_pw(key)}).encode("utf-8")
+        import urllib.request as _ur
+        req = _ur.Request(prov + "/provision", data=payload, method="POST",
+                          headers={"Content-Type": "application/json",
+                                   "X-Soc-Token": os.environ.get("RANGER_SOC_PROVISION_TOKEN", "")})
+        try:
+            with _ur.urlopen(req, timeout=45) as r:  # noqa: S310 - operator-configured provisioner
+                res = _json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("SOC provision failed: %s", str(e)[:200])
+            return redirect("/me?soc_error=provision")
+        if not res.get("ok"):
+            return redirect("/me?soc_error=provision")
+        return redirect(console)
 
     @app.get("/me/workspace")
     @require_program("strata")
