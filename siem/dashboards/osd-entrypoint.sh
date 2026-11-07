@@ -8,9 +8,14 @@
 set -euo pipefail
 
 # Trust the OpenSearch CA from the environment when provided (so a service can point at a
-# different cluster without rebaking the image); fall back to the CA baked into the image.
+# different cluster without rebaking the image); fall back to the CA baked into the image. The
+# baked ranger-ca.pem is root-owned and not writable by the runtime user, so the env CA is written
+# to a separate, writable path that the config then references.
 CA=/usr/share/opensearch-dashboards/config/ranger-ca.pem
-if [ -n "${RANGER_CA_B64:-}" ]; then echo "${RANGER_CA_B64}" | base64 -d > "$CA"; fi
+if [ -n "${RANGER_CA_B64:-}" ]; then
+  CA=/usr/share/opensearch-dashboards/config/ranger-ca-env.pem
+  echo "${RANGER_CA_B64}" | base64 -d > "$CA"
+fi
 
 CFG=/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
 cat > "$CFG" <<EOF
@@ -21,7 +26,7 @@ server.basePath: "/soc"
 server.rewriteBasePath: true
 opensearch.hosts: ["https://opensearch.railway.internal:9200"]
 opensearch.ssl.verificationMode: full
-opensearch.ssl.certificateAuthorities: ["/usr/share/opensearch-dashboards/config/ranger-ca.pem"]
+opensearch.ssl.certificateAuthorities: ["${CA}"]
 opensearch.username: "kibanaserver"
 opensearch.password: "${KIBANASERVER_PW}"
 opensearch.requestHeadersAllowlist: ["authorization", "securitytenant"]
