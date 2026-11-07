@@ -149,6 +149,25 @@ def ensure_schema(db):
             # trusted-key policy (signing.verify with kid=None).
             ("signing_kid", "VARCHAR(80)"),
         ],
+        "reports": [
+            # Structured, signed assessor review of the written-report clearance channel.
+            # Nullable/additive: a legacy report with no rubric row was reviewed under the
+            # pre-rubric free-text flow.
+            ("rubric_json", "TEXT"),            # per-criterion scores {id: 0..4}
+            ("rubric_score", "DOUBLE PRECISION"),  # composite 0..100
+            ("reviewer_id", "VARCHAR(120)"),    # who adjudicated
+            ("review_sig", "TEXT"),             # Ed25519 signature over the review record
+            ("originality_flag", "BOOLEAN"),    # written-channel collusion/duplication flag
+            ("originality_note", "VARCHAR(300)"),
+            ("body_shingles", "TEXT"),          # normalized shingle hashes for duplicate detection
+        ],
+        "foundation_attestations": [
+            # Tamper-evident self-attestation: an Ed25519 signature over the attestation and an
+            # optional candidate-supplied completion reference, so the record is auditable rather
+            # than a bare boolean.
+            ("attestation_sig", "TEXT"),
+            ("claimed_ref", "VARCHAR(300)"),
+        ],
         "parallax_audit_events": [
             ("signing_kid", "VARCHAR(80)"),
         ],
@@ -356,6 +375,15 @@ class Report(db.Model):
     reviewer_notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     reviewed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    # Structured, signed assessor review (report_rubric). Nullable: legacy rows predate the rubric.
+    rubric_json = db.Column(db.Text, nullable=True)         # {criterion_id: 0..4}
+    rubric_score = db.Column(db.Float, nullable=True)       # composite 0..100
+    reviewer_id = db.Column(db.String(120), nullable=True)  # who adjudicated
+    review_sig = db.Column(db.Text, nullable=True)          # Ed25519 over the review record
+    # Written-channel integrity: near-duplicate detection across candidates.
+    originality_flag = db.Column(db.Boolean, nullable=True)
+    originality_note = db.Column(db.String(300), nullable=True)
+    body_shingles = db.Column(db.Text, nullable=True)       # normalized shingle hashes (json list)
 
 
 class RangeRequest(db.Model):
@@ -1430,6 +1458,10 @@ class FoundationAttestation(db.Model):
     program = db.Column(db.String(20), nullable=False)      # strata / parallax
     course_key = db.Column(db.String(60), nullable=False)   # netacad_foundation.COURSES key
     attested_at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
+    # Tamper-evident record: Ed25519 over the attestation; optional candidate-supplied reference
+    # (a NetAcad completion id / badge URL) to support later verification.
+    attestation_sig = db.Column(db.Text, nullable=True)
+    claimed_ref = db.Column(db.String(300), nullable=True)
 
     __table_args__ = (db.UniqueConstraint("candidate_id", "program", "course_key",
                                           name="uq_foundation_attestation"),)

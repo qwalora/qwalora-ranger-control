@@ -118,6 +118,30 @@
       <form class="det-foot" method="post" action="/admin/reports/{{ s.id }}">
         <input type="hidden" name="csrf" value="{{ csrf_token }}">
         <input type="hidden" name="return_status" value="{{ vm.active_status }}">
+
+        {% if s.originality_flag %}
+        <div class="rv-warn">{{ ic('flag','ic ic-sm') }} Originality: {{ s.originality_note }}. Adjudicate before approving.</div>
+        {% endif %}
+        {% if s.review_error %}
+        <div class="rv-err">{{ ic('flag','ic ic-sm') }} {{ s.review_error }}</div>
+        {% endif %}
+
+        <div class="rubric">
+          <div class="rubric-h"><span class="label">Assessor rubric</span>
+            <span class="rubric-bar">Approval bar {{ s.report_bar|int }}%{% if s.rubric_score is not none %} · last composite {{ s.rubric_score }}%{% endif %}{% if s.review_sig %} · <span class="mono dim">signed {{ s.review_sig }}…</span>{% endif %}</span>
+          </div>
+          {% for cr in s.rubric %}
+          <div class="rubric-row">
+            <div class="rubric-c"><b>{{ cr.label }}</b><span class="wt">{{ (cr.weight*100)|int }}%</span><p>{{ cr.desc }}</p></div>
+            <select class="rubric-sel" name="crit_{{ cr.id }}">
+              <option value="">—</option>
+              {% for v in range(0, s.rubric_max + 1) %}<option value="{{ v }}"{% if cr.value is not none and cr.value|int == v %} selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+          </div>
+          {% endfor %}
+          <label class="rubric-ovr"><input type="checkbox" name="override" value="1"> Override: approve below the bar (recorded in the signed review)</label>
+        </div>
+
         <div class="notebar">{{ ic('lock','ic ic-sm') }}<input name="notes" placeholder="Add a reviewer note" style="border:none;background:transparent;outline:none;flex:1;font:inherit;color:var(--ink)"></div>
         <div class="foot-actions">
           <span class="cap">Visible to reviewers in Cohort {{ vm.cohort }}</span>
@@ -138,4 +162,18 @@
 
   </div>
 </div>
+<style>
+  .rubric{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--light)}
+  .rubric-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .rubric-bar{font-size:11px;color:var(--mut)}
+  .rubric-row{display:flex;align-items:flex-start;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
+  .rubric-c{flex:1;min-width:0}
+  .rubric-c b{font-size:12.5px;color:var(--ink)}
+  .rubric-c .wt{font:600 10px/1 var(--m);color:var(--violet);background:var(--violet-50);border-radius:10px;padding:2px 6px;margin-left:7px}
+  .rubric-c p{margin:3px 0 0;font-size:11.5px;color:var(--mut);line-height:1.45}
+  .rubric-sel{height:32px;border:1px solid var(--line2);border-radius:7px;background:#fff;color:var(--ink);font:600 12px/1 var(--f);padding:0 8px;flex:none}
+  .rubric-ovr{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--mut);margin-top:9px;cursor:pointer}
+  .rv-warn{display:flex;align-items:center;gap:7px;background:var(--amber-bg,#fdf4e3);color:var(--amber,#9a6b00);border-radius:8px;padding:8px 11px;font-size:12px;margin-bottom:9px}
+  .rv-err{display:flex;align-items:center;gap:7px;background:#fdecee;color:#b4232b;border:1px solid #f3b9bf;border-radius:8px;padding:8px 11px;font-size:12px;margin-bottom:9px}
+</style>
 {% endblock %}

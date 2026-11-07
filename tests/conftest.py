@@ -16,6 +16,7 @@ os.environ.setdefault("RANGER_ENV", "dev")
 os.environ.setdefault("RANGER_PARALLAX_LABA", "1")
 os.environ.setdefault("RANGER_PARALLAX_LABA_ENV", "dev")
 os.environ.setdefault("DEFAULT_COHORT", "2026-A")
+os.environ.setdefault("ADMIN_TOKEN", "test-admin-token")  # enable admin sign-in for review-route tests
 
 import app as A  # noqa: E402
 from models import db, Candidate, ProgramMembership  # noqa: E402

@@ -2111,6 +2111,20 @@ def create_app():
             if rr is None or not rr.is_deployed:
                 return None, ("deploy your lab before submitting a report", 409)
         r = Report(candidate_id=c.id, board=board, role=role, body=body.strip())
+        # Written-channel integrity: fingerprint and flag heavy overlap with another
+        # candidate's report for the same board (advisory, surfaced to the assessor).
+        try:
+            import report_integrity as _ri
+            others = []
+            for o in (Report.query.filter(Report.board == board, Report.candidate_id != c.id)
+                      .filter(Report.body_shingles.isnot(None)).limit(500).all()):
+                oc = o.candidate
+                others.append((("@" + oc.handle) if oc else ("report#%d" % o.id),
+                               _ri.load_shingles(o.body_shingles)))
+            flag, note, blob = _ri.check(r.body, others)
+            r.body_shingles, r.originality_flag, r.originality_note = blob, flag, note
+        except Exception:  # noqa: BLE001 - integrity flagging must never block a submission
+            app.logger.exception("report originality check failed")
         db.session.add(r)
         _touch(c, n)
         db.session.commit()
@@ -2466,6 +2480,24 @@ def create_app():
                 "cand_role": P.ROLE_TITLES.get(c.current_role or P.role_of(c.current_board), "-"),
                 "is_current": (P.bint(target.board) == c.current_board and c.is_active),
                 "badges": _badge_chain(c)["chain"], "certified": _badge_chain(c)["certified"]}
+            # Structured rubric + written-channel integrity for the review form.
+            import json as _json
+            import report_rubric as _rub
+            try:
+                prior = _json.loads(target.rubric_json) if target.rubric_json else {}
+            except (ValueError, TypeError):
+                prior = {}
+            sel["rubric"] = [{**crit, "value": prior.get(crit["id"])}
+                             for crit in _rub.rubric_for(target.role)]
+            sel["rubric_score"] = target.rubric_score
+            sel["report_bar"] = _rub.REPORT_BAR
+            sel["rubric_max"] = _rub.MAX_PER_CRITERION
+            sel["review_sig"] = (target.review_sig or "")[:16]
+            sel["reviewer_id"] = target.reviewer_id
+            sel["originality_flag"] = bool(target.originality_flag)
+            sel["originality_note"] = target.originality_note
+            sel["review_error"] = request.args.get("review_error") \
+                if str(request.args.get("review_id") or "") == str(target.id) else None
 
         title_map = {"pending": "Pending", "approved": "Approved",
                      "needs_changes": "Needs changes", "rejected": "Rejected", "all": "All reports"}
@@ -2485,9 +2517,44 @@ def create_app():
         action = request.form.get("action")
         m = {"approve": "approved", "reject": "rejected", "changes": "needs_changes"}
         if action in m:
+            import json as _json
+            import report_rubric as _rub
+            # Structured rubric: read per-criterion 0..4 scores from the form, compute the composite.
+            scores = {}
+            for cid in _rub.criterion_ids(r.role):
+                raw = request.form.get("crit_" + cid)
+                if raw not in (None, ""):
+                    scores[cid] = raw
+            met, composite, complete = False, 0.0, False
+            if scores:
+                composite, norm, complete = _rub.score(r.role, scores)
+                met = bool(complete and composite >= _rub.REPORT_BAR)
+                r.rubric_json = _json.dumps(norm)
+                r.rubric_score = composite
+            override = request.form.get("override") == "1"
+            # Approval is gated on the rubric: a report below the bar can only be approved with an
+            # explicit, recorded override. Reject / request-changes are always allowed.
+            if action == "approve" and not met and not override:
+                reason = ("score the full rubric before approving"
+                          if not complete else "report is below the %.0f%% rubric bar (%.1f%%); "
+                          "use override to approve anyway" % (_rub.REPORT_BAR, composite))
+                db.session.commit()   # keep the reviewer's entered scores; just don't approve
+                return redirect(url_for("admin", status=request.form.get("return_status", "pending"),
+                                        review_error=reason, review_id=r.id))
             r.status = m[action]
             r.reviewer_notes = (request.form.get("notes") or "").strip() or None
+            r.reviewer_id = _admin_actor()
             r.reviewed_at = _dt.datetime.now(_dt.timezone.utc)
+            # Sign the review record so the subjective clearance is auditable and verifiable like
+            # the objective one: decision + composite + per-criterion scores + reviewer + override.
+            c0 = r.candidate
+            r.review_sig = signing.sign({
+                "kind": "report-review", "report_id": r.id,
+                "handle": c0.handle if c0 else None, "board": r.board, "role": r.role,
+                "decision": r.status, "rubric_score": r.rubric_score,
+                "criteria": _json.loads(r.rubric_json) if r.rubric_json else {},
+                "override": bool(override and action == "approve"),
+                "reviewer": r.reviewer_id, "at": _iso(r.reviewed_at)})
             # Feed the subjective channel into the board result, then re-check the
             # promotion gate (promotes if the objective grade is already in).
             c = r.candidate
@@ -4258,11 +4325,25 @@ def create_app():
         if program not in pathways.PATHWAYS or course not in set(
                 netacad_foundation.required_course_keys(program)):
             return jsonify(error="unknown program or course"), 400
+        reference = (str(data.get("reference") or "").strip() or None)
+        if reference and len(reference) > 300:
+            reference = reference[:300]
         row = FoundationAttestation.query.filter_by(
             candidate_id=c.id, program=program, course_key=course).first()
         if done and not row:
+            at = _dt.datetime.now(_dt.timezone.utc)
+            sig = signing.sign({"kind": "foundation-attestation", "handle": c.handle,
+                                "program": program, "course": course,
+                                "reference": reference, "at": _iso(at)})
             db.session.add(FoundationAttestation(
-                candidate_id=c.id, program=program, course_key=course))
+                candidate_id=c.id, program=program, course_key=course,
+                attested_at=at, attestation_sig=sig, claimed_ref=reference))
+        elif done and row and reference and not row.claimed_ref:
+            # backfill a reference onto an existing attestation and re-sign
+            row.claimed_ref = reference
+            row.attestation_sig = signing.sign({"kind": "foundation-attestation", "handle": c.handle,
+                                                "program": program, "course": course,
+                                                "reference": reference, "at": _iso(row.attested_at)})
         elif not done and row:
             db.session.delete(row)
         db.session.commit()
