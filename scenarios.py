@@ -46,8 +46,45 @@ _BENIGN = [
     "Windows Update installed KB50{d}321 on {dst}",
     "Scheduled backup job completed on {dst}",
     "Account {user} added to distribution group 'allstaff'",
+    # Benign look-alikes: legitimate activity in the same categories as the real
+    # tradecraft, so the fired rule name never reveals the verdict and the analyst
+    # must read the raw log to separate them (the real triage skill under test).
+    "Backup service account accessed ADMIN$ on {dst} for nightly imaging",
+    "EDR agent opened a handle to lsass.exe on {dst} during a memory scan",
+    "SCCM ran a remote WMI inventory query on {dst}",
+    "IT automation created scheduled task 'HealthCheck' on {dst} (signed script)",
 ]
 _SEVERITIES = ["medium", "high", "critical"]
+
+# Generic SIEM detection-rule names. The public alert shows which rule fired, not
+# a verdict or an ATT&CK id. Both real tradecraft and benign look-alikes map to
+# the same rule by surface category, so the signal column carries no answer -
+# verdict, technique, severity and IOCs all have to come from the raw log.
+def _b1_signal(raw):
+    r = str(raw or "")
+    low = r.lower()
+    if "admin$" in low or "admin share" in low:
+        return "Administrative share access"
+    if "lsass" in low:
+        return "Process credential-memory access"
+    if "wmi" in low or "wmiprvse" in low:
+        return "Remote WMI execution"
+    if "scheduled task" in low or "schtasks" in low or "backup job" in low:
+        return "Scheduled task created"
+    if "powershell" in low or "-enc" in low or "base64" in low:
+        return "Suspicious script execution"
+    if ("logon" in low or "ntlm" in low or "vpn" in low or "login" in low
+            or "interactive" in low):
+        return "Authentication anomaly"
+    if "mdm" in low or "enrollment" in low:
+        return "Device enrollment"
+    if "windows update" in low:
+        return "Patch / update activity"
+    if "group" in low or "distribution" in low:
+        return "Group membership change"
+    if "password" in low:
+        return "Credential change"
+    return "Host telemetry anomaly"
 
 
 def _mkuser(login, host):
@@ -65,7 +102,7 @@ def generate_board1(seed, variant=None):
     benign_pool = v.get("benign") or _BENIGN
     lo, hi = v.get("tp_count", (4, 7))
     r = _random.Random("board1:%s:%s" % (v.get("id", ""), seed))
-    n = r.randint(12, 16)
+    n = r.randint(22, 30)
     attacker_user = r.choice(_USERS)
     attacker_src = r.choice(_HOSTS)
     base = _dt.datetime(2026, 3, r.randint(1, 20), r.randint(0, 5), r.randint(0, 59))
@@ -83,7 +120,7 @@ def generate_board1(seed, variant=None):
             key = {"verdict": "true_positive", "severity": r.choice(_SEVERITIES),
                    "technique": tid,
                    "iocs": sorted({attacker_src, _mkuser(attacker_user, dst)})}
-            signal = tname
+            signal = _b1_signal(raw)
             host = dst
         else:
             victim = r.choice(_USERS)
@@ -91,7 +128,7 @@ def generate_board1(seed, variant=None):
             raw = r.choice(benign_pool).format(user=victim, dst=dst, d=r.randint(0, 9))
             key = {"verdict": "false_positive", "severity": "low",
                    "technique": None, "iocs": []}
-            signal = "Routine activity"
+            signal = _b1_signal(raw)
             host = dst
         alerts.append({"id": aid, "timestamp": ts, "host": host,
                        "signal": signal, "raw": raw, "_key": key})
