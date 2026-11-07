@@ -951,6 +951,17 @@ def create_app():
         dataset/grade path is used and nothing changes in production."""
         return os.environ.get("RANGER_STRATA_PORTFOLIOS", "").strip().lower() in ("1", "true", "yes", "on")
 
+    def _effective_env(n):
+        """Per-board environment kind, resolving Board 2's dual nature. Under governance Board 2 is
+        the high-assurance OpenSearch enterprise case (signed citation verification). Without
+        governance (the default) Board 2 runs as a standard seed-driven SOC-dataset board: the same
+        private per-candidate index + worksheet as boards 1/3/4, graded by the class-balanced hunt
+        grader. Every other board keeps its catalog environment unchanged."""
+        import strata_catalog as _sc
+        if int(n) == 2 and not _strata_portfolios_on():
+            return "soc-dataset"
+        return _sc.ENVIRONMENT.get(int(n))
+
     def _slots_used(host="primary"):
         """Isolated ranges currently holding a RAM slot on a host."""
         return (RangeRequest.query
@@ -1557,12 +1568,16 @@ def create_app():
             exists=lambda cid: db.session.query(Badge.id)
             .filter_by(cert_id=cid).first() is not None)
 
+    # Standalone, publicly verifiable credentials (vs per-board rank badges): the terminal
+    # certification and every intermediate milestone get a human-typeable cert_id.
+    _CREDENTIAL_LEVELS = {"certified"} | {m["level"] for m in P.MILESTONES}
+
     def _mint_badge(c, level, name, role):
-        """Create a signed badge once per (candidate, level). Idempotent. The
-        certified badge also gets a public, human-typeable cert_id."""
+        """Create a signed badge once per (candidate, level). Idempotent. Standalone
+        credentials (the certification and milestones) also get a public cert_id."""
         existing = Badge.query.filter_by(candidate_id=c.id, level=level).first()
         if existing:
-            if level == "certified" and not existing.cert_id:
+            if level in _CREDENTIAL_LEVELS and not existing.cert_id:
                 existing.cert_id = _new_cert_id()
             return existing
         issued = _dt.datetime.now(_dt.timezone.utc)
@@ -1571,7 +1586,7 @@ def create_app():
                  "issued_at": _iso(issued)}
         b = Badge(candidate_id=c.id, level=level, name=name, role=role,
                   issued_at=issued, signature=signing.sign(claim),
-                  cert_id=(_new_cert_id() if level == "certified" else None))
+                  cert_id=(_new_cert_id() if level in _CREDENTIAL_LEVELS else None))
         db.session.add(b)
         return b
 
@@ -1701,6 +1716,16 @@ def create_app():
         lvl, name, role = P.badge_for(n)
         _mint_badge(c, lvl, name, role)
 
+        # Intermediate credential: clearing the last defensive-core board (4) earns the
+        # standalone, signed, publicly verifiable STRATA Defender certification - a real
+        # outcome a candidate can hold and verify before the Phase 2 capstone exists.
+        ms = P.milestone_for_board(n)
+        if ms:
+            _mint_badge(c, ms["level"], ms["name"], ms["role"])
+            _notify(c, "credential", "You earned the %s credential" % ms["name"],
+                    "You cleared the STRATA defensive core (boards 1-4). Your credential is "
+                    "verifiable at %s/verify/%s." % (githuboauth.base_url(), c.handle))
+
         # Free the cleared board's isolated range so the candidate never holds
         # two RAM slots, and pull a queued range into the freed slot.
         rr = _board_range(c, n)
@@ -1754,7 +1779,11 @@ def create_app():
         # Every route that reaches this gate (the qualify route AND report approval) must also show a
         # valid, signed, source-intact authorized qualification decision; a submission altered after
         # an award, or a decision that no longer matches the pinned scenario, fails closed here.
-        if int(n) == ENTERPRISE_CASE_BOARD:
+        if int(n) == ENTERPRISE_CASE_BOARD and _strata_portfolios_on():
+            # Governed cohorts: Board 2 clears ONLY through the signed authorized-citation case
+            # grading path (verified against the pinned OpenSearch index). Without governance Board 2
+            # clears like any other shared board - the class-balanced hunt grader at the 95% bar plus
+            # report approval - so the Phase 1 ladder is completable.
             import strata_qualification as _sq
             ok, reason = _sq.verify_authorized_clearance(db, c)
             if not ok:
@@ -1856,11 +1885,11 @@ def create_app():
         return True, "ok"
 
     def _record_objective(c, n, score):
-        if int(n) == ENTERPRISE_CASE_BOARD:
-            # Fail-closed chokepoint: no generic path awards Board 2 objective credit. The live
-            # authorized path (above) is a release-gated dependency and is not implemented here.
+        if int(n) == ENTERPRISE_CASE_BOARD and _strata_portfolios_on():
+            # Governed cohorts: Board 2 objective credit comes ONLY from the authorized
+            # signed-citation case-grading path, never the generic grader. Fail closed here.
             raise RuntimeError("board 2 objective credit must come from the authorized "
-                               "signed-citation case-grading path (a release-gated dependency), "
+                               "signed-citation case-grading path under governance, "
                                "never the generic grader")
         br = _board_result(c, n)
         br.objective_score = float(score)
@@ -2193,12 +2222,13 @@ def create_app():
         if not c.is_active:
             return jsonify(error=f"candidate is {c.status}"), 409
         n = c.current_board
-        if int(n) == ENTERPRISE_CASE_BOARD:
-            # Board 2 enterprise qualification is graded ONLY through the signed-citation case
-            # workflow (/case). The generic grader must not award objective credit or trigger
-            # clearance here, or it would bypass required citation verification.
+        if int(n) == ENTERPRISE_CASE_BOARD and _strata_portfolios_on():
+            # Governed cohorts: Board 2 is graded ONLY through the signed-citation case workflow
+            # (/case). The generic grader must not award objective credit or trigger clearance here,
+            # or it would bypass required citation verification. Without governance Board 2 grades
+            # like any shared board via the class-balanced hunt grader below.
             return jsonify(error="board 2 is graded through the signed-citation case workflow "
-                           "(/case), not the generic grader", board=n), 409
+                           "(/case) under governance, not the generic grader", board=n), 409
         if not scenarios.has_board(n):
             return jsonify(error="grader for this board is not available yet", board=n), 501
         submission = data.get("submission")
@@ -4085,8 +4115,7 @@ def create_app():
         'Your environment' panel with a single launch. SOC boards (1,3,4) launch the real Wazuh
         console over the candidate's OWN scenario (a private per-candidate index); the hunt/case
         board opens the OpenSearch case; the red boards start an isolated range."""
-        import strata_catalog as _sc
-        kind = _sc.ENVIRONMENT.get(n)
+        kind = _effective_env(n)
         if kind == "soc-dataset":
             # Unified SOC console: the portal's own authenticated /soc gateway mints a short-lived
             # JWT server-side, forces the candidate into their own private tenant, and proxies the
@@ -4377,11 +4406,14 @@ def create_app():
     # structural (the dataset is derived from the SESSION candidate's own seed), and the answer
     # key is never sent to the browser - grading stays server-side.
     SOC_WORKSPACE_BOARD = 1
-    # The soc-dataset boards that have a browser worksheet: 1 (triage), 3 (detection
-    # engineering), 4 (incident response). Each investigates in the SOC console and submits
-    # here; grading dispatches by board in scenarios.grade. Boards 2/5/6 are not here.
-    WORKSHEET_BOARDS = (1, 3, 4)
-    _WS_TEMPLATE = {1: "board1_workspace.html", 3: "board3_workspace.html", 4: "board4_workspace.html"}
+    # The soc-dataset boards that have a browser worksheet: 1 (triage), 2 (enterprise hunt,
+    # when the cohort is not under governance), 3 (detection engineering), 4 (incident
+    # response). Each investigates in the SOC console and submits here; grading dispatches by
+    # board in scenarios.grade. Governed cohorts use board 2's signed-citation case flow instead
+    # (the generic worksheet endpoints refuse governance with 409). Boards 5/6 are not here.
+    WORKSHEET_BOARDS = (1, 2, 3, 4)
+    _WS_TEMPLATE = {1: "board1_workspace.html", 2: "board2_workspace.html",
+                    3: "board3_workspace.html", 4: "board4_workspace.html"}
 
     def _ws_kind(n):
         # Per-board draft kind; board 1 keeps its original key so existing drafts are preserved.
@@ -4423,8 +4455,7 @@ def create_app():
         if not c.is_active:
             abort(403)
         n = c.current_board
-        import strata_catalog as _sc
-        if _sc.ENVIRONMENT.get(n) != "soc-dataset":
+        if _effective_env(n) != "soc-dataset":
             abort(404)
         prov = os.environ.get("RANGER_SOC_PROVISIONER_URL", "").rstrip("/")
         console = os.environ.get("RANGER_WAZUH_CONSOLE_URL", "")

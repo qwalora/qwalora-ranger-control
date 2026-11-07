@@ -115,11 +115,28 @@ def _scores(board, builder, from_public):
     return out
 
 
+# --- Board 2: enterprise hunt (non-governed completable path) -----------------
+def _b2_reference(scn):
+    return {"alerts": [{"id": a["id"], "verdict": "true_positive",
+                        "attack_technique": a["_key"]["technique"], "iocs": a["_key"]["iocs"]}
+                       for a in scn["alerts"] if a["_key"]["verdict"] == "true_positive"]}
+
+
+def _b2_flag_everything(pub):
+    # no hunting discipline: flag every event malicious -> precision collapses
+    return {"alerts": [{"id": a["id"], "verdict": "true_positive"} for a in pub["alerts"]]}
+
+
 @pytest.mark.parametrize("board,empty", [
-    (1, {"alerts": []}), (3, {"rules": []}), (4, {}),
+    (1, {"alerts": []}), (2, {"alerts": []}), (3, {"rules": []}), (4, {}),
 ])
 def test_empty_submission_fails(board, empty):
     assert max(_scores(board, lambda _s: empty, from_public=False)) < PASS_BAR
+
+
+def test_board2_flag_everything_fails_and_reference_passes():
+    assert max(_scores(2, _b2_flag_everything, from_public=True)) < PASS_BAR
+    assert min(_scores(2, _b2_reference, from_public=False)) >= PASS_BAR
 
 
 def test_board1_no_analysis_scraper_fails():

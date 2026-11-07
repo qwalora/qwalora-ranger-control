@@ -117,7 +117,7 @@
     <h2 id="overview">Overview</h2>
     <p>Two independent pathways, each with its own ladder, environments and pass policy:</p>
     <div class="kvs">
-      <div class="kv"><b>STRATA</b><span>Cyber-defense ladder, six boards. Blue-team operations (SOC triage, enterprise hunt, detection engineering, incident response) over a live OpenSearch / Wazuh SIEM, then offensive work on isolated GOAD ranges. Sequential; clearing all six certifies you. Objective bar 95% plus an approved report.</span></div>
+      <div class="kv"><b>STRATA</b><span>Cyber-defense ladder, six boards, two phases. <b>Phase 1 (boards 1-4)</b> is the blue-team defensive core (SOC triage, enterprise hunt, detection engineering, incident response) over a live OpenSearch / Wazuh SIEM; clearing all four earns the standalone <b>Qwalora STRATA Defender</b> credential. <b>Phase 2 (boards 5-6)</b> is the offensive GOAD-range capstone; clearing it completes the full <b>Qwalora Ranger</b> certification. Sequential, objective bar 95% plus an approved report per board.</span></div>
       <div class="kv"><b>PARALLAX</b><span>AI-security, submission-based. You submit a code or declarative artifact to a repo; it is executed against a sealed per-candidate fixture in an isolated grader. Per-board bar 75%. Deterministic graders for most boards; a behavioral measurement with a model judge for the prompt-injection boards.</span></div>
     </div>
 
@@ -176,11 +176,18 @@
     </div>
 
     <div class="board" id="b2">
-      <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise case</span><span class="br">Tracker</span><span class="pill lock">governed · cohort-activated</span></div>
+      <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise hunt</span><span class="br">Tracker</span></div>
       <div class="bb">
-        <span class="label">Task</span>
-        <p>Hunt a live intrusion across an enterprise-scale SIEM and build an <b>evidence-cited case</b>: hypothesize, pivot across hosts and accounts, and cite the specific events that prove the campaign. Each citation is verified against <b>your own authorized index</b> for existence, scope and reproducibility — the case is graded on real, reproducible evidence, never against hidden truth. On submit the evidence record is locked and Ed25519-signed; a submitted case is immutable.</p>
-        <div class="note warn"><span class="h">Status</span>Board 2 is a governed qualification activated per cohort; on a given cohort the case workspace and clearing may not be open. It does not advance automatically — it is a deliberate signed-activation gate. Your dashboard states when it is gradable and what to submit.</div>
+        <span class="label">Input</span>
+        <p>No alert has fired. You are handed an enterprise telemetry baseline — process, auth, network and DNS events (<code>id</code>, <code>timestamp</code>, <code>host</code>, <code>user</code>, <code>event_type</code>, <code>detail</code>) with a real multi-stage intrusion woven through a large benign baseline. Investigate in the SOC console (Discover), then record your findings in the Hunt workspace.</p>
+        <span class="label">Submission contract</span>
+        <div class="spec"><span class="lbl">submission (flag the intrusion; omit = benign)</span>{ <span class="k">"alerts"</span>: [
+  { <span class="k">"id"</span>: <span class="s">"EVT-2043"</span>, <span class="k">"verdict"</span>: <span class="s">"true_positive"</span>,
+    <span class="k">"attack_technique"</span>: <span class="s">"T1003.001"</span>, <span class="k">"iocs"</span>: [<span class="s">"WKS-0088"</span>, <span class="s">"corp\\d.reyes"</span>] }
+] }</div>
+        <span class="label">Scoring</span>
+        <p>Class-balanced: an un-flagged event is read as benign, so the score is the F1 over the malicious set (find the whole kill chain without false leads) weighted <code>0.70</code>, plus technique attribution <code>0.20</code> and IOC quality <code>0.10</code> on confirmed finds. Flagging everything scores near zero on precision. Pass ≥ {{ pass_bar|int }}%.</p>
+        <div class="note"><span class="h">Governed cohorts</span>Under cohort governance, Board 2 is graded through a higher-assurance signed-citation case workflow instead: citations are verified against your own authorized OpenSearch index for existence, scope and reproducibility, and the evidence record is locked and Ed25519-signed. Your dashboard states which applies.</div>
       </div>
     </div>
 
@@ -235,11 +242,11 @@ score = 100 · Σ(weightᵢ · componentᵢ)</div>
     </div>
 
     <div class="board" id="b56">
-      <div class="bh"><span class="bn">BOARD 5–6</span><span class="bt">Red Team &amp; Capstone — GOAD ranges</span><span class="br">Raider · Vanguard</span></div>
+      <div class="bh"><span class="bn">BOARD 5–6</span><span class="bt">Phase 2 Capstone — GOAD ranges</span><span class="br">Raider · Vanguard</span></div>
       <div class="bb">
         <span class="label">Environment</span>
-        <p>An isolated Active Directory estate provisioned per candidate from a Ludus <code>ludus-goad-ranger</code> template, reached over a per-candidate WireGuard tunnel (download your <code>.conf</code> from the dashboard, start the range with <b>Start lab</b>). Ranges are RAM-scheduled and torn down on clearance. Board 5 is a scoped red-team engagement; board 6 the full capstone. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
-        <div class="note warn"><span class="h">Status: range access in activation</span>The live Ludus adapter is not yet wired, so the attestation fails closed — boards 5 and 6 display <b>"Live range access is not yet available"</b> and cannot currently be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
+        <p>The offensive capstone beyond the defensive core: an isolated Active Directory estate provisioned per candidate from a Ludus <code>ludus-goad-ranger</code> template, reached over a per-candidate WireGuard tunnel (download your <code>.conf</code> from the dashboard, start the range with <b>Start lab</b>). Ranges are RAM-scheduled and torn down on clearance. Board 5 is a scoped red-team engagement; board 6 the full capstone that completes the <b>Qwalora Ranger</b> certification. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
+        <div class="note warn"><span class="h">Status: Phase 2 in activation</span>Phase 1 (boards 1-4, the STRATA Defender credential) is live and earnable now. Phase 2's live Ludus adapter is not yet wired, so the range attestation fails closed — boards 5 and 6 display <b>"Live range access is not yet available"</b> and cannot yet be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
       </div>
     </div>
 
@@ -272,7 +279,7 @@ score = 100 · Σ(weightᵢ · componentᵢ)</div>
     <p>A board clears only when <b>both</b> channels are satisfied: <code>objective_passed</code> (score ≥ {{ pass_bar|int }}%, signed) <b>and</b> <code>report_status == "approved"</code>. Submit your written report from <code>/me</code> (<code>POST /me/report</code>, autosave draft via <code>/me/report/draft</code>); an assessor reviews it (<code>approve</code> / <code>needs_changes</code> / <code>reject</code>). When both land, promotion signs a clearance claim, mints the signed rank badge, frees the range slot, and advances you to the next board. You see your objective pass immediately; report approval follows review. The dashboard "Clear board N" panel shows both channel states live.</p>
 
     <h2 id="cred">Credentials &amp; verification</h2>
-    <p>Clearing all six STRATA boards mints the terminal <b>Qwalora Ranger, Certified</b> badge and graduates you. Credentials are public and signed:</p>
+    <p>STRATA awards two standalone, publicly verifiable credentials. Clearing the Phase 1 defensive core (boards 1-4) mints the <b>Qwalora STRATA Defender</b> credential — a real outcome you hold and share before the Phase 2 capstone exists for you. Clearing all six boards mints the terminal <b>Qwalora Ranger, Certified</b> badge and graduates you. Each carries its own public <code>QR-XXXX-XXXX</code> cert id. Credentials are public and signed:</p>
     <div class="kvs">
       <div class="kv"><b>/verify/&lt;handle&gt;</b><span>No-auth credential page listing badges and clearances with per-item Ed25519 signature verification.</span></div>
       <div class="kv"><b>/verify?q=</b><span>Lookup by handle or certificate id, format <code>QR-XXXX-XXXX</code>.</span></div>

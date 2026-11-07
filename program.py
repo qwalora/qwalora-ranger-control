@@ -27,12 +27,36 @@ LAST_BOARD = BOARD_PLAN[-1]["n"]
 
 CERTIFIED = {"level": "certified", "name": "Qwalora Ranger", "role": "graduate"}
 
+# Phase 1 defensive core: boards 1-4 (SOC triage, enterprise hunt, detection, IR).
+# Clearing all four earns a real, standalone intermediate credential. Phase 2 (the
+# isolated GOAD capstone, boards 5-6) is the remaining path to the full Ranger cert.
+DEFENSIVE_CORE = (1, 2, 3, 4)
+PHASE2_BOARDS = (5, 6)
+# Intermediate credential minted on clearing the last defensive-core board (4). It
+# certifies the blue-team core on its own; a candidate can earn and verify it before
+# the Phase 2 capstone exists for them.
+STRATA_DEFENDER = {"level": "defender", "name": "Qwalora STRATA Defender",
+                   "role": "strata-defender", "at_board": DEFENSIVE_CORE[-1]}
+MILESTONES = [STRATA_DEFENDER]
+
+
+def milestone_for_board(n):
+    """The intermediate credential earned by CLEARING board n, or None. The ladder is
+    sequential, so clearing board 4 means boards 1-4 are all cleared."""
+    return next((m for m in MILESTONES if int(m["at_board"]) == int(n)), None)
+
+
+def is_phase2(n):
+    return int(n) in PHASE2_BOARDS
+
+
 _BY_N = {b["n"]: b for b in BOARD_PLAN}
 ROLES = [b["role"] for b in BOARD_PLAN]
 ROLE_TITLES = {
     "soc-analyst": "SOC Analyst", "threat-hunter": "Threat Hunter",
     "detection-engineer": "Detection Engineer", "incident-responder": "Incident Responder",
     "red-teamer": "Red Teamer", "capstone": "Capstone",
+    "strata-defender": "STRATA Defender", "graduate": "Qwalora Ranger",
 }
 
 
