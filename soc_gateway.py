@@ -235,9 +235,17 @@ def _ensure_dataview(subject, cohort, dv_id, title, board=SIEM_BOARD, time_field
     candidate's indices."""
     # Address the subject's PRIVATE tenant by its identifier, which the Security
     # plugin keys by username (authinfo tenants map), not the literal "__user__".
+    # A time_field of "" makes the data view NON-time-based, so Discover shows every
+    # document regardless of any global time range (a fixed qualification scenario is a
+    # bounded alert set to review, not a live stream, and OpenSearch Dashboards persists
+    # its own tenant time state, which otherwise hides a historical scenario). overwrite
+    # reconfigures a data view a candidate already has from an earlier launch.
+    attrs = {"title": title}
+    if time_field:
+        attrs["timeFieldName"] = time_field
     code, body = _dash_as_user(subject, cohort, "POST",
-                               "/api/saved_objects/index-pattern/" + dv_id,
-                               {"attributes": {"title": title, "timeFieldName": time_field}},
+                               "/api/saved_objects/index-pattern/" + dv_id + "?overwrite=true",
+                               {"attributes": attrs},
                                tenant=subject, board=board)
     created = code in (200, 201, 409)  # 409 = already exists -> idempotent
     # Best-effort: set it as the tenant default so Discover lands on it.
@@ -384,8 +392,9 @@ def register(app, candidate_model, db, helpers=None):
                 cl.bulk_index(idx, docs)
                 cl.refresh(idx)
             # Data view titled to the EXACT per-candidate index, in the candidate's own
-            # private tenant and set default, so Discover opens on only this board's data.
-            _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}", idx, board=board)
+            # private tenant and set default, NON-time-based so Discover shows every alert
+            # in this bounded scenario regardless of the console's global time range.
+            _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}", idx, board=board, time_field="")
             return {"role": role, "index": idx, "data_view": idx, "board": board,
                     "alerts": len(docs), "theme": ds.get("theme"),
                     "time_from": time_from, "time_to": time_to}
@@ -451,14 +460,11 @@ def register(app, candidate_model, db, helpers=None):
              actas_admin=session.get("soc_act_as_admin") if session.get("soc_act_as") else None,
              **{k: v for k, v in info.items() if k not in ("index", "board")})
         # Triage/detection boards (soc-dataset) land straight in Discover on the candidate's own data
-        # view (set default for their tenant) AND on the scenario's own time window, so the first
-        # screen is their populated data, not an empty default range. The enterprise hunt (board 2)
-        # keeps the console home, where its own flow begins.
+        # view (set default for their tenant). The view is non-time-based, so every alert shows with
+        # no dependence on the console's global time range. The enterprise hunt (board 2) keeps the
+        # console home, where its own flow begins.
         if _board_kind(board) == "soc-dataset":
             dest = os.environ.get("RANGER_SOC_DISCOVER_PATH", "/app/data-explorer/discover")
-            tf, tt = info.get("time_from"), info.get("time_to")
-            if tf and tt:
-                dest += "#?_g=(time:(from:'%s',to:'%s'))" % (tf, tt)
         else:
             dest = "/app/home"
         return redirect(BASE + dest)
