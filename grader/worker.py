@@ -449,38 +449,15 @@ def _grade(job):
         return _grade_apisec(job, job.get("workload_id"))
     if _is_pid(job.get("workload_id")):
         return _grade_pid(job, job.get("workload_id"))
-    from parallax.research import corpus as C, model_backend as mb, harness
-
-    wl = _WORKLOADS.get(job.get("workload_id")) or _WORKLOADS["parallax-pi-basic"]
-    snapshot_dir = _verify_snapshot(job)
-    declared = _read_declared_config(snapshot_dir)  # provenance only in v1; never selects the endpoint
-
-    # Integrity: grade only against the PLATFORM-configured model endpoint, never a
-    # candidate-declared one. from_config reads RANGER_RESEARCH_MODEL_URL; HTTPBackend
-    # additionally refuses any host not loopback or in RANGER_RESEARCH_MODEL_HOSTS, so
-    # the grader service must allow-list the inference host. No endpoint -> stub, and
-    # the harness honestly reports findings_available=false (score stays None).
-    env = {}
-    if job.get("model_url"):
-        env["RANGER_RESEARCH_MODEL_URL"] = job["model_url"]
-    if job.get("model_id"):
-        env["RANGER_RESEARCH_MODEL_ID"] = job["model_id"]
-    backend = mb.from_config(env or None)
-    corpus = C.default_corpus()
-
-    import parallax.research.protocol as P
-    variants = P.ADVANCED_ATTACK_VARIANTS if wl["advanced"] else P.ATTACK_VARIANTS
-    pv = P.ADVANCED_PROTOCOL_VERSION if wl["advanced"] else P.PROTOCOL_VERSION
-    campaign = harness.run_campaign(backend, corpus, repetitions=wl["repetitions"],
-                                    variants=variants, protocol_version=pv)
-    metrics = harness.compute_metrics(campaign["records"])
-    score = _score_from_metrics(metrics)
-    evidence = {"manifest_hash": campaign["manifest"]["manifest_hash"],
-                "n_records": campaign["manifest"]["n_records"],
-                "backend_is_real": campaign["manifest"]["any_real"]}
-    return {"submission_id": job["submission_id"], "status": "graded",
-            "score": score, "metrics": metrics, "evidence": evidence,
-            "grader_version": GRADER_VERSION}
+    # No board grader matched this workload id. The historical fall-through here ran an attack
+    # campaign against the PLATFORM model and scored that baseline, so the candidate's artifact had
+    # no effect (the README-scores-93.3 bug). We refuse to score on the baseline: an unrecognized
+    # workload is a configuration error, failed closed. _run_once reports this as a failed grade, so
+    # a misconfigured RANGER_SUBMISSION_WORKLOADS can never award a baseline score.
+    raise ValueError(
+        "unrecognized workload_id %r: no board grader; refusing to score on the platform-model "
+        "baseline. Configure a recognized board id (parallax-pi*/code*/apisec*/devsecops*/"
+        "detection*/architecture*/capstone*)." % job.get("workload_id"))
 
 
 def _run_once():
