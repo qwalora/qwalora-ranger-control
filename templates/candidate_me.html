@@ -58,7 +58,7 @@
         {% if vm.status == 'active' and not vm.no_access %}
         <div style="margin-bottom:2px">
           <div style="font:650 21px/1.2 var(--f);color:var(--ink)">Welcome{% if vm.name %}, {{ vm.name.split()[0] }}{% endif %}.</div>
-          <div class="muted" style="font-size:13px;margin-top:3px">{% if vm.selected_program == 'parallax' %}Pick a board below, provision its workspace, do the work in your repo, then submit. The steps are in "Start here".{% else %}Here is where you stand and the single next thing to do.{% endif %}</div>
+          <div class="muted" style="font-size:13px;margin-top:3px">{% if vm.selected_program == 'parallax' %}Pick a board below, provision its workspace, do the work in your repo, then submit. The steps are in "Start here".{% else %}Open your board, work the mission, then submit your report. The steps are in "Start here".{% endif %}</div>
         </div>
         {% endif %}
 
@@ -106,6 +106,21 @@
         {% endif %}
 
         {% if not vm.applied and not vm.rejected and vm.selected_program == 'strata' %}
+        {% if vm.status == 'active' %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+            <p class="muted" style="font-size:12.5px;margin:0">STRATA is a staged qualification: you progress from SOC analyst up to the capstone across six boards. You clear a board only by meeting both an objective standard and a reviewed written report. Grading is answer-free and server-side; there are no answers to look up.</p>
+            <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:12.5px">
+              <li><b style="color:var(--ink)">Open your board.</b> Board {{ vm.board }} of 6 ({{ vm.role_title }}) gives you a mission brief with scope and rules of engagement. Read it first.</li>
+              <li><b style="color:var(--ink)">Work the mission</b> on your board's surface: the SOC workspace on this board, your assigned case on the hunt boards, or your isolated range on the red boards.</li>
+              <li><b style="color:var(--ink)">Write your report.</b> Submit a written analysis of what you found, how, and the evidence. A reviewer reads it.</li>
+              <li><b style="color:var(--ink)">Clear the board.</b> You clear it when your objective score reaches {{ vm.pass_bar }}% and your report is approved. That mints a signed rank badge and opens the next board.</li>
+              <li><b style="color:var(--ink)">Reach the capstone.</b> Six boards stage you from SOC analyst to the capstone; clearing all six earns the signed, independently verifiable "Qwalora Ranger, Certified" credential.</li>
+            </ol>
+            <div style="border-left:2px solid var(--violet);padding:6px 0 6px 10px;font-size:12.5px"><b style="color:var(--ink)">When do I submit?</b> <span class="muted">Submit your report once you have worked the mission. The "Clear board" panel below shows your live objective score against the {{ vm.pass_bar }}% bar and your report status, so you always know what is left.</span></div>
+          </div>
+        </div>
+        {% endif %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your progress</span></div>
           <div class="card-body">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
