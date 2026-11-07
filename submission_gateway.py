@@ -779,7 +779,14 @@ def register(app, candidate_model, db, helpers=None):
                 "pass_bar": 75, "pass_rule": "composite = 100 x recall x specificity; pass at 75+. Missing attacks (low recall) or flagging benign look-alikes (low specificity) below floor is a critical failure.",
                 "console_url": os.environ.get("RANGER_WAZUH_CONSOLE_URL", ""),
                 "console_label": "Open the SOC console (Wazuh)",
-                "console_note": "Investigate the live telemetry in the Wazuh SIEM console, then codify what you find as detection rules in detect.py. The console is for analysis; your submitted detect.py is what is graded.",
+                "console_user": os.environ.get("RANGER_WAZUH_CANDIDATE_USER", ""),
+                "console_pw": os.environ.get("RANGER_WAZUH_CANDIDATE_PW", ""),
+                "console_note": ("Sign in to the Wazuh SOC console (read-only), open the "
+                                 "'ranger-telemetry' index pattern, and investigate the intrusion: real "
+                                 "Windows/Sysmon telemetry containing credential dumping (Mimikatz, "
+                                 "T1003), execution (T1059), and lateral movement (PsExec, T1021). Find "
+                                 "the malicious activity, then codify detections in detect.py. The "
+                                 "console is for analysis; your submitted detect.py is what is graded."),
                 "checklist": DES.code_checklist(),
                 "submission_file": DES.DEFAULT_CODE_FILE, "writeup_file": PS.DEFAULT_WRITEUP,
                 "min_writeup_chars": DES.MIN_WRITEUP_CHARS,

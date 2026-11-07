@@ -509,9 +509,10 @@
             else{pb.style.display='none';}
             var cons=document.getElementById('pxd1-console');
             if(b.console_url){cons.style.display='block';
+              var login=(b.console_user?'<span class="muted" style="display:block;margin-top:6px;font-size:12px">Read-only sign-in: <span class="mono" style="color:var(--ink)">'+esc(b.console_user)+'</span>'+(b.console_pw?' / <span class="mono" style="color:var(--ink)">'+esc(b.console_pw)+'</span>':'')+'</span>':'');
               cons.innerHTML='<a class="btn btn-sm" href="'+esc(b.console_url)+'" target="_blank" rel="noopener">'+
                 esc(b.console_label||'Open the SOC console')+'</a>'+
-                (b.console_note?'<span class="muted" style="display:block;margin-top:6px;font-size:12px">'+esc(b.console_note)+'</span>':'');}
+                (b.console_note?'<span class="muted" style="display:block;margin-top:6px;font-size:12px">'+esc(b.console_note)+'</span>':'')+login;}
             else{cons.style.display='none';cons.innerHTML='';}
             elList.innerHTML=(b.checklist||[]).map(function(it){
               return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;cursor:pointer">'+
