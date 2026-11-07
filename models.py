@@ -1415,3 +1415,21 @@ class ParallaxSubmission(db.Model):
     # (re-snapshotted and re-graded); an unchanged HEAD is an idempotent no-op in the gateway.
     __table_args__ = (db.UniqueConstraint("candidate_id", "repo", "attempt",
                                           name="uq_parallax_submission_attempt"),)
+
+
+class FoundationAttestation(db.Model):
+    """One row per (candidate, program, NetAcad course) the candidate has marked complete.
+
+    The Ranger Foundation Track is the Cisco NetAcad baseline a candidate completes before the
+    qualification ladder (see netacad_foundation.py). Completion is self-attested per course and
+    surfaced on the dashboard as progress against the required "must take" set. Additive and
+    non-gating at the data layer; db.create_all() provisions it on existing databases."""
+    __tablename__ = "foundation_attestations"
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidates.id"), nullable=False, index=True)
+    program = db.Column(db.String(20), nullable=False)      # strata / parallax
+    course_key = db.Column(db.String(60), nullable=False)   # netacad_foundation.COURSES key
+    attested_at = db.Column(db.DateTime(timezone=True), default=_now, index=True)
+
+    __table_args__ = (db.UniqueConstraint("candidate_id", "program", "course_key",
+                                          name="uq_foundation_attestation"),)

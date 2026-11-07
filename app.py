@@ -49,9 +49,10 @@ import signing
 from broker import broker_status
 from crypto import decrypt, encrypt
 from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
-                    CohortScenarioPlan, Notification, ProgramMembership,
-                    ProgramMembershipEvent, RangeRequest, Report,
-                    Resource, ScenarioAssignment, db, ensure_schema)
+                    CohortScenarioPlan, FoundationAttestation, Notification,
+                    ProgramMembership, ProgramMembershipEvent, RangeRequest,
+                    Report, Resource, ScenarioAssignment, db, ensure_schema)
+import netacad_foundation
 import pathways
 
 DEFAULT_COHORT = os.environ.get("DEFAULT_COHORT", "2026-A")
@@ -748,6 +749,11 @@ def create_app():
             c = Candidate.query.get(cid)
             return bool(c and c.status == "active")
         return False
+
+    def _foundation_attested(cid, program):
+        """The set of NetAcad course keys this candidate has marked complete for a program."""
+        return {a.course_key for a in FoundationAttestation.query.filter_by(
+            candidate_id=cid, program=_norm_program(program)).all()}
 
     def _active_programs(c):
         """Programs with an explicit ACTIVE membership row (what an admin granted)."""
@@ -3957,6 +3963,13 @@ def create_app():
                 next_action = "Your report is in review; you'll be promoted once it's approved"
         elif selected == pathways.PATHWAY_PARALLAX:
             next_action = "Open the research console: run a benign control, then an adversarial trial"
+        # Cisco NetAcad foundation is the candidate's "start here": required before ladder work.
+        # When it is incomplete, it takes over as the leading next action.
+        foundation = (netacad_foundation.build_vm(selected, _foundation_attested(c.id, selected))
+                      if selected else None)
+        if foundation and not foundation["complete"] and c.is_active and c.status != "graduated":
+            next_action = ("Complete your Cisco NetAcad foundation (next: %s) before your %s "
+                           "ladder work counts" % (foundation["next_title"], foundation["title"].split()[0]))
         # restore the candidate's own in-progress written-report draft (never a submission)
         report_draft = None
         report_dsv = None
@@ -3991,6 +4004,7 @@ def create_app():
                          "overview": (_parallax_overview(c)
                                       if pathways.PATHWAY_PARALLAX in programs else None)},
             "siem_live": SIEM_LIVE,
+            "foundation": foundation,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
             "badges": bc["chain"], "certified": bc["certified"],
@@ -4073,6 +4087,7 @@ def create_app():
             "cur_report_pcls": None, "cur_report_dot": None, "cur_report_notes": None,
             "report_open": not graduated, "pass_bar": P.PASS_BAR,
             "siem_live": SIEM_LIVE,
+            "foundation": netacad_foundation.build_vm(pathways.PATHWAY_STRATA, set()),
             "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
             "mission": _mission_summary(n),
         }
@@ -4110,6 +4125,32 @@ def create_app():
             Notification.query.filter_by(candidate_id=c.id, read=False).update({"read": True})
             db.session.commit()
         return resp
+
+    @app.post("/me/foundation/attest")
+    def candidate_foundation_attest():
+        """Toggle a candidate's self-attestation that they completed a NetAcad foundation course.
+        Session-authed (dashboard), CSRF-protected by the global before_request guard."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        data = request.get_json(silent=True) or request.form
+        program = _norm_program(data.get("program") or "")
+        course = (data.get("course") or "").strip()
+        done = str(data.get("done", "")).lower() in ("1", "true", "on", "yes")
+        if program not in pathways.PATHWAYS or course not in set(
+                netacad_foundation.required_course_keys(program)):
+            return jsonify(error="unknown program or course"), 400
+        row = FoundationAttestation.query.filter_by(
+            candidate_id=c.id, program=program, course_key=course).first()
+        if done and not row:
+            db.session.add(FoundationAttestation(
+                candidate_id=c.id, program=program, course_key=course))
+        elif not done and row:
+            db.session.delete(row)
+        db.session.commit()
+        fv = netacad_foundation.build_vm(program, _foundation_attested(c.id, program))
+        return jsonify(ok=True, done=fv["done"], total=fv["total"],
+                       complete=fv["complete"]), 200
 
     @app.get("/me/mission")
     @require_program("strata")
