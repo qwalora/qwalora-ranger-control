@@ -73,6 +73,37 @@ def test_open_practice_requires_sign_in(monkeypatch):
     assert anon.get("/submit/boards").status_code == 401
 
 
+def _mkcand_noaccess(gid):
+    """Active candidate with no entitled program. A non-active membership row disables the legacy
+    zero-row STRATA fallback, so _effective_programs is empty and no_access is true."""
+    with A.app.app_context():
+        c = Candidate.query.filter_by(github_id=gid).first()
+        if c is None:
+            c = Candidate(handle=gid, name=gid, email=gid + "@nonprod.invalid",
+                          cohort="2026-A", github_id=gid, status="active", current_board=1)
+            db.session.add(c); db.session.commit()
+            db.session.add(ProgramMembership(candidate_id=c.id, program="parallax",
+                                             status="revoked", cohort="2026-A"))
+            db.session.commit()
+        return c.id
+
+
+def test_open_practice_surfaced_on_dashboard(client, monkeypatch):
+    _gate_env(monkeypatch, opens=DET)
+    _login(client, _mkcand_noaccess("op-dash"))
+    html = client.get("/me").get_data(as_text=True)
+    assert "Open practice" in html           # the self-serve front door card
+    assert 'id="pxd1-card"' in html          # the shared submission UI is rendered
+
+
+def test_open_practice_off_hides_dashboard_frontdoor(client, monkeypatch):
+    _gate_env(monkeypatch, opens="")
+    _login(client, _mkcand_noaccess("op-dash2"))
+    html = client.get("/me").get_data(as_text=True)
+    assert "No program access yet" in html
+    assert "Open practice" not in html
+
+
 def test_fully_entitled_sees_all_boards(client, monkeypatch):
     _gate_env(monkeypatch, opens=DET)
     _login(client, _mkcand("op-entitled", status="active", parallax=True))

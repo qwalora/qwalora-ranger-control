@@ -128,6 +128,13 @@
         </script>
         {% endif %}
 
+        {% if vm.soc_badge %}
+        <div class="card"><div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span class="pill pill-ok" style="flex:none"><span class="dot dot-ok"></span>{{ ic('medal','ic ic-sm') }} {{ vm.soc_badge.name }}</span>
+          <span class="muted" style="font-size:12px">Earned {{ vm.soc_badge.issued }}{% if vm.soc_badge.signed %} · cryptographically signed{% endif %}. A verifiable credential for passing the SOC detection board.</span>
+        </div></div>
+        {% endif %}
+
         {% if vm.applied %}
         <div class="verify-banner vb-warn">{{ ic('clock','ic') }}
           <div><b>Application pending review</b>
@@ -446,6 +453,16 @@
           </div>
         </div>
 
+        {% endif %}
+
+        {% if vm.selected_program == 'parallax' or vm.open_practice %}
+        {% if vm.open_practice and vm.selected_program != 'parallax' %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>{{ ic('activity','ic ic-sm') }} Open practice</span><span class="pill pill-ok" style="flex:none"><span class="dot dot-ok"></span>no enrollment needed</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+            <p class="muted" style="font-size:12.5px;margin:0">You are signed in but not in a qualification program yet. This is the free, self-serve practice board: a real SOC detection-engineering challenge over live ATT&amp;CK telemetry. Provision a workspace, investigate the intrusion in the Wazuh console, write your detections, and submit for automatic deterministic grading. It does not count toward qualification, but it is the exact board the ladder opens with.</p>
+          </div>
+        </div>
+        {% endif %}
         <div class="card" id="pxd1-card" style="display:none"><div class="card-head"><span class="eyebrow"><span class="d"></span><span id="pxd1-title">Board submission</span></span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>auto-graded</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
             <div id="pxd1-board-row" style="display:none;align-items:center;gap:8px">
@@ -631,7 +648,9 @@
           };
         })();
         </script>
+        {% endif %}
 
+        {% if vm.selected_program == 'parallax' %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Research activity</span>
           {% if ov and ov.total %}<span class="pill {% if ov.stage=='reviewed' %}pill-ok{% elif ov.stage=='under_review' %}pill-amber{% else %}pill-violet{% endif %}" style="flex:none"><span class="dot {% if ov.stage=='reviewed' %}dot-ok{% elif ov.stage=='under_review' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ stage_label[ov.stage] }}</span>{% endif %}</div>
           <div class="card-body">

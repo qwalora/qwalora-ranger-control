@@ -3970,6 +3970,10 @@ def create_app():
         if foundation and not foundation["complete"] and c.is_active and c.status != "graduated":
             next_action = ("Complete your Cisco NetAcad foundation (next: %s) before your %s "
                            "ladder work counts" % (foundation["next_title"], foundation["title"].split()[0]))
+        # Signed SOC-Analyst (Practice) badge, earned by passing the detection board.
+        _soc = Badge.query.filter_by(candidate_id=c.id, level="soc-practice", revoked=False).first()
+        soc_badge = ({"name": _soc.name, "issued": _ago(_soc.issued_at), "signed": bool(_soc.signature)}
+                     if _soc else None)
         # restore the candidate's own in-progress written-report draft (never a submission)
         report_draft = None
         report_dsv = None
@@ -4005,6 +4009,13 @@ def create_app():
                                       if pathways.PATHWAY_PARALLAX in programs else None)},
             "siem_live": SIEM_LIVE,
             "foundation": foundation,
+            # Open practice: a signed-in candidate with no entitled program sees the self-serve
+            # practice board (real SOC detection over live telemetry). Server-gated identically in
+            # submission_gateway; this only drives whether the dashboard surfaces the front door.
+            "open_practice": bool(os.environ.get("RANGER_OPEN_PRACTICE_WORKLOADS", "").strip()
+                                  and os.environ.get("RANGER_SUBMISSION")
+                                  and c.status == "active" and not programs),
+            "soc_badge": soc_badge,
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
             "badges": bc["chain"], "certified": bc["certified"],
@@ -4088,6 +4099,7 @@ def create_app():
             "report_open": not graduated, "pass_bar": P.PASS_BAR,
             "siem_live": SIEM_LIVE,
             "foundation": netacad_foundation.build_vm(pathways.PATHWAY_STRATA, set()),
+            "open_practice": False, "soc_badge": None,
             "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
             "mission": _mission_summary(n),
         }
@@ -4789,7 +4801,8 @@ def create_app():
     # holds none, so a submission artifact is immutable and independently verifiable.
     try:
         import submission_gateway
-        submission_gateway.register(app, Candidate, db, {"program_active": _program_active})
+        submission_gateway.register(app, Candidate, db, {"program_active": _program_active,
+                                                         "mint_badge": _mint_badge})
         app.logger.info("submission gateway registered at /submit")
     except Exception as e:  # noqa: BLE001
         app.logger.warning("submission gateway not registered: %s", e)

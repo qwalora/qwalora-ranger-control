@@ -1330,6 +1330,15 @@ def register(app, candidate_model, db, helpers=None):
                                            "decision": result["signed"]}, sort_keys=True)
             row.grade_sig = gsig; row.grade_kid = gkid
             row.graded_at = _utcnow(); row.snapshot_b64 = None
+            # A detection pass earns the signed SOC-Analyst (Practice) badge. Idempotent per
+            # candidate (one badge, minted once); committed atomically with the grade.
+            if result["assessment_passed"] and cand is not None:
+                mb = helpers.get("mint_badge")
+                if mb:
+                    try:
+                        mb(cand, "soc-practice", "SOC Analyst (Practice)", "soc-analyst")
+                    except Exception as e:  # noqa: BLE001
+                        _log("soc_badge_error", sub=row.id, err=str(e)[:120])
             db.session.commit()
             _log("graded_detection", sub=row.id, score=row.score, passed=result["assessment_passed"])
             return jsonify(ok=True)
