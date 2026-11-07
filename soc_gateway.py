@@ -16,6 +16,8 @@ public HTTPS. Security-relevant events are logged without tokens or secrets.
 from __future__ import annotations
 
 import base64
+import datetime
+import hashlib
 import json
 import os
 import time
@@ -57,6 +59,63 @@ _SOC_DATASET_MAPPING = {
 def _board_kind(board):
     import strata_catalog as _sc
     return _sc.ENVIRONMENT.get(int(board))
+
+
+def _fmt_ts(ts, days, sign):
+    """Parse a scenario timestamp (several shapes) and shift it by +/- whole days, returning an
+    ISO-8601 'Z' string. Used to pad the Discover default time range around the scenario window."""
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.datetime.strptime(ts, fmt)
+            break
+        except (ValueError, TypeError):
+            dt = None
+    if dt is None:
+        return None
+    dt = dt + sign * datetime.timedelta(days=days)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _soc_docs_and_window(ds, slug, board):
+    """Turn a board's scenario dataset into indexable docs plus the time window Discover should open
+    on, so the candidate lands on their data rather than an empty 'Last 15 days'. Triage/IR boards
+    (alerts) keep their real event timestamps (the worksheet grades the same alerts). The detection
+    board has no alert stream and no timestamps: load its baseline together with the THREAT events,
+    mixed and unlabeled (which are malicious is never written into the data; grading knows from the
+    seed, server-side), with synthesized recent timestamps so the hunt surface is populated."""
+    board = int(board)
+    docs, ts_values = [], []
+    alerts = ds.get("alerts")
+    if alerts:
+        for a in alerts:
+            ts = a.get("timestamp")
+            src = dict(a)
+            src["@timestamp"] = ts
+            src["ranger"] = {"candidate_id": slug, "board": board}
+            docs.append({"_id": str(a.get("id")), "_source": src})
+            if ts:
+                ts_values.append(ts)
+    else:
+        # Project EVERY event (baseline and threat alike) to only the board's detectable fields, so a
+        # threat event is indistinguishable from baseline in the raw data: the label fields the threats
+        # carry (technique, name) are the answer and must never reach the candidate's index.
+        fields = ds.get("detectable_fields") or [
+            "event_type", "host", "user", "image", "parent", "command", "dest", "domain"]
+        events = list(ds.get("baseline", [])) + list(ds.get("threats", []))
+        # Deterministic, content-based order so the threat events are not clustered at the end.
+        events.sort(key=lambda e: hashlib.sha1(
+            json.dumps(e, sort_keys=True, default=str).encode()).hexdigest())
+        base = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=len(events) * 5 // 60 + 1)
+        for i, ev in enumerate(events):
+            ts = (base + datetime.timedelta(minutes=5 * i)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            src = {k: ev.get(k) for k in fields if k in ev}
+            src["@timestamp"] = ts
+            src["ranger"] = {"candidate_id": slug, "board": board}
+            docs.append({"_id": "evt-%d" % i, "_source": src})
+            ts_values.append(ts)
+    time_from = _fmt_ts(min(ts_values), 1, -1) if ts_values else None
+    time_to = _fmt_ts(max(ts_values), 1, +1) if ts_values else None
+    return docs, time_from, time_to
 # The scenario dataset is anchored to a fixed historical window (enterprise.generate
 # starts at 2026-03-01 and spans a couple of weeks). Discover's default "Last 15
 # minutes" / "Last 90 days" never overlaps it, so set the tenant's default time range
@@ -320,20 +379,16 @@ def register(app, candidate_model, db, helpers=None):
             if cl.index_exists(idx):
                 cl.delete_index(idx)
             cl.create_index(idx, _SOC_DATASET_MAPPING)
-            docs = []
-            for a in ds.get("alerts", []):
-                src = dict(a)
-                src["@timestamp"] = a.get("timestamp")
-                src["ranger"] = {"candidate_id": slug, "board": board}
-                docs.append({"_id": str(a.get("id")), "_source": src})
+            docs, time_from, time_to = _soc_docs_and_window(ds, slug, board)
             if docs:
                 cl.bulk_index(idx, docs)
                 cl.refresh(idx)
             # Data view titled to the EXACT per-candidate index, in the candidate's own
-            # private tenant and set default, so Discover opens on only this board's alerts.
+            # private tenant and set default, so Discover opens on only this board's data.
             _ensure_dataview(subject, cohort, f"cand-{slug}-b{board}", idx, board=board)
-            return {"role": role, "index": idx, "data_view": idx,
-                    "board": board, "alerts": len(docs), "theme": ds.get("theme")}
+            return {"role": role, "index": idx, "data_view": idx, "board": board,
+                    "alerts": len(docs), "theme": ds.get("theme"),
+                    "time_from": time_from, "time_to": time_to}
 
         # S5: when the binding integration is on, Board 2 qualification is provisioned from the
         # candidate's authoritative, pinned ScenarioBinding (approved cohort scenario), into the
@@ -395,11 +450,15 @@ def register(app, candidate_model, db, helpers=None):
         _log("launch", kind=kind, subject=subject, board=board,
              actas_admin=session.get("soc_act_as_admin") if session.get("soc_act_as") else None,
              **{k: v for k, v in info.items() if k not in ("index", "board")})
-        # Triage boards (soc-dataset) land straight in Discover on the candidate's own data view
-        # (set default for their tenant), so the first screen is their scenario, not a home page.
-        # The enterprise hunt (board 2) keeps the console home, where its own flow begins.
+        # Triage/detection boards (soc-dataset) land straight in Discover on the candidate's own data
+        # view (set default for their tenant) AND on the scenario's own time window, so the first
+        # screen is their populated data, not an empty default range. The enterprise hunt (board 2)
+        # keeps the console home, where its own flow begins.
         if _board_kind(board) == "soc-dataset":
-            dest = os.environ.get("RANGER_SOC_DISCOVER_PATH", "/app/discover")
+            dest = os.environ.get("RANGER_SOC_DISCOVER_PATH", "/app/data-explorer/discover")
+            tf, tt = info.get("time_from"), info.get("time_to")
+            if tf and tt:
+                dest += "#?_g=(time:(from:'%s',to:'%s'))" % (tf, tt)
         else:
             dest = "/app/home"
         return redirect(BASE + dest)
