@@ -628,12 +628,33 @@ def register(app, candidate_model, db, helpers=None):
         m = ProgramMembership.query.filter_by(candidate_id=cid, program="parallax").first()
         return bool(m and m.status == "active")
 
-    def _candidate_or_401():
+    def _open_practice_set():
+        # Boards open to any signed-in candidate without admin approval or PARALLAX
+        # entitlement (the self-serve practice front door). Empty by default, so the
+        # whole feature is OFF until RANGER_OPEN_PRACTICE_WORKLOADS is set; the set is
+        # intersected with the allowlist so it can never open a non-served board.
+        raw = os.environ.get("RANGER_OPEN_PRACTICE_WORKLOADS", "")
+        want = {w.strip() for w in raw.split(",") if w.strip()}
+        return (want & set(_available_workloads())) if want else set()
+
+    def _fully_entitled(c):
+        return bool(c and c.status == "active" and _parallax_active(c.id))
+
+    def _candidate_or_401(workload_id=None, allow_open=False):
         cid = session.get("cand")
         if not cid:
             abort(401)
         c = candidate_model.query.get(cid)
-        if not c or c.status != "active":
+        if not c:
+            abort(403)
+        # Open-practice front door: a signed-in candidate (who already cleared the
+        # GitHub identity bar at sign-in) may use the designated practice board(s)
+        # self-serve. Every other board, and the qualification ladder, stay gated
+        # exactly as before. With the env var unset this never triggers.
+        opens = _open_practice_set()
+        if opens and (allow_open or (workload_id in opens)):
+            return c
+        if c.status != "active":
             abort(403)
         if not _parallax_active(c.id):
             abort(403)  # authenticated + active, but not entitled to PARALLAX
@@ -829,9 +850,9 @@ def register(app, candidate_model, db, helpers=None):
     @app.post("/submit/start")
     def submit_start():
         _gate()
-        c = _candidate_or_401()
+        workload_id = _workload_id(None)
+        c = _candidate_or_401(workload_id)
         cohort = _current_cohort(c)
-        workload_id = _workload_id(c)
         full, html_url, branch, created = _ensure_repo(c, cohort, workload_id)
         _log("workspace_ready", cand=c.id, repo=full, created=created, workload=workload_id)
         return jsonify(repo=full, url=html_url, branch=branch, workload_id=workload_id,
@@ -841,10 +862,10 @@ def register(app, candidate_model, db, helpers=None):
     @app.post("/submit")
     def submit_now():
         _gate()
-        c = _candidate_or_401()
+        workload_id = _workload_id(None)              # resolve the chosen board first
+        c = _candidate_or_401(workload_id)
         cohort = _current_cohort(c)
         token = _org_token()
-        workload_id = _workload_id(c)                 # resolve the chosen board first
         full, html_url, branch, _ = _ensure_repo(c, cohort, workload_id)
 
         sha = _head_commit(full, branch, token)
@@ -1007,7 +1028,7 @@ def register(app, candidate_model, db, helpers=None):
     @app.get("/submit/status")
     def submit_status():
         _gate()
-        c = _candidate_or_401()
+        c = _candidate_or_401(allow_open=True)
         rows = (ParallaxSubmission.query.filter_by(candidate_id=c.id)
                 .order_by(ParallaxSubmission.created_at.desc()).limit(50).all())
         return jsonify(submissions=[_receipt(r) for r in rows])
@@ -1016,21 +1037,31 @@ def register(app, candidate_model, db, helpers=None):
     @app.get("/submit/board")
     def submit_board():
         _gate()
-        c = _candidate_or_401()
         default = os.environ.get("RANGER_SUBMISSION_WORKLOAD", "parallax-pi-basic")
         # Allow ?workload=<id> (within the allowlist) so the /me selector can fetch any board's brief.
         req = request.args.get("workload")
         wl = req if req in set(_available_workloads()) else default
+        c = _candidate_or_401(wl, allow_open=True)
+        # An open-practice-only candidate may fetch only an open board's brief.
+        if not _fully_entitled(c) and wl not in _open_practice_set():
+            abort(403)
         return jsonify(_board_brief(wl, _current_cohort(c)) or {"workload_id": wl,
                                                                 "cohort": _current_cohort(c)})
 
     @app.get("/submit/boards")
     def submit_boards():
         _gate()
-        c = _candidate_or_401()
+        c = _candidate_or_401(allow_open=True)
         cohort = _current_cohort(c)
         default = os.environ.get("RANGER_SUBMISSION_WORKLOAD", "parallax-pi-basic")
-        boards = [b for b in (_board_brief(w, cohort) for w in _available_workloads()) if b]
+        # A fully entitled candidate sees every allowlisted board; an open-practice-only
+        # candidate sees only the open board(s).
+        if _fully_entitled(c):
+            wls = _available_workloads()
+        else:
+            opens = _open_practice_set()
+            wls = [w for w in _available_workloads() if w in opens]
+        boards = [b for b in (_board_brief(w, cohort) for w in wls) if b]
         return jsonify(boards=boards, default=default)
 
     # ---- Public: independent verification -----------------------------------
