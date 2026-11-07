@@ -4,255 +4,293 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Candidate Handbook · Qwalora Ranger</title>
-<meta name="description" content="The authoritative, end-to-end guide to the Qwalora Ranger qualification: how the boards work, what you submit, and how you are graded.">
+<meta name="description" content="Technical candidate handbook for the Qwalora Ranger qualification: environments, submission contracts, scoring formulas, isolation and signing internals.">
 <style>
   :root{
     --bg:#ffffff;--ink:#14151a;--mut:#51565f;--dim:#878d97;--line:#e7e9ee;--line2:#d7dae1;
     --sub:#f6f7f9;--light:#fafbfc;--violet:#5b4bd6;--violet-50:#efecfb;--ok:#0f7a48;--ok-bg:#e8f6ee;
-    --amber:#9a6b00;--amber-bg:#fdf4e3;--f:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --amber:#9a6b00;--amber-bg:#fdf4e3;--code:#0b1020;--codeink:#d7dcf5;
+    --f:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
     --m:'SF Mono',ui-monospace,'Roboto Mono',Menlo,Consolas,monospace;
   }
   @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
     --bg:#111318;--ink:#eef0f4;--mut:#aab0bb;--dim:#7e8593;--line:#262a32;--line2:#333843;
     --sub:#171a20;--light:#15181d;--violet:#9b8cff;--violet-50:#201d3a;--ok:#5fd39a;--ok-bg:#132a1f;
-    --amber:#e3b25a;--amber-bg:#2a2112;
+    --amber:#e3b25a;--amber-bg:#2a2112;--code:#0b1020;--codeink:#d7dcf5;
   }}
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
-  body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.65 var(--f);-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.62 var(--f);-webkit-font-smoothing:antialiased}
   a{color:var(--violet);text-decoration:none}a:hover{text-decoration:underline}
-  code{font-family:var(--m);font-size:.88em;background:var(--sub);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink)}
-  .wrap{max-width:1180px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:232px 1fr;gap:40px}
+  code{font-family:var(--m);font-size:.86em;background:var(--sub);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink);white-space:nowrap}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 24px;display:grid;grid-template-columns:238px 1fr;gap:40px}
   header.top{border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:5}
-  header.top .wrap{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;gap:16px;max-width:1180px}
+  header.top .wrap{display:flex;align-items:center;justify-content:space-between;padding:15px 24px;gap:16px}
   .brand{display:flex;align-items:center;gap:10px;font:800 16px/1 var(--f);letter-spacing:-.3px}
-  .brand .dot{width:11px;height:11px;border-radius:3px;background:var(--violet);display:inline-block}
+  .brand .sq{width:11px;height:11px;border-radius:3px;background:var(--violet);display:inline-block}
   .brand span{color:var(--violet)}
-  .top .meta{font-size:12px;color:var(--dim)}
-  main{padding:34px 0 90px}
-  nav.toc{position:sticky;top:78px;align-self:start;max-height:calc(100vh - 100px);overflow:auto;font-size:13px;padding-right:6px}
-  nav.toc .tl{font:700 10.5px/1 var(--f);letter-spacing:.7px;text-transform:uppercase;color:var(--dim);margin:16px 0 8px}
-  nav.toc a{display:block;color:var(--mut);padding:4px 0;line-height:1.4}
+  .top .meta{font-size:12px;color:var(--dim);font-family:var(--m)}
+  main{padding:32px 0 90px}
+  nav.toc{position:sticky;top:76px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;font-size:12.5px;padding-right:6px}
+  nav.toc .tl{font:700 10px/1 var(--f);letter-spacing:.7px;text-transform:uppercase;color:var(--dim);margin:15px 0 7px}
+  nav.toc a{display:block;color:var(--mut);padding:3.5px 0;line-height:1.35}
   nav.toc a:hover{color:var(--ink);text-decoration:none}
-  article{min-width:0;max-width:760px}
-  article h1{font:800 32px/1.15 var(--f);letter-spacing:-.8px;margin:0 0 8px}
-  article .lede{font-size:16.5px;color:var(--mut);line-height:1.6;margin:0 0 10px}
-  article h2{font:700 21px/1.25 var(--f);letter-spacing:-.4px;margin:40px 0 10px;padding-top:12px;scroll-margin-top:84px}
-  article h3{font:700 15.5px/1.3 var(--f);margin:24px 0 6px;scroll-margin-top:84px}
-  article p{margin:0 0 12px}
-  article ul,article ol{margin:0 0 14px;padding-left:22px}
-  article li{margin:5px 0}
-  .eyebrow{display:inline-flex;align-items:center;gap:7px;font:700 11px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--violet);background:var(--violet-50);border-radius:20px;padding:6px 11px;margin-bottom:16px}
-  .card{border:1px solid var(--line);border-radius:14px;background:var(--light);padding:18px 20px;margin:16px 0}
-  .card.tight{padding:14px 16px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .kv{display:flex;gap:10px;font-size:13.5px;margin:3px 0}
-  .kv b{color:var(--ink);min-width:118px;font-weight:600}
+  article{min-width:0;max-width:812px}
+  article h1{font:800 31px/1.15 var(--f);letter-spacing:-.8px;margin:0 0 8px}
+  article .lede{font-size:16px;color:var(--mut);line-height:1.6;margin:0 0 10px}
+  article h2{font:700 20px/1.25 var(--f);letter-spacing:-.4px;margin:40px 0 10px;padding-top:12px;scroll-margin-top:82px;border-top:1px solid var(--line)}
+  article h2:first-of-type{border-top:none}
+  article h3{font:700 14.5px/1.3 var(--f);margin:22px 0 6px;scroll-margin-top:82px;color:var(--ink)}
+  article p{margin:0 0 11px}
+  article ul,article ol{margin:0 0 12px;padding-left:20px}
+  article li{margin:4px 0}
+  .eyebrow{display:inline-flex;align-items:center;gap:7px;font:700 11px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--violet);background:var(--violet-50);border-radius:20px;padding:6px 11px;margin-bottom:14px}
+  .spec{background:var(--code);color:var(--codeink);border-radius:11px;padding:14px 16px;margin:12px 0;overflow:auto;font:500 12.5px/1.6 var(--m);border:1px solid #1c2540;white-space:pre-wrap;word-break:break-word}
+  .spec .c{color:#7f8bb7}.spec .k{color:#8ad0ff}.spec .s{color:#b7e88f}.spec .t{color:#f3b86b}
+  .spec .lbl{display:block;color:#9aa6d6;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px}
+  .kvs{border:1px solid var(--line);border-radius:12px;background:var(--light);padding:6px 16px;margin:12px 0}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:14px;font-size:13.5px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:none}
+  .kv b{color:var(--ink);font-weight:600;font-family:var(--m);font-size:12.5px}
   .kv span{color:var(--mut)}
-  .note{border-left:3px solid var(--violet);background:var(--violet-50);border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+  .note{border-left:3px solid var(--violet);background:var(--violet-50);border-radius:0 10px 10px 0;padding:11px 15px;margin:14px 0;font-size:13.5px}
   .note.warn{border-left-color:var(--amber);background:var(--amber-bg)}
-  .note .h{font-weight:700;color:var(--ink);display:block;margin-bottom:3px}
+  .note .h{font-weight:700;color:var(--ink);display:block;margin-bottom:2px}
   .board{border:1px solid var(--line);border-radius:14px;margin:14px 0;overflow:hidden}
-  .board .bh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--sub)}
-  .board .bn{font:800 13px/1 var(--f);color:#fff;background:var(--violet);border-radius:7px;padding:6px 9px;letter-spacing:.3px}
-  .board .bt{font:700 16px/1.2 var(--f);color:var(--ink)}
-  .board .br{font:600 12px/1 var(--f);color:var(--violet);background:var(--violet-50);border-radius:20px;padding:5px 10px}
-  .board .bb{padding:14px 18px}
-  .board .bb .label{font:700 10px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);display:block;margin:12px 0 3px}
+  .board .bh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:13px 17px;border-bottom:1px solid var(--line);background:var(--sub)}
+  .board .bn{font:800 12px/1 var(--m);color:#fff;background:var(--violet);border-radius:6px;padding:6px 8px;letter-spacing:.3px}
+  .board .bt{font:700 15.5px/1.2 var(--f);color:var(--ink)}
+  .board .br{font:600 11.5px/1 var(--m);color:var(--violet);background:var(--violet-50);border-radius:20px;padding:5px 9px}
+  .board .bb{padding:13px 17px}
+  .board .bb .label{font:700 9.5px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);display:block;margin:13px 0 4px}
   .board .bb .label:first-child{margin-top:0}
-  .pill{display:inline-flex;align-items:center;gap:6px;font:600 11.5px/1 var(--f);border-radius:20px;padding:5px 10px;border:1px solid var(--line2);color:var(--mut)}
-  .pill.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+  .pill{display:inline-flex;align-items:center;gap:6px;font:600 11px/1 var(--m);border-radius:20px;padding:4px 9px;border:1px solid var(--line2);color:var(--mut)}
   .pill.lock{background:var(--amber-bg);color:var(--amber);border-color:transparent}
-  table.ref{width:100%;border-collapse:collapse;font-size:13.5px;margin:14px 0}
-  table.ref th{text-align:left;font:700 10.5px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line2)}
-  table.ref td{padding:9px 10px;border-bottom:1px solid var(--line);color:var(--mut);vertical-align:top}
-  table.ref td b{color:var(--ink);font-weight:600}
-  .steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
-  .steps li{counter-increment:s;position:relative;padding:0 0 14px 38px;margin:0}
-  .steps li::before{content:counter(s);position:absolute;left:0;top:-2px;width:26px;height:26px;border-radius:8px;background:var(--violet-50);color:var(--violet);font:700 13px/26px var(--f);text-align:center}
-  .steps li b{color:var(--ink)}
-  footer{border-top:1px solid var(--line);color:var(--dim);font-size:12.5px;padding:22px 0;margin-top:50px}
-  @media (max-width:880px){.wrap{grid-template-columns:1fr;gap:0}nav.toc{display:none}.grid2{grid-template-columns:1fr}article{max-width:none}}
-  @media print{header.top{position:static}nav.toc{display:none}.wrap{display:block}article{max-width:none}a{color:var(--ink)}}
+  table.ref{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+  table.ref th{text-align:left;font:700 10px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);padding:8px 9px;border-bottom:1px solid var(--line2)}
+  table.ref td{padding:8px 9px;border-bottom:1px solid var(--line);color:var(--mut);vertical-align:top}
+  table.ref td b,table.ref td code{color:var(--ink)}
+  table.ref td.mono{font-family:var(--m);font-size:12px;white-space:nowrap}
+  .formula{font-family:var(--m);font-size:13px;background:var(--sub);border:1px solid var(--line);border-left:3px solid var(--violet);border-radius:0 9px 9px 0;padding:10px 14px;margin:10px 0;color:var(--ink);overflow:auto;white-space:pre-wrap;word-break:break-word}
+  footer{border-top:1px solid var(--line);color:var(--dim);font-size:12px;padding:20px 0;margin-top:46px}
+  @media (max-width:900px){.wrap{grid-template-columns:1fr;gap:0}nav.toc{display:none}article{max-width:none}.kv{grid-template-columns:1fr}}
+  @media print{header.top{position:static}nav.toc{display:none}.wrap{display:block}article{max-width:none}.spec{background:#0b1020}a{color:var(--ink)}}
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="wrap">
-    <div class="brand"><span class="dot"></span>QWALORA <span>Ranger</span></div>
-    <div class="meta">Candidate Handbook</div>
+  <div class="wrap" style="display:flex">
+    <div class="brand"><span class="sq"></span>QWALORA <span>Ranger</span></div>
+    <div class="meta">Candidate Handbook · technical reference</div>
   </div>
 </header>
 
 <div class="wrap">
   <nav class="toc" aria-label="Contents">
-    <div class="tl">Start here</div>
-    <a href="#what">What Ranger is</a>
-    <a href="#how">How assessment works</a>
-    <a href="#start">Getting started</a>
-    <div class="tl">STRATA pathway</div>
-    <a href="#strata">The six boards</a>
-    <a href="#console">The SOC console</a>
-    <a href="#workspace">The board workspace</a>
-    <a href="#b1">Board 1 · Analyst</a>
-    <a href="#b2">Board 2 · Hunter</a>
-    <a href="#b3">Board 3 · Detection</a>
-    <a href="#b4">Board 4 · Incident</a>
-    <a href="#b56">Boards 5–6 · Range</a>
-    <div class="tl">PARALLAX pathway</div>
-    <a href="#parallax">AI security</a>
-    <div class="tl">Clearing &amp; conduct</div>
-    <a href="#clear">Clearing a board</a>
-    <a href="#cert">Your certificate</a>
-    <a href="#rules">Integrity rules</a>
+    <div class="tl">Platform</div>
+    <a href="#overview">Overview</a>
+    <a href="#arch">Assessment architecture</a>
+    <a href="#isolation">Isolation &amp; signing</a>
+    <a href="#start">Access &amp; onboarding</a>
+    <div class="tl">STRATA</div>
+    <a href="#console">SOC console (OpenSearch)</a>
+    <a href="#b1">B1 · Triage</a>
+    <a href="#b2">B2 · Enterprise case</a>
+    <a href="#b3">B3 · Detection</a>
+    <a href="#b4">B4 · Incident response</a>
+    <a href="#b56">B5–B6 · GOAD ranges</a>
+    <div class="tl">PARALLAX</div>
+    <a href="#parallax">Submission contract</a>
+    <a href="#pxboards">Boards &amp; grading</a>
+    <div class="tl">Qualification</div>
+    <a href="#clear">Clearing &amp; promotion</a>
+    <a href="#cred">Credentials &amp; verify</a>
+    <a href="#invariants">Invariants</a>
   </nav>
 
   <main>
   <article>
-    <div class="eyebrow"><span class="dot" style="width:7px;height:7px;border-radius:2px;background:var(--violet);display:inline-block"></span>Candidate Handbook</div>
-    <h1>The Qwalora Ranger qualification</h1>
-    <p class="lede">Ranger is an independent, hands-on technical qualification. You do real work in real tooling against a scenario that is unique to you, and every result is graded automatically, signed, and publicly verifiable. This handbook describes exactly what the platform asks of you and how it is scored — nothing more, nothing less.</p>
+    <div class="eyebrow"><span class="sq" style="width:7px;height:7px;border-radius:2px;background:var(--violet)"></span>Technical Reference</div>
+    <h1>Qwalora Ranger — candidate handbook</h1>
+    <p class="lede">An independent, hands-on technical qualification. You work real tooling against a per-candidate scenario; every result is graded by a deterministic server-side grader and bound to an Ed25519 signature. This document is the operator spec: the environments you run in, the exact submission contracts, the scoring formulas, and the isolation and signing internals. It describes the live build and nothing it does not do.</p>
 
-    <h2 id="what">What Ranger is</h2>
-    <p>There are two independent pathways. You can hold either or both.</p>
-    <div class="grid2">
-      <div class="card tight"><b>STRATA</b> — the cyber-defense ladder. Six boards that run from blue-team operations (triage, hunting, detection, incident response) to offensive range work. You clear boards in sequence; clearing all six makes you a certified Qwalora Ranger.</div>
-      <div class="card tight"><b>PARALLAX</b> — AI security. Submission-based boards where you harden and attack AI systems (prompt-injection defense, API authorization, secure-release gates, detection, architecture review) and are scored on the artifact you submit.</div>
+    <h2 id="overview">Overview</h2>
+    <p>Two independent pathways, each with its own ladder, environments and pass policy:</p>
+    <div class="kvs">
+      <div class="kv"><b>STRATA</b><span>Cyber-defense ladder, six boards. Blue-team operations (SOC triage, enterprise hunt, detection engineering, incident response) over a live OpenSearch / Wazuh SIEM, then offensive work on isolated GOAD ranges. Sequential; clearing all six certifies you. Objective bar 95% plus an approved report.</span></div>
+      <div class="kv"><b>PARALLAX</b><span>AI-security, submission-based. You submit a code or declarative artifact to a repo; it is executed against a sealed per-candidate fixture in an isolated grader. Per-board bar 75%. Deterministic graders for most boards; a behavioral measurement with a model judge for the prompt-injection boards.</span></div>
     </div>
-    <p>Both pathways share the same assessment contract: your scenario is seeded uniquely to you, grading is deterministic and reproducible, and the answer key never leaves the server.</p>
 
-    <h2 id="how">How assessment works</h2>
-    <p>Five principles hold across every board. Read these once; they explain why the platform behaves the way it does.</p>
-    <div class="card">
-      <div class="kv"><b>Your own scenario</b><span>Every board's data is generated from a seed tied to you and your attempt. No two candidates face the same instance, and you only ever see your own.</span></div>
-      <div class="kv"><b>Answer-free</b><span>You are given the problem, never the solution. The grading key is derived on the server and is never sent to your browser or the console.</span></div>
-      <div class="kv"><b>Deterministic &amp; signed</b><span>Scoring is reproducible, not a matter of opinion. Each objective result and each board clearance is cryptographically signed, so it can be verified by anyone later.</span></div>
-      <div class="kv"><b>Isolated</b><span>In the console you can read only your own scenario index; every other index is denied by the engine. This is enforced, not merely by convention.</span></div>
-      <div class="kv"><b>Resubmittable</b><span>You can submit a board as many times as you need; your scenario and attempt are preserved, and your best result counts. Grading gives you feedback to iterate on, never the answer.</span></div>
+    <h2 id="arch">Assessment architecture</h2>
+    <p>Every board, both pathways, obeys the same four properties. They are enforced in code, not by policy.</p>
+    <h3>Per-candidate seeding</h3>
+    <p>Each board instance is generated from a single seed derived from the tuple <code>(github_id, board, cohort)</code>. The GitHub id is immutable, so your seed is stable across sessions and unique across the cohort; no two candidates receive the same instance, and seeds are never reused. You never see the seed — only an opaque, non-invertible <b>case reference</b> derived from it. All scenario data (alerts, telemetry, evidence, corpora) is a pure function of that seed.</p>
+    <h3>Answer-free grading</h3>
+    <p>The grading key is re-derived from your seed <i>on the server at submit time</i>. It is never sent to the browser, the console, or any API response. A submission returns only a score, pass/fail against the bar, and per-item correctness flags or aggregate metrics — never the ground truth. There is no key to exfiltrate from the page.</p>
+    <h3>Determinism &amp; reproducibility</h3>
+    <p>Grading is a deterministic function of your submission and your seed. The same submission against the same instance yields the same score, every time — scoring is measured, not adjudicated by opinion (the one qualitative component, the PARALLAX model judge, is pinned and runs at temperature 0, and its provenance is recorded).</p>
+    <h3>Pass policy</h3>
+    <div class="kvs">
+      <div class="kv"><b>STRATA</b><span>Objective score ≥ <b>{{ pass_bar|int }}%</b> (machine-graded, signed) <b>AND</b> an approved written report (human adjudication). Both are required to clear a board.</span></div>
+      <div class="kv"><b>PARALLAX</b><span>Per-board composite ≥ <b>75%</b>, subject to board-specific critical-failure vetoes and anti-gaming floors.</span></div>
     </div>
-    <p>The bar to pass a board's objective is <b>{{ pass_bar|int }}%</b>. Clearing a board takes two things — a passing objective and an approved written report — described under <a href="#clear">Clearing a board</a>.</p>
 
-    <h2 id="start">Getting started</h2>
-    <ol class="steps">
-      <li><b>Enroll.</b> You sign in with GitHub. For integrity, your GitHub account must have a verified email, two-factor authentication enabled, and be reasonably established. Your application starts as <b>pending</b>; an assessor admits you to a pathway and cohort, which opens board 1. Your dashboard at <code>/me</code> is your home: current board, scores, what you have submitted, and a single clear next action.</li>
-      <li><b>Lay the foundation.</b> The <b>Foundation</b> tab lists the Cisco Networking Academy (NetAcad) courses aligned to your pathway (a Junior Cybersecurity Analyst path for STRATA; security fundamentals for PARALLAX). Complete them and mark each attested — this is the required grounding before your ladder work, tracked on your profile.</li>
-      <li><b>Open your current board.</b> STRATA candidates work the boards in order from the dashboard; PARALLAX candidates work from the research console. Each board tells you the mission, the environment to launch, and what to submit.</li>
+    <h2 id="isolation">Isolation &amp; signing internals</h2>
+    <h3>Console isolation (STRATA boards 1–4)</h3>
+    <p>The SOC console is OpenSearch Dashboards fronted by an authenticated gateway. On launch, the platform provisions your own index and binds your identity to it:</p>
+    <ul>
+      <li>Your scenario is loaded into a private per-candidate index, <code>ranger-&lt;cohort&gt;-&lt;slug&gt;-b&lt;board&gt;</code>.</li>
+      <li>A scoped OpenSearch security role grants read on that index pattern only, with document-level security pinned to your <code>ranger.candidate_id</code>. Reserved/admin roles are never attached.</li>
+      <li>The gateway mints a short-lived RS256 JWT server-side and injects it as the <code>Authorization</code> header (it never reaches your browser or a URL), and forces you into your own private OpenSearch Dashboards tenant.</li>
+      <li>Any read outside your index — another candidate's index, a wildcard, the global telemetry — is refused with <code>security_exception</code> at the engine. Wandering returns nothing.</li>
+    </ul>
+    <h3>Signing</h3>
+    <p>Objective results, board clearances, rank badges, incident assessments, range attestations, Board-2 evidence records and PARALLAX submission manifests and grades are each canonicalized and signed with <b>Ed25519</b>. The signing public key is published at <code>/pubkey</code>; every signed artifact is independently re-verifiable at <code>/verify/&lt;handle&gt;</code> and <code>/submit/verify/&lt;id&gt;</code>. Promotion re-verifies stored signatures and fails closed on any mismatch.</p>
+
+    <h2 id="start">Access &amp; onboarding</h2>
+    <ol>
+      <li><b>Sign in — GitHub OAuth only.</b> Admission requires a verified GitHub email, 2FA enabled, and an account older than the configured minimum. Failing any of these blocks account creation.</li>
+      <li><b>Approval.</b> First sign-in creates a candidate in <code>pending</code> with nothing provisioned. An assessor flips you to <code>active</code>, which opens board 1 and the shared SOC environment.</li>
+      <li><b>Foundation.</b> The <code>/me/foundation</code> tab lists the Cisco Networking Academy track for your pathway (Junior Cybersecurity Analyst + Ethical Hacker for STRATA; security fundamentals for PARALLAX). Completion is self-attested per course and is the required grounding before ladder work.</li>
+      <li><b>Work your board.</b> STRATA progresses sequentially from <code>/me</code>; PARALLAX works from the research console and the dashboard submission card. Each board states its mission, environment, and submission contract.</li>
     </ol>
 
-    <h2 id="strata">STRATA · the six boards</h2>
-    <p>You progress one board at a time. Each board assigns you a role and a codename; you investigate in a live environment and submit your work for grading.</p>
-    <table class="ref">
-      <thead><tr><th>Board</th><th>Role</th><th>What you do</th><th>Environment</th></tr></thead>
-      <tbody>
-        <tr><td><b>1 · Sentinel</b></td><td>SOC Analyst</td><td>Triage an alert queue: call each alert, set severity, attribute technique</td><td>SOC console</td></tr>
-        <tr><td><b>2 · Tracker</b></td><td>Threat Hunter</td><td>Hunt an intrusion across an enterprise SIEM</td><td>SOC console</td></tr>
-        <tr><td><b>3 · Warden</b></td><td>Detection Engineer</td><td>Author detection rules that catch the threats and stay quiet on benign activity</td><td>SOC console + rule builder</td></tr>
-        <tr><td><b>4 · Reclaimer</b></td><td>Incident Responder</td><td>Reconstruct a breach: scope it, build the timeline, find the persistence</td><td>SOC console + IR report</td></tr>
-        <tr><td><b>5 · Raider</b></td><td>Red Teamer</td><td>Compromise an isolated Active Directory range</td><td>Live range (VPN)</td></tr>
-        <tr><td><b>6 · Vanguard</b></td><td>Capstone</td><td>A full-scope capstone engagement on an isolated range</td><td>Live range (VPN)</td></tr>
-      </tbody>
-    </table>
-
-    <h2 id="console">The SOC console (boards 1–4)</h2>
-    <p>Boards 1 through 4 investigate in a live OpenSearch Dashboards console. From your board, choose <b>Open the SOC console</b>. One click provisions your own private copy of the scenario and opens it in <b>Discover</b>.</p>
-    <ul>
-      <li>You land on <b>your own data</b>. The index you see belongs only to you; the console shows every event in your scenario with no time-range to fight — your whole dataset is in front of you.</li>
-      <li>Other candidates' data is <b>not reachable</b>. Any attempt to read another index is refused by the engine, so there is nothing to find by wandering.</li>
-      <li>Investigate like an analyst: search, filter on fields, sort by time, expand records. Fields such as <code>@timestamp</code>, <code>host</code>, <code>user</code>, <code>command</code> and <code>signal</code> are there to pivot on.</li>
-    </ul>
-    <p>Investigation happens in the console; <b>recording your findings happens in the board workspace</b>, which is where grading occurs.</p>
-
-    <h2 id="workspace">The board workspace</h2>
-    <p>Each of boards 1, 3 and 4 has a workspace reached from your dashboard (and the sidebar). It loads the same answer-free scenario you investigate in the console and gives you the right form to submit. Your inputs autosave as a draft, so you can leave and come back. When you submit, the server grades you instantly and shows a breakdown — then you can refine and resubmit.</p>
+    <h2 id="console">SOC console — OpenSearch Dashboards</h2>
+    <p>Boards 1–4 investigate in live OpenSearch Dashboards. From your board, <b>Open the SOC console</b> → the gateway provisions your index and lands you in <b>Discover</b> on your own data view. The view is non-time-based, so the entire bounded scenario is visible with no time filter to fight. Pivot on the indexed fields (for triage: <code>@timestamp</code>, <code>host</code>, <code>signal</code>, <code>raw</code>; for detection/IR: <code>event_type</code>, <code>host</code>, <code>user</code>, <code>image</code>, <code>parent</code>, <code>command</code>, <code>dest</code>, <code>domain</code>, <code>detail</code>). Investigation happens in Discover; <b>grading happens in the board workspace</b> (<code>/me/workspace</code>), which loads the same answer-free dataset and the submission form, autosaves a draft, and grades on submit with immediate feedback and unlimited resubmission.</p>
 
     <div class="board" id="b1">
       <div class="bh"><span class="bn">BOARD 1</span><span class="bt">SOC Analyst — alert triage</span><span class="br">Sentinel</span></div>
       <div class="bb">
-        <span class="label">Your task</span>
-        <p>A queue of alerts has landed — routine noise mixed with a real intrusion. Investigate in the console, then in the <b>SOC workspace</b> adjudicate each alert: call it a true or false positive, assign a severity, and for true positives attribute the ATT&amp;CK technique and record the indicators that justify the call.</p>
-        <span class="label">How it is graded</span>
-        <p>Your verdicts, severities and technique attributions are scored against the hidden ground truth. Pass at {{ pass_bar|int }}%.</p>
+        <span class="label">Input</span>
+        <p>An alert queue: objects with <code>id</code>, <code>timestamp</code>, <code>host</code>, <code>signal</code>, <code>raw</code> — routine activity interleaved with a real intrusion chain.</p>
+        <span class="label">Submission contract</span>
+        <div class="spec"><span class="lbl">POST /me/workspace/submit</span>{ <span class="k">"submission"</span>: { <span class="k">"alerts"</span>: [
+  { <span class="k">"id"</span>: <span class="s">"ALRT-1002"</span>, <span class="k">"verdict"</span>: <span class="s">"true_positive"</span>, <span class="k">"severity"</span>: <span class="s">"high"</span>,
+    <span class="k">"attack_technique"</span>: <span class="s">"T1047"</span>, <span class="k">"iocs"</span>: [<span class="s">"winterfell"</span>, <span class="s">"sansa.stark"</span>] },
+  { <span class="k">"id"</span>: <span class="s">"ALRT-1007"</span>, <span class="k">"verdict"</span>: <span class="s">"false_positive"</span>, <span class="k">"severity"</span>: <span class="s">"low"</span> }
+] } }</div>
+        <p><code>verdict</code> ∈ {<code>true_positive</code>, <code>false_positive</code>}; <code>severity</code> ∈ {low, medium, high, critical}; for true positives, attribute the ATT&amp;CK technique and the indicators justifying the call.</p>
+        <span class="label">Scoring</span>
+        <p>Verdict, severity, and technique attribution are scored against the hidden ground truth. Feedback returns per-alert correctness flags only. Pass ≥ {{ pass_bar|int }}%.</p>
       </div>
     </div>
 
     <div class="board" id="b2">
-      <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise hunt</span><span class="br">Tracker</span><span class="pill lock">cohort-activated</span></div>
+      <div class="bh"><span class="bn">BOARD 2</span><span class="bt">Threat Hunter — enterprise case</span><span class="br">Tracker</span><span class="pill lock">governed · cohort-activated</span></div>
       <div class="bb">
-        <span class="label">Your task</span>
-        <p>Hunt a live intrusion across an enterprise-scale SIEM and build an evidence-backed case: form hypotheses, pivot across hosts and accounts, and cite the specific events that prove the campaign. Every citation you make is checked against your own authorized index for existence and scope — the case is graded on real, reproducible evidence, and once submitted it is locked and signed.</p>
-        <div class="note warn"><span class="h">Status: governed, cohort-activated</span>Board 2 qualification is governed and activated per cohort. On a given cohort the case workspace and clearing may not yet be open; your dashboard tells you when the board is gradable and exactly what to submit. Do not assume board 2 clears automatically — it is a deliberate, governed gate.</div>
+        <span class="label">Task</span>
+        <p>Hunt a live intrusion across an enterprise-scale SIEM and build an <b>evidence-cited case</b>: hypothesize, pivot across hosts and accounts, and cite the specific events that prove the campaign. Each citation is verified against <b>your own authorized index</b> for existence, scope and reproducibility — the case is graded on real, reproducible evidence, never against hidden truth. On submit the evidence record is locked and Ed25519-signed; a submitted case is immutable.</p>
+        <div class="note warn"><span class="h">Status</span>Board 2 is a governed qualification activated per cohort; on a given cohort the case workspace and clearing may not be open. It does not advance automatically — it is a deliberate signed-activation gate. Your dashboard states when it is gradable and what to submit.</div>
       </div>
     </div>
 
     <div class="board" id="b3">
       <div class="bh"><span class="bn">BOARD 3</span><span class="bt">Detection Engineer</span><span class="br">Warden</span></div>
       <div class="bb">
-        <span class="label">Your task</span>
-        <p>You are given threat intel — labeled malicious behaviors — alongside benign baseline activity. In the <b>Detection workspace</b>, author detection rules that catch those behaviors on <i>unseen variants</i> while staying quiet on benign events. The builder lets you add a rule, then one or more conditions (a field, a match type — is / contains / starts with / ends with — and value(s)); a rule fires when all of its conditions match. An advanced JSON mode is available if you prefer to write the ruleset directly.</p>
-        <span class="label">How it is graded</span>
-        <p>Your rules run against a fresh holdout. Your score is the F1 of per-technique recall (every technique must be covered) and benign precision (false positives cost you). The feedback shows coverage, false positives, and how each rule fired — never the holdout itself. Pass at {{ pass_bar|int }}%.</p>
+        <span class="label">Input</span>
+        <p>Labeled threat intel (malicious telemetry tagged with its ATT&amp;CK technique) plus a benign baseline. Detectable fields: <code>event_type</code>, <code>host</code>, <code>user</code>, <code>image</code>, <code>parent</code>, <code>command</code>, <code>dest</code>, <code>domain</code>. <code>id</code> and <code>timestamp</code> are deliberately excluded so a rule cannot overfit to a unique event.</p>
+        <span class="label">Rule grammar (Sigma subset)</span>
+        <p>Submit a ruleset. A rule is a named <code>detection</code> block of one or more selections combined by a condition. A field key may carry a pipe-modifier <code>contains|startswith|endswith</code> (optionally <code>|all</code>); a bare field is case-insensitive equality; a list value is OR unless <code>all</code> is set; across keys in a selection, logic is AND.</p>
+        <div class="spec"><span class="lbl">submission</span>{ <span class="k">"rules"</span>: [
+  { <span class="k">"name"</span>: <span class="s">"lsass_comsvcs_minidump"</span>,
+    <span class="k">"detection"</span>: {
+      <span class="k">"sel"</span>: { <span class="k">"image"</span>: <span class="s">"rundll32.exe"</span>,
+               <span class="k">"command|contains|all"</span>: [<span class="s">"comsvcs.dll"</span>, <span class="s">"MiniDump"</span>] },
+      <span class="k">"condition"</span>: <span class="s">"sel"</span> } }
+] }
+<span class="c"># condition supports and / or / not, parentheses,</span>
+<span class="c"># and the aggregates "all of them" / "any of them" / "N of them".</span></div>
+        <p>The workspace builder emits this for you: add a rule, then conditions (field · match type · value(s)); conditions on a rule are combined <code>all of them</code>. A raw-JSON mode is available for full control.</p>
+        <span class="label">Scoring</span>
+        <p>Your ruleset is compiled (no candidate code or regex is ever executed) and run against a fresh seeded holdout (several malicious variants per technique plus a large benign set). The score is the F1 of macro-recall and precision:</p>
+        <div class="formula">macro_recall = mean over techniques of (detected / total)    <span style="color:var(--dim)">// every technique must be covered</span>
+precision    = detected_malicious / (detected_malicious + benign_false_positives)
+score        = 100 · 2·macro_recall·precision / (macro_recall + precision)</div>
+        <p>Feedback returns coverage (techniques hit / total), validation false positives, per-rule firing counts, and rule compile errors — never the holdout contents. Pass ≥ {{ pass_bar|int }}%.</p>
       </div>
     </div>
 
     <div class="board" id="b4">
       <div class="bh"><span class="bn">BOARD 4</span><span class="bt">Incident Responder / Forensics</span><span class="br">Reclaimer</span></div>
       <div class="bb">
-        <span class="label">Your task</span>
-        <p>A breach has already happened. You are handed multi-host forensic evidence woven through benign noise. In the <b>IR workspace</b>, produce the incident report: name patient zero and the initial-access vector, scope the affected hosts and accounts, reconstruct the kill-chain timeline in order, and flag the persistence to remediate. The evidence table feeds the report — add events to your timeline and persistence directly from it.</p>
-        <span class="label">How it is graded</span>
-        <p>Each section is scored against the incident ground truth, with the timeline weighted most (both membership and correct ordering). Feedback tells you which sections are right. Pass at {{ pass_bar|int }}%.</p>
+        <span class="label">Input</span>
+        <p>Multi-host forensic evidence — events with <code>id</code>, <code>timestamp</code>, <code>host</code>, <code>user</code>, <code>event_type</code>, <code>detail</code> — an incident woven through benign noise.</p>
+        <span class="label">Submission contract</span>
+        <div class="spec"><span class="lbl">submission</span>{ <span class="k">"patient_zero"</span>:       <span class="s">"WKS-0088"</span>,            <span class="c">// first compromised host</span>
+  <span class="k">"initial_access"</span>:     <span class="s">"T1566.001"</span>,          <span class="c">// ATT&amp;CK technique id</span>
+  <span class="k">"affected_hosts"</span>:     [<span class="s">"WKS-0088"</span>, <span class="s">"SRV-FILE02"</span>],
+  <span class="k">"affected_accounts"</span>:  [<span class="s">"corp\\d.reyes"</span>],
+  <span class="k">"timeline"</span>:           [<span class="s">"EVT-4000"</span>, <span class="s">"EVT-4001"</span>, <span class="s">"EVT-4002"</span>],  <span class="c">// ordered, earliest first</span>
+  <span class="k">"persistence"</span>:        [<span class="s">"EVT-4115"</span>] }</div>
+        <span class="label">Scoring (weighted)</span>
+        <div class="formula">patient_zero      0.15   exact match
+initial_access    0.15   exact match (ATT&amp;CK id)
+affected_hosts    0.15   set F1
+affected_accounts 0.15   set F1
+persistence       0.15   set F1
+timeline          0.25   = 0.6·membership_F1 + 0.4·ordering_score
+score = 100 · Σ(weightᵢ · componentᵢ)</div>
+        <p>The ordering score rewards a correctly sequenced chain (fraction of adjacent pairs in the right relative order). Feedback returns per-section correctness. Pass ≥ {{ pass_bar|int }}%.</p>
       </div>
     </div>
 
     <div class="board" id="b56">
-      <div class="bh"><span class="bn">BOARDS 5–6</span><span class="bt">Red Team &amp; Capstone</span><span class="br">Raider · Vanguard</span></div>
+      <div class="bh"><span class="bn">BOARD 5–6</span><span class="bt">Red Team &amp; Capstone — GOAD ranges</span><span class="br">Raider · Vanguard</span></div>
       <div class="bb">
-        <span class="label">Your task</span>
-        <p>The final boards move from the console to a live, <b>isolated</b> attack range — a self-contained Active Directory estate built for you alone, started from your dashboard and reached over a private VPN. Board 5 is a scoped red-team engagement; board 6 is the full capstone. Your work is evidenced and cleared by a signed attestation that your objectives were met on a real, governed range.</p>
-        <div class="note warn"><span class="h">Status: range access is being brought online</span>Live range provisioning is in activation. Until it is enabled for your cohort, boards 5 and 6 show <b>"Live range access is not yet available"</b> and cannot yet be cleared — the engine credits a range only when it can independently verify a real, governed deployment, and it fails closed until then. Your mission brief and dashboard will tell you the moment your range is ready.</div>
+        <span class="label">Environment</span>
+        <p>An isolated Active Directory estate provisioned per candidate from a Ludus <code>ludus-goad-ranger</code> template, reached over a per-candidate WireGuard tunnel (download your <code>.conf</code> from the dashboard, start the range with <b>Start lab</b>). Ranges are RAM-scheduled and torn down on clearance. Board 5 is a scoped red-team engagement; board 6 the full capstone. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
+        <div class="note warn"><span class="h">Status: range access in activation</span>The live Ludus adapter is not yet wired, so the attestation fails closed — boards 5 and 6 display <b>"Live range access is not yet available"</b> and cannot currently be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
       </div>
     </div>
 
-    <h2 id="parallax">PARALLAX · AI security</h2>
-    <p>PARALLAX is submission-based. You work in a platform-owned GitHub repository (it never holds any credentials), commit your artifact plus a <code>writeup.md</code>, tick the board's submit checklist, and submit from your dashboard. The platform snapshots your exact commit, validates it, signs a manifest binding that commit, and grades it against a sealed, per-candidate fixture in an isolated low-privilege grader. Your artifact is the system under test — your score is a direct function of your work, and a near-empty submission is rejected before it is ever graded. Separately, the <b>Research console</b> is your AI-security workbench for running benign and adversarial trials and building the investigations behind your submissions.</p>
+    <h2 id="parallax">PARALLAX — submission contract</h2>
+    <p>No live console. You work in a platform-owned GitHub repository <code>qwalora/&lt;cohort&gt;-&lt;slug&gt;</code> (it never holds credentials), commit the board's artifact plus <code>writeup.md</code>, and submit from the dashboard. Submit-time processing:</p>
+    <ol>
+      <li><code>POST /submit/start</code> provisions/ensures your repo and branch and returns the clone URL.</li>
+      <li>You commit the required file(s) and <code>writeup.md</code>, and tick the board's checklist (required deliverables must be covered or submit returns <code>422 unmet</code>).</li>
+      <li><code>POST /submit</code> snapshots repo HEAD, computes a content digest, runs submit-time static validation of the code against a sandbox allowlist, pins an immutable tag, and Ed25519-signs a manifest binding the exact commit SHA + digest. A near-empty repo (e.g. a README) is rejected here and can never score on a baseline.</li>
+      <li>Grading runs in a separate low-privilege grader over private networking (<code>/submit/internal/*</code>, grader token); it holds no answer key and scores the frozen snapshot. Results poll to the card; the signed record is public at <code>/submit/verify/&lt;id&gt;</code>.</li>
+    </ol>
+    <p>Resubmission is free and unlimited; attempts auto-increment; an unchanged HEAD is an idempotent no-op; <b>best attempt counts</b>.</p>
+
+    <h3 id="pxboards">Boards &amp; grading</h3>
     <table class="ref">
-      <thead><tr><th>Board</th><th>What you harden / build</th><th>What you submit</th></tr></thead>
+      <thead><tr><th>Board</th><th>Competency</th><th>Artifact</th><th>Grading</th></tr></thead>
       <tbody>
-        <tr><td><b>PX-D1</b></td><td>Prompt-injection defense</td><td>A declarative defense (system/developer prompts, input &amp; output guards) for a RAG assistant</td></tr>
-        <tr><td><b>PX-D2</b></td><td>Prompt-injection defense (code)</td><td>A sandboxed defense implementation</td></tr>
-        <tr><td><b>PX-A1</b></td><td>API authorization</td><td>Authorization logic enforced against an abuse suite</td></tr>
-        <tr><td><b>PX-S1</b></td><td>Secure-release gates</td><td>Release-gate checks that must pass real and catch planted failures</td></tr>
-        <tr><td><b>PX-DE1</b></td><td>Detection engineering</td><td>Detections scored against a labeled corpus</td></tr>
-        <tr><td><b>PX-AR1</b></td><td>Secure architecture review</td><td>A review that must find the seeded weaknesses</td></tr>
-        <tr><td><b>PX-CAP</b></td><td>Capstone</td><td>All components, each of which must pass</td></tr>
+        <tr><td class="mono"><b>PX-D1</b></td><td>Prompt-injection defense (declarative)</td><td class="mono">parallax_submission.json + writeup.md</td><td>Measured ASR / TCR / FPR of the defended RAG assistant + pinned model judge</td></tr>
+        <tr><td class="mono"><b>PX-D2</b></td><td>Prompt-injection defense (code)</td><td class="mono">defense.py + writeup.md</td><td>Sandboxed defense, measured + judge</td></tr>
+        <tr><td class="mono"><b>PX-A1</b></td><td>API object-level authz (BOLA)</td><td class="mono">authz.py + writeup.md</td><td>Deterministic, no model — abuse suite</td></tr>
+        <tr><td class="mono"><b>PX-S1</b></td><td>Secure release gates (DevSecOps)</td><td class="mono">gates.py + writeup.md</td><td>Deterministic — must pass real, catch planted failures</td></tr>
+        <tr><td class="mono"><b>PX-DE1</b></td><td>Detection engineering</td><td class="mono">detect.py + writeup.md</td><td>Deterministic — labeled corpus</td></tr>
+        <tr><td class="mono"><b>PX-AR1</b></td><td>Secure architecture review</td><td class="mono">architecture.py + writeup.md</td><td>Deterministic — 100·recall·specificity</td></tr>
+        <tr><td class="mono"><b>PX-CAP</b></td><td>Capstone (multi-competency)</td><td class="mono">authz.py, detect.py, gates.py, architecture.py + writeup.md</td><td>Each component must independently pass its 75 bar; none may critical-fail</td></tr>
       </tbody>
     </table>
-    <p>PARALLAX boards pass at a per-board bar of <b>75%</b>. Most are graded <b>deterministically with no model in the loop</b> (API authorization, release gates, detection, architecture, capstone); the prompt-injection boards add a server-side behavioral measurement with a model judge. You can resubmit as often as you like — each attempt is independently measured and signed, an unchanged commit is a no-op, and your best attempt counts. Every board pass is a signed, verifiable record you can share.</p>
-    <div class="note"><span class="h">On PARALLAX qualification</span>Each board you pass is recorded and verifiable on its own. A single pathway-level PARALLAX credential is governed and is being rolled out in a later phase. Which boards are open to you depends on your cohort's configuration — your dashboard shows the ones available to you.</div>
+    <p>For the measured boards, your artifact is the system under test: ASR (attack-success rate) must fall and TCR (legitimate task-completion rate) must hold, with FPR (over-refusal) bounded — so a refuse-everything defense is floored out. Pass ≥ 75 per board. Which boards are exposed is cohort-configured; your dashboard shows the ones available to you. A pathway-level PARALLAX credential is governed and rolls out in a later phase; per-board passes stand on their own.</p>
 
-    <h2 id="clear">Clearing a board</h2>
-    <p>Passing a board's objective is necessary but not sufficient. Clearing a board — and advancing — takes <b>two channels</b>:</p>
-    <ol>
-      <li><b>The objective.</b> Your machine-graded score for the board, which must reach {{ pass_bar|int }}%. This is deterministic and signed.</li>
-      <li><b>The report.</b> A written account of your work, reviewed and approved by an assessor. This is the human-adjudication half of the qualification: it is how Ranger stays credible rather than a score you can brute-force.</li>
-    </ol>
-    <p>When both are in hand, the board is marked cleared — a signed clearance is recorded, you earn the board's badge, and you advance to the next board automatically. You will see your objective pass immediately; the report approval follows review.</p>
+    <h2 id="clear">Clearing &amp; promotion</h2>
+    <p>A board clears only when <b>both</b> channels are satisfied: <code>objective_passed</code> (score ≥ {{ pass_bar|int }}%, signed) <b>and</b> <code>report_status == "approved"</code>. Submit your written report from <code>/me</code> (<code>POST /me/report</code>, autosave draft via <code>/me/report/draft</code>); an assessor reviews it (<code>approve</code> / <code>needs_changes</code> / <code>reject</code>). When both land, promotion signs a clearance claim, mints the signed rank badge, frees the range slot, and advances you to the next board. You see your objective pass immediately; report approval follows review. The dashboard "Clear board N" panel shows both channel states live.</p>
 
-    <h2 id="cert">Your certificate</h2>
-    <p>Clearing all six STRATA boards makes you a <b>Qwalora Ranger, Certified</b>. You earn the terminal certified badge and a public, signed certificate with a human-readable id in the form <code>QR-XXXX-XXXX</code>. Anyone can verify it with no account at <code>/verify/&lt;your-handle&gt;</code> (or by certificate id at <code>/verify</code>): the page lists your badges and board clearances and checks each signature independently against the platform's public key. You can share your verification link, your certificate page, and your per-board rank badges (Sentinel through Vanguard). That verifiability is the point — your qualification is something others can check, not just a claim.</p>
+    <h2 id="cred">Credentials &amp; verification</h2>
+    <p>Clearing all six STRATA boards mints the terminal <b>Qwalora Ranger, Certified</b> badge and graduates you. Credentials are public and signed:</p>
+    <div class="kvs">
+      <div class="kv"><b>/verify/&lt;handle&gt;</b><span>No-auth credential page listing badges and clearances with per-item Ed25519 signature verification.</span></div>
+      <div class="kv"><b>/verify?q=</b><span>Lookup by handle or certificate id, format <code>QR-XXXX-XXXX</code>.</span></div>
+      <div class="kv"><b>/verify/&lt;handle&gt;/certificate</b><span>The certificate page; certificates carry issue and expiry dates.</span></div>
+      <div class="kv"><b>/badges/&lt;handle&gt;.json · /pubkey</b><span>Machine-readable badges and the signing public key for independent verification.</span></div>
+    </div>
+    <p>You can share your verify link, certificate, cert id, and per-board rank badges (Sentinel → Vanguard). The point is third-party verifiability: the clearance behind every claim is signed and reproducible.</p>
 
-    <h2 id="rules">Integrity rules</h2>
-    <p>The platform is built so that the only way through is to do the work. A few things follow from that, and are worth stating plainly:</p>
+    <h2 id="invariants">Operating invariants</h2>
     <ul>
-      <li><b>Your scenario is yours.</b> Do not attempt to reach another candidate's data — it is denied by the engine, and your own work is all you are graded on.</li>
-      <li><b>The key is not available.</b> Grading runs on the server; the answer is never sent to you. There is no key to find in the console, the workspace, or the page.</li>
-      <li><b>Resubmit freely.</b> Iterate using the feedback. Attempts are preserved and your best result counts; there is no penalty for trying again.</li>
-      <li><b>The report matters.</b> A high objective score does not clear a board on its own — your written report must stand up to review. Explain your reasoning honestly.</li>
+      <li><b>Answer-free.</b> The grading key is re-derived server-side from your seed and never returned. There is nothing to extract from the console, workspace, or API.</li>
+      <li><b>Own-data isolation.</b> STRATA datasets derive structurally from your session identity (no handle or seed is accepted from the client); the console confines you to your own index (<code>403</code> on anything else); Board-2 evidence is read only from your authorized index; PARALLAX isolation is identity + process boundary.</li>
+      <li><b>Resubmission.</b> STRATA objective worksheets resubmit freely to reach the bar; reports resubmit after <code>needs_changes</code>/<code>reject</code>; PARALLAX submissions are unlimited, attempt-numbered, best-attempt-counts, idempotent on unchanged HEAD.</li>
+      <li><b>Everything is signed.</b> Objectives, clearances, badges, attestations, evidence records, and submission manifests and grades carry Ed25519 signatures; promotion re-verifies them and fails closed on any tamper.</li>
     </ul>
-    <p>Every grade and clearance is signed, so your record is yours and is verifiable. Do good work, and it will show.</p>
 
     <footer>
-      Qwalora Ranger — Candidate Handbook. This document describes the live platform and is the authoritative guide to what is asked and how it is graded. Questions go through your cohort's support channel.
+      Qwalora Ranger — candidate handbook (technical reference). Authoritative description of the live platform: what is asked, and how it is scored. Support goes through your cohort channel.
     </footer>
   </article>
   </main>
