@@ -52,6 +52,7 @@ from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
                     CohortScenarioPlan, FoundationAttestation, Notification,
                     ProgramMembership, ProgramMembershipEvent, RangeRequest,
                     Report, Resource, ScenarioAssignment, db, ensure_schema)
+import cve_feed
 import netacad_foundation
 import pathways
 
@@ -3974,6 +3975,7 @@ def create_app():
         _soc = Badge.query.filter_by(candidate_id=c.id, level="soc-practice", revoked=False).first()
         soc_badge = ({"name": _soc.name, "issued": _ago(_soc.issued_at), "signed": bool(_soc.signature)}
                      if _soc else None)
+        submitted_count = Report.query.filter_by(candidate_id=c.id).count()
         # restore the candidate's own in-progress written-report draft (never a submission)
         report_draft = None
         report_dsv = None
@@ -4016,6 +4018,8 @@ def create_app():
                                   and os.environ.get("RANGER_SUBMISSION")
                                   and c.status == "active" and not programs),
             "soc_badge": soc_badge,
+            "submitted_count": submitted_count,
+            "cve_queue": cve_feed.queue(4),
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
             "badges": bc["chain"], "certified": bc["certified"],
@@ -4100,6 +4104,7 @@ def create_app():
             "siem_live": SIEM_LIVE,
             "foundation": netacad_foundation.build_vm(pathways.PATHWAY_STRATA, set()),
             "open_practice": False, "soc_badge": None,
+            "submitted_count": (0 if not graduated else 6), "cve_queue": cve_feed.queue(4),
             "notifications": [], "unread": 0, "resources": [], "board_coverage": None,
             "mission": _mission_summary(n),
         }

@@ -62,6 +62,17 @@
         </div>
         {% endif %}
 
+        {% if vm.selected_program == 'strata' and vm.status == 'active' and not vm.no_access %}
+        <div class="kpis">
+          <div class="kpi"><span class="kpi-n">{{ vm.board }}<span class="kpi-sub">/6</span></span><span class="kpi-l">Current board</span></div>
+          <div class="kpi"><span class="kpi-n">{% if vm.cur_objective_score is not none %}{{ vm.cur_objective_score }}<span class="kpi-sub">/{{ vm.pass_bar }}</span>{% else %}&mdash;{% endif %}</span><span class="kpi-l">Objective score</span></div>
+          <div class="kpi"><span class="kpi-n">{{ vm.submitted_count }}</span><span class="kpi-l">Submitted</span></div>
+          <div class="kpi"><span class="kpi-n" style="font-size:15px">{{ vm.cur_report_label or 'Not submitted' }}</span><span class="kpi-l">Report status</span></div>
+          {% if vm.foundation %}<div class="kpi"><span class="kpi-n">{{ vm.foundation.done }}<span class="kpi-sub">/{{ vm.foundation.total }}</span></span><span class="kpi-l">Foundation</span></div>{% endif %}
+          <div class="kpi"><span class="kpi-n">{{ vm.badges|selectattr('earned')|list|length }}<span class="kpi-sub">/6</span></span><span class="kpi-l">Badges earned</span></div>
+        </div>
+        {% endif %}
+
         {% if vm.foundation and vm.status == 'active' and not vm.no_access and not vm.rejected %}
         {% set f = vm.foundation %}
         <a href="/me/foundation" class="card" style="text-decoration:none;display:block">
@@ -74,6 +85,25 @@
             <span class="btn btn-ghost btn-sm" style="flex:none">{{ ic('arrow','ic ic-sm') }} Open</span>
           </div>
         </a>
+        {% endif %}
+
+        {% if vm.cve_queue and vm.status == 'active' and not vm.no_access %}
+        <div class="card">
+          <div class="card-head"><span class="eyebrow"><span class="d"></span>{{ ic('shield','ic ic-sm') }} Remediation queue</span><span class="pill pill-amber" style="flex:none"><span class="dot dot-amber"></span>actively exploited &middot; CISA KEV</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:8px">
+            <p class="muted" style="font-size:12px;margin:0">These are being exploited in the wild right now. In a real SOC you triage and remediate on a clock: scan the queue and know what you would patch first.</p>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              {% for v in vm.cve_queue %}
+              <a href="{{ v.url }}" target="_blank" rel="noopener noreferrer" class="cve-row">
+                <span class="sev sev-{{ v.severity|lower }}">{{ v.severity }}</span>
+                <b class="mono" style="font-size:12.5px;color:var(--ink)">{{ v.cve }}</b>
+                <span class="muted" style="font-size:12px">{{ v.vendor }} {{ v.product }} &middot; {{ v.type }}</span>
+                <span style="margin-left:auto;flex:none">{{ ic('ext','ic ic-sm') }}</span>
+              </a>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
         {% endif %}
 
         {% if vm.soc_badge %}
@@ -140,7 +170,7 @@
             </ol>
             <div style="border-left:2px solid var(--violet);padding:6px 0 6px 10px;font-size:12.5px"><b style="color:var(--ink)">When do I submit?</b> <span class="muted">Submit your report once you have worked the mission. The "Clear board" panel below shows your live objective score against the {{ vm.pass_bar }}% bar and your report status, so you always know what is left.</span></div>
           </div>
-        </div>
+        </details>
         {% endif %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your progress</span></div>
           <div class="card-body">
@@ -160,7 +190,7 @@
             </div>
             {% if vm.board_coverage %}<p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>{% endif %}
           </div>
-        </details>
+        </div>
         {% endif %}
 
         {% if vm.notifications %}
@@ -375,7 +405,7 @@
             </ol>
             <div style="border-left:2px solid var(--violet);padding:6px 0 6px 10px;font-size:12.5px"><b style="color:var(--ink)">When do I submit?</b> <span class="muted">As soon as you have pushed your completed files and ticked the required items. Resubmitting is free: push improvements and submit again, and your best attempt counts.</span></div>
           </div>
-        </div>
+        </details>
 
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your assignment</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
@@ -399,7 +429,7 @@
               </div>
             </div>
           </div>
-        </details>
+        </div>
 
         {% endif %}
 
@@ -659,6 +689,17 @@
   .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48}
   .save-status.failed{color:#b4232b} .save-status.unsaved{color:#9a7b1f}
   .cand-body .card{max-width:none}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .kpi{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:5px;background:var(--surface,transparent)}
+  .kpi-n{font:650 24px/1 var(--f);color:var(--ink);display:flex;align-items:baseline;gap:3px}
+  .kpi-sub{font-size:14px;font-weight:500;color:var(--mut)}
+  .kpi-l{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .cve-row{display:flex;align-items:center;gap:10px;text-decoration:none;border:1px solid var(--line2);border-radius:9px;padding:8px 11px}
+  .cve-row:hover{border-color:var(--violet)}
+  .sev{font:600 10px/1 var(--f);padding:4px 7px;border-radius:5px;flex:none;text-transform:uppercase;letter-spacing:.03em}
+  .sev-critical{background:#3a1216;color:#ff6b74;border:1px solid #5c1a20}
+  .sev-high{background:#2a2410;color:#e0a92b;border:1px solid #5a4a1a}
+  .sev-medium{background:#102a24;color:#2bbd93;border:1px solid #1a5a4a}
   .sh-collapse>summary{list-style:none;display:flex;align-items:center;gap:8px}
   .sh-collapse>summary::-webkit-details-marker{display:none}
   .sh-collapse[open]>summary .ic{transform:rotate(180deg)}
