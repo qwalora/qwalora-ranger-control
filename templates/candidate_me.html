@@ -346,6 +346,7 @@
             </div>
             <p class="muted" id="pxd1-instructions" style="font-size:12.5px;margin:0"></p>
             <div id="pxd1-passbar" style="display:none;border-left:2px solid var(--violet);padding:4px 0 4px 10px;font-size:12px"></div>
+            <div id="pxd1-console" style="display:none"></div>
             <div>
               <label class="label">Submission checklist <span class="muted" style="font-weight:400">— select the deliverables you are submitting</span></label>
               <div id="pxd1-checklist" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
@@ -411,6 +412,12 @@
               pb.innerHTML='<b style="color:var(--ink)">Pass bar: '+esc(b.pass_bar)+'+</b> '+
                 '<span class="muted">'+esc(b.pass_rule||'Deterministic, signed, reproducible scoring. No model.')+'</span>';}
             else{pb.style.display='none';}
+            var cons=document.getElementById('pxd1-console');
+            if(b.console_url){cons.style.display='block';
+              cons.innerHTML='<a class="btn btn-sm" href="'+esc(b.console_url)+'" target="_blank" rel="noopener">'+
+                esc(b.console_label||'Open the SOC console')+'</a>'+
+                (b.console_note?'<span class="muted" style="display:block;margin-top:6px;font-size:12px">'+esc(b.console_note)+'</span>':'');}
+            else{cons.style.display='none';cons.innerHTML='';}
             elList.innerHTML=(b.checklist||[]).map(function(it){
               return '<label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;cursor:pointer">'+
                 '<input type="checkbox" value="'+esc(it.id)+'"'+(it.required?' checked':'')+' style="margin-top:2px">'+
