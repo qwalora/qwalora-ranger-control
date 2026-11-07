@@ -4080,6 +4080,15 @@ def create_app():
         _soc = Badge.query.filter_by(candidate_id=c.id, level="soc-practice", revoked=False).first()
         soc_badge = ({"name": _soc.name, "issued": _ago(_soc.issued_at), "signed": bool(_soc.signature)}
                      if _soc else None)
+        # Standalone, publicly verifiable credentials the candidate has earned (STRATA Defender,
+        # the terminal certification), surfaced prominently vs the per-board rank badges.
+        _creds = (Badge.query.filter_by(candidate_id=c.id, revoked=False)
+                  .filter(Badge.level.in_(list(_CREDENTIAL_LEVELS)))
+                  .order_by(Badge.issued_at.asc()).all())
+        credentials = [{"name": b.level == "certified" and b.name + ", Certified" or b.name,
+                        "level": b.level, "cert_id": b.cert_id, "signed": bool(b.signature),
+                        "issued": _ago(b.issued_at)} for b in _creds]
+        verify_url = ((githuboauth.base_url() or "").rstrip("/") + "/verify/" + c.handle) if c.handle else None
         submitted_count = Report.query.filter_by(candidate_id=c.id).count()
         # restore the candidate's own in-progress written-report draft (never a submission)
         report_draft = None
@@ -4128,6 +4137,8 @@ def create_app():
             "board": n, "role_title": P.ROLE_TITLES.get(c.current_role or P.role_of(n), "-"),
             "tier": P.tier_of(n), "cohort": c.cohort,
             "badges": bc["chain"], "certified": bc["certified"],
+            "credentials": credentials, "verify_url": verify_url,
+            "phase1_boards": list(P.DEFENSIVE_CORE), "phase2_boards": list(P.PHASE2_BOARDS),
             "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
             "has_wg": bool(rr and rr.wireguard_config),
             "scenario_ref": _scenario_ref(c, n), "token": c.token,

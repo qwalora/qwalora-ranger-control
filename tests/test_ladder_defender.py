@@ -84,6 +84,24 @@ def test_board4_clear_mints_signed_strata_defender(client, monkeypatch):
         assert c.current_board == 5, "did not advance to the Phase 2 capstone after the core"
 
 
+def test_dashboard_surfaces_earned_credential(client):
+    from models import Badge
+    with A.app.app_context():
+        c = _cand("look-surface", 5)
+        db.session.add(Badge(candidate_id=c.id, level="defender", name="Qwalora STRATA Defender",
+                             role="strata-defender", cert_id="QR-TEST-0007", signature="sig"))
+        db.session.commit()
+        cid = c.id
+    with client.session_transaction() as sess:
+        sess["cand"] = cid
+    r = client.get("/me")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "Your credentials" in body
+    assert "Qwalora STRATA Defender" in body and "QR-TEST-0007" in body
+    assert "Phase 1" in body and "Phase 2" in body
+
+
 def test_defender_credential_is_idempotent(client, monkeypatch):
     monkeypatch.delenv("RANGER_STRATA_PORTFOLIOS", raising=False)
     import scenarios as S

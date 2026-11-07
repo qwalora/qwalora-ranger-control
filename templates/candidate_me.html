@@ -172,6 +172,19 @@
           </div>
         </details>
         {% endif %}
+        {% if vm.credentials %}
+        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your credentials</span></div>
+          <div class="card-body">
+            {% for cr in vm.credentials %}
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;{% if not loop.first %}margin-top:9px;{% endif %}">
+              <span class="pill pill-ok" style="flex:none"><span class="dot dot-ok"></span>{{ ic('medal','ic ic-sm') }} {{ cr.name }}</span>
+              <span class="muted" style="font-size:12px">{% if cr.cert_id %}<span class="mono">{{ cr.cert_id }}</span> · {% endif %}earned {{ cr.issued }}{% if cr.signed %} · cryptographically signed{% endif %}</span>
+            </div>
+            {% endfor %}
+            {% if vm.verify_url %}<a class="btn btn-sm" href="{{ vm.verify_url }}" target="_blank" rel="noopener" style="margin-top:11px">{{ ic('shield','ic ic-sm') }} Public verification page</a>{% endif %}
+          </div>
+        </div>
+        {% endif %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your progress</span></div>
           <div class="card-body">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -184,9 +197,12 @@
               <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
               {% endif %}
             </div>
-            <div class="chain" style="margin-top:12px">
-              {% for b in vm.badges %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endfor %}
-              <span class="pip cert {% if vm.certified %}on{% endif %}" title="Certified">{{ ic('medal','ic ic-sm') }}</span>
+            <div class="chain" style="margin-top:12px;align-items:center">
+              <span class="muted" style="font-size:10px;letter-spacing:.4px;text-transform:uppercase" title="Defensive core">Phase 1</span>
+              {% for b in vm.badges %}{% if b.board in (vm.phase1_boards or [1,2,3,4]) %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endif %}{% endfor %}
+              <span class="muted" style="font-size:10px;letter-spacing:.4px;text-transform:uppercase;margin-left:7px" title="GOAD capstone">Phase 2</span>
+              {% for b in vm.badges %}{% if b.board in (vm.phase2_boards or [5,6]) %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endif %}{% endfor %}
+              <span class="pip cert {% if vm.certified %}on{% endif %}" title="Qwalora Ranger, Certified">{{ ic('medal','ic ic-sm') }}</span>
             </div>
             {% if vm.board_coverage %}<p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>{% endif %}
           </div>
