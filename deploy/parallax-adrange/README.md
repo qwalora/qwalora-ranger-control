@@ -35,31 +35,54 @@ submitted hash against `MD4(UTF-16LE(ADRANGE_ADMIN_PASSWORD))`; an exact match i
 of a real domain compromise and cannot be faked. This becomes the signed, governed range attestation
 (mode `real`) that credits the isolated-board live objective.
 
-## Ports
+## Ports and the scoped pivot
 
-Candidate-facing, exposed via Railway TCP proxy: `53, 88, 389, 445, 636, 3268`.
-Private-only (never proxied): `9443` - the portal's proof/validation endpoint
-(`/validate`, token-gated), used for a real technical-validation probe and to read the expected proof
-material.
+The ONLY public endpoint is the Railway TCP proxy on `1080`, the scoped SOCKS5 pivot. It ignores the
+client's requested host (always lands on the DC loopback) and scopes each credential to disjoint
+ports:
 
-## Deploy (nonprod only)
+- the **candidate** cred (`ADRANGE_SOCKS_USER/PASSWORD`) reaches only the AD service ports the attack
+  chain needs: `53, 88, 135, 389, 445, 464, 636, 3268, 3269`;
+- the **validator** cred (`ADRANGE_VALIDATOR_USER/PASSWORD`, portal-only) reaches only the token-gated
+  proof server `9443`, nothing else.
+
+So the portal can run its real `/validate` probe through the authenticated pivot WITHOUT the DC ever
+sitting on the portal's private network (isolated-project deployment), and a candidate holding the
+attack cred cannot reach `9443` at all. The `/validate` response carries structural checks only; the
+Administrator NT hash is never returned (the portal derives the expected hash itself).
+
+## Deploy
+
+Two supported topologies:
+
+- **nonprod (same environment as the portal):** simplest. The portal validates over private
+  networking. Wire `ADRANGE_INTERNAL_URL=http://<dc-service>.railway.internal:9443`.
+- **isolated prod (recommended for an ATO posture):** the DC lives in its OWN Railway project, off
+  the production portal's private segment, so a candidate who fully compromises the range DC cannot
+  reach the production portal or database. The portal validates through the authenticated pivot
+  instead of private DNS: leave `ADRANGE_INTERNAL_URL` UNSET and set the validator cred.
+
+Steps:
 
 1. Create the service from `deploy/parallax-adrange/Dockerfile` (root directory
-   `deploy/parallax-adrange`).
+   `deploy/parallax-adrange`). For isolated prod, create it in a dedicated project.
 2. Set secrets: `ADRANGE_ADMIN_PASSWORD`, `ADRANGE_FOOTHOLD_PASSWORD`, `ADRANGE_PROOF_TOKEN`,
-   `ADRANGE_SOCKS_PASSWORD` (and the non-secret `ADRANGE_REALM`, `ADRANGE_NETBIOS`,
-   `ADRANGE_FOOTHOLD_USER`, `ADRANGE_SOCKS_USER`).
-3. Add ONE TCP proxy, on the SOCKS port `1080` (Railway allows a single TCP proxy per service; the AD
-   ports stay on the container and are reached through the SOCKS pivot). Note the public endpoint it
-   returns, e.g. `host.proxy.rlwy.net:NNNNN`.
+   `ADRANGE_SOCKS_PASSWORD`, `ADRANGE_VALIDATOR_PASSWORD` (and the non-secret `ADRANGE_REALM`,
+   `ADRANGE_NETBIOS`, `ADRANGE_FOOTHOLD_USER`, `ADRANGE_SOCKS_USER`, `ADRANGE_VALIDATOR_USER`).
+3. Add ONE TCP proxy on the SOCKS port `1080`. Note the public endpoint, e.g.
+   `host.proxy.rlwy.net:NNNNN`.
 4. Wire the portal with `ADRANGE_ENABLED=1`, `ADRANGE_HOST`/`ADRANGE_SOCKS_PORT` (the public SOCKS
-   endpoint), `ADRANGE_SOCKS_USER`/`ADRANGE_SOCKS_PASSWORD`, `ADRANGE_INTERNAL_URL`
-   (`http://parallax-adrange.railway.internal:9443`), `ADRANGE_PROOF_TOKEN`, `ADRANGE_ADMIN_PASSWORD`,
-   `ADRANGE_REALM`, `ADRANGE_FOOTHOLD_USER`/`ADRANGE_FOOTHOLD_PASSWORD` (see `railway.service.json` ->
-   `portal_wiring`). The deterministic engine keeps working; the live range is the governed upgrade.
+   endpoint), `ADRANGE_SOCKS_USER`/`ADRANGE_SOCKS_PASSWORD` (candidate cred),
+   `ADRANGE_VALIDATOR_USER`/`ADRANGE_VALIDATOR_PASSWORD` (portal-only, for the validation pivot),
+   `ADRANGE_PROOF_TOKEN`, `ADRANGE_ADMIN_PASSWORD`, `ADRANGE_REALM`,
+   `ADRANGE_FOOTHOLD_USER`/`ADRANGE_FOOTHOLD_PASSWORD`. Set `ADRANGE_INTERNAL_URL` ONLY for the
+   same-environment (nonprod) topology; omit it for the isolated pivot topology. The deterministic
+   engine keeps working; the live range is the governed upgrade.
 
 The domain re-provisions fresh on every boot; the Administrator proof hash is stable as long as
-`ADRANGE_ADMIN_PASSWORD` is unchanged.
+`ADRANGE_ADMIN_PASSWORD` is unchanged. Residual hardening note: the validator pivot carries the proof
+token inside the (unencrypted) SOCKS tunnel; it gates only structural validation and no secret is
+returned, but pinning TLS on the proof server is a reasonable future step.
 
 ## Going live for governed credit (operator smoke test)
 

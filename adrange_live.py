@@ -136,8 +136,10 @@ def expected_admin_nt_hash() -> str | None:
     return nt_hash(pw) if pw else None
 
 
-# The DC is reached at its own loopback THROUGH the SOCKS pivot (microsocks runs in the DC container).
-_TARGET = "127.0.0.1"
+# The DC is reached THROUGH the scoped SOCKS pivot, which ignores the requested host and always lands
+# on the DC's loopback. Candidates therefore target a placeholder range IP (not 127.0.0.1), which also
+# avoids proxychains' default localnet bypass of loopback addresses.
+_TARGET = "10.10.10.10"
 
 
 def connection_details(candidate=None) -> dict:
@@ -175,32 +177,129 @@ def connection_details(candidate=None) -> dict:
     }
 
 
-# --- live technical-validation probe (private proof server) -------------------
+# --- live technical-validation probe ------------------------------------------
+# Two transports to the DC's token-gated /validate proof endpoint:
+#   * PRIVATE (nonprod): the DC shares the portal's Railway environment, so it is reached directly
+#     over private networking at ADRANGE_INTERNAL_URL (.railway.internal:9443).
+#   * PIVOT (isolated prod): the DC lives in its OWN project, off the portal's private network, so the
+#     portal reaches the proof server THROUGH the authenticated scoped SOCKS pivot, using a portal-only
+#     validator credential that the pivot scopes to port 9443 alone. This keeps an attacker-owned range
+#     DC entirely off the production segment while still allowing a real, fail-closed validation probe.
+# The proof response carries structural checks only (never the Administrator hash), so no secret
+# transits either transport.
 def _internal_url() -> str:
     return (os.environ.get("ADRANGE_INTERNAL_URL") or "").rstrip("/")
 
 
-def validate_live(timeout: float = 6.0) -> dict:
-    """Probe the DC's private /validate endpoint (token-gated, Railway-internal). Returns
-    {ok, reachable, checks, reason}. Fail-closed: any error -> ok False, reachable False."""
-    base = _internal_url()
-    token = os.environ.get("ADRANGE_PROOF_TOKEN", "")
-    if not base or not token:
-        return {"ok": False, "reachable": False, "checks": {},
-                "reason": "live-range internal URL/token not configured"}
-    req = urllib.request.Request(base + "/validate", headers={"X-Proof-Token": token})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode() or "{}")
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
-        return {"ok": False, "reachable": False, "checks": {},
-                "reason": "proof endpoint unreachable: %s" % e}
+def _validator_socks() -> dict:
+    """The portal's own pivot credential, scoped by the DC's SOCKS to the proof server (9443) only.
+    Host/port are the public pivot endpoint; the validator cred is portal-only, never shown to
+    candidates (who hold the AD-ports cred instead)."""
+    return {"host": os.environ.get("ADRANGE_HOST", ""),
+            "port": int(os.environ.get("ADRANGE_SOCKS_PORT", "0") or 0),
+            "username": os.environ.get("ADRANGE_VALIDATOR_USER", ""),
+            "password": os.environ.get("ADRANGE_VALIDATOR_PASSWORD", "")}
+
+
+def _shape_validation(data: dict) -> dict:
     checks = data.get("checks") or {}
-    ok = bool(data.get("ok")) and all(
-        v is True for k, v in checks.items() if k != "error")
+    ok = bool(data.get("ok")) and all(v is True for k, v in checks.items() if k != "error")
     return {"ok": ok, "reachable": True, "checks": checks,
             "reason": "live technical validation passed" if ok
             else "live range reachable but attack path not fully validated"}
+
+
+def _socks5_connect(host, port, user, password, dst_port, timeout):
+    """Open an authenticated SOCKS5 CONNECT tunnel to the DC's dst_port. The scoped pivot ignores the
+    requested destination host and lands on the DC loopback, so a placeholder IP is sent. Returns a
+    connected socket, or raises OSError."""
+    import socket as _s
+    sk = _s.create_connection((host, port), timeout=timeout)
+    try:
+        sk.settimeout(timeout)
+        sk.sendall(struct.pack("!BBB", 5, 1, 2))                     # SOCKS5; 1 method: user/pass
+        if sk.recv(2) != b"\x05\x02":
+            raise OSError("user/pass auth not negotiated")
+        u, p = user.encode(), password.encode()
+        sk.sendall(bytes([1, len(u)]) + u + bytes([len(p)]) + p)     # RFC 1929
+        if sk.recv(2) != b"\x01\x00":
+            raise OSError("auth rejected")
+        sk.sendall(struct.pack("!BBBB", 5, 1, 0, 1)
+                   + _s.inet_aton("10.10.10.10") + struct.pack("!H", dst_port))
+        rep = sk.recv(4)
+        if len(rep) < 2 or rep[1] != 0x00:
+            raise OSError("connect refused by pivot (rep=%s)" % (rep[1] if len(rep) > 1 else "?"))
+        atyp = rep[3] if len(rep) >= 4 else 1
+        sk.recv(6 if atyp == 1 else 18 if atyp == 4 else 0)          # drain BND.ADDR/PORT
+        return sk
+    except Exception:
+        sk.close()
+        raise
+
+
+def _validate_via_pivot(token: str, timeout: float):
+    """Fetch /validate from the proof server through the authenticated SOCKS pivot. Returns a shaped
+    validation dict, or None when pivot validation is not configured."""
+    sk = _validator_socks()
+    if not (sk["host"] and sk["port"] and sk["username"] and sk["password"]):
+        return None
+    try:
+        conn = _socks5_connect(sk["host"], sk["port"], sk["username"], sk["password"], 9443, timeout)
+    except OSError as e:
+        return {"ok": False, "reachable": False, "checks": {},
+                "reason": "proof pivot unreachable: %s" % e}
+    try:
+        conn.settimeout(timeout)
+        conn.sendall(("GET /validate HTTP/1.1\r\nHost: adrange\r\nX-Proof-Token: %s\r\n"
+                      "Connection: close\r\n\r\n" % token).encode())
+        buf = b""
+        while len(buf) <= 65536:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    except OSError as e:
+        return {"ok": False, "reachable": False, "checks": {},
+                "reason": "proof pivot read failed: %s" % e}
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+    if b"\r\n\r\n" not in buf:
+        return {"ok": False, "reachable": True, "checks": {},
+                "reason": "proof pivot returned no HTTP body"}
+    try:
+        data = json.loads(buf.split(b"\r\n\r\n", 1)[1].decode() or "{}")
+    except ValueError:
+        return {"ok": False, "reachable": True, "checks": {},
+                "reason": "proof pivot returned unparseable response"}
+    return _shape_validation(data)
+
+
+def validate_live(timeout: float = 6.0) -> dict:
+    """A REAL technical-validation probe of the DC's token-gated /validate endpoint, over whichever
+    transport is configured (private same-env URL, else the authenticated pivot). Returns
+    {ok, reachable, checks, reason}. Fail-closed: any gap or error -> ok False, reachable False."""
+    token = os.environ.get("ADRANGE_PROOF_TOKEN", "")
+    if not token:
+        return {"ok": False, "reachable": False, "checks": {},
+                "reason": "live-range proof token not configured"}
+    base = _internal_url()
+    if base:
+        req = urllib.request.Request(base + "/validate", headers={"X-Proof-Token": token})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode() or "{}")
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
+            return {"ok": False, "reachable": False, "checks": {},
+                    "reason": "proof endpoint unreachable: %s" % e}
+        return _shape_validation(data)
+    pivot = _validate_via_pivot(token, timeout)
+    if pivot is None:
+        return {"ok": False, "reachable": False, "checks": {},
+                "reason": "live-range validation not configured (no internal URL or validator pivot)"}
+    return pivot
 
 
 # --- proof of compromise -----------------------------------------------------

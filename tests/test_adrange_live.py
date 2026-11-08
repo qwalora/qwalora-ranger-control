@@ -18,7 +18,9 @@ class _Cand:
 def _clean_env(monkeypatch):
     for k in ("ADRANGE_ENABLED", "ADRANGE_HOST", "ADRANGE_PORTS", "ADRANGE_ADMIN_PASSWORD",
               "ADRANGE_FOOTHOLD_USER", "ADRANGE_FOOTHOLD_PASSWORD", "ADRANGE_ADAPTER_VERIFIED",
-              "ADRANGE_INTERNAL_URL", "ADRANGE_PROOF_TOKEN", "ADRANGE_REALM"):
+              "ADRANGE_INTERNAL_URL", "ADRANGE_PROOF_TOKEN", "ADRANGE_REALM",
+              "ADRANGE_SOCKS_PORT", "ADRANGE_SOCKS_USER", "ADRANGE_SOCKS_PASSWORD",
+              "ADRANGE_VALIDATOR_USER", "ADRANGE_VALIDATOR_PASSWORD"):
         monkeypatch.delenv(k, raising=False)
     yield
 
@@ -77,6 +79,31 @@ def test_verify_compromise(monkeypatch):
 def test_validate_live_fail_closed_when_unconfigured():
     r = AL.validate_live()
     assert r["ok"] is False and r["reachable"] is False
+
+
+def test_validate_live_no_token_fails_closed(monkeypatch):
+    # Even with a private URL, a missing proof token is fail-closed (never a fabricated pass).
+    monkeypatch.setenv("ADRANGE_INTERNAL_URL", "http://adrange.railway.internal:9443")
+    r = AL.validate_live()
+    assert r["ok"] is False and r["reachable"] is False
+
+
+def test_validate_live_pivot_not_configured_is_fail_closed(monkeypatch):
+    # Token set but no internal URL and no validator pivot credential -> fail-closed, not a crash.
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "tok")
+    r = AL.validate_live()
+    assert r["ok"] is False and r["reachable"] is False
+    assert "not configured" in r["reason"]
+
+
+def test_shape_validation_requires_all_checks_true():
+    assert AL._shape_validation({"ok": True, "checks": {"a": True, "b": True}})["ok"] is True
+    assert AL._shape_validation({"ok": True, "checks": {"a": True, "b": False}})["ok"] is False
+    # A top-level ok:false never passes, and an error key is ignored for the all-true test but
+    # the top-level ok gate still fails it.
+    assert AL._shape_validation({"ok": False, "checks": {"a": True}})["ok"] is False
+    shaped = AL._shape_validation({"ok": True, "checks": {"a": True}})
+    assert shaped["reachable"] is True
 
 
 def test_attest_requires_adapter_validation_and_proof(monkeypatch):

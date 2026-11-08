@@ -153,12 +153,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/validate":
             checks = validate_directory()
             ok = all(v is True for k, v in checks.items() if k != "error")
-            return self._send(200, {
-                "ok": ok,
-                "realm": REALM,
-                "checks": checks,
-                "proof": {"admin_nt_hash": nt_hash(ADMIN_PASS) if ADMIN_PASS else None},
-            })
+            # Structural validation only. The Administrator NT hash is deliberately NOT returned:
+            # the portal derives the expected hash itself from the shared ADRANGE_ADMIN_PASSWORD, so
+            # the proof answer never transits the network, even over the token-gated pivot channel.
+            return self._send(200, {"ok": ok, "realm": REALM, "checks": checks})
         return self._send(404, {"error": "not found"})
 
     def log_message(self, *a):  # quiet
