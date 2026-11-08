@@ -44,13 +44,19 @@ material.
 
 ## Deploy (nonprod only)
 
-1. Create the service from `deploy/parallax-adrange/Dockerfile`.
-2. Set secrets: `ADRANGE_ADMIN_PASSWORD`, `ADRANGE_FOOTHOLD_PASSWORD`, `ADRANGE_PROOF_TOKEN`
-   (and the non-secret `ADRANGE_REALM`, `ADRANGE_NETBIOS`, `ADRANGE_FOOTHOLD_USER`).
-3. Add TCP proxies for `53, 88, 389, 445, 636, 3268`.
-4. Wire the portal with `ADRANGE_ENABLED=1` and the matching `ADRANGE_*` values (see
-   `railway.service.json` -> `portal_wiring`). The deterministic engine keeps working; the live range
-   is the governed upgrade.
+1. Create the service from `deploy/parallax-adrange/Dockerfile` (root directory
+   `deploy/parallax-adrange`).
+2. Set secrets: `ADRANGE_ADMIN_PASSWORD`, `ADRANGE_FOOTHOLD_PASSWORD`, `ADRANGE_PROOF_TOKEN`,
+   `ADRANGE_SOCKS_PASSWORD` (and the non-secret `ADRANGE_REALM`, `ADRANGE_NETBIOS`,
+   `ADRANGE_FOOTHOLD_USER`, `ADRANGE_SOCKS_USER`).
+3. Add ONE TCP proxy, on the SOCKS port `1080` (Railway allows a single TCP proxy per service; the AD
+   ports stay on the container and are reached through the SOCKS pivot). Note the public endpoint it
+   returns, e.g. `host.proxy.rlwy.net:NNNNN`.
+4. Wire the portal with `ADRANGE_ENABLED=1`, `ADRANGE_HOST`/`ADRANGE_SOCKS_PORT` (the public SOCKS
+   endpoint), `ADRANGE_SOCKS_USER`/`ADRANGE_SOCKS_PASSWORD`, `ADRANGE_INTERNAL_URL`
+   (`http://parallax-adrange.railway.internal:9443`), `ADRANGE_PROOF_TOKEN`, `ADRANGE_ADMIN_PASSWORD`,
+   `ADRANGE_REALM`, `ADRANGE_FOOTHOLD_USER`/`ADRANGE_FOOTHOLD_PASSWORD` (see `railway.service.json` ->
+   `portal_wiring`). The deterministic engine keeps working; the live range is the governed upgrade.
 
 The domain re-provisions fresh on every boot; the Administrator proof hash is stable as long as
 `ADRANGE_ADMIN_PASSWORD` is unchanged.
