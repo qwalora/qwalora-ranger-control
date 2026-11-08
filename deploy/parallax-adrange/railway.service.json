@@ -1,0 +1,38 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "_comment": "Live-execution AD range: a REAL Samba Active Directory Domain Controller, the Railway-native equivalent of a GOAD/Ludus Windows range (Railway has no Windows or nested virtualization). Deploy ONLY to a NONPRODUCTION environment - this deliberately exposes an attackable DC on the internet for boards 5-6.",
+  "service": {
+    "name": "parallax-adrange",
+    "intendedEnvironment": "parallax-nonprod",
+    "region": "us-west2",
+    "source": { "type": "dockerfile", "path": "deploy/parallax-adrange/Dockerfile" },
+    "networking": {
+      "private": true,
+      "privateHostname": "parallax-adrange.railway.internal",
+      "publicProxy": "TCP proxy on the candidate-facing AD ports (53, 88, 389, 445, 636, 3268)",
+      "proofPort": "9443 is PRIVATE-only (portal reads expected proof material); never TCP-proxied"
+    },
+    "resources": { "estimatedMemoryMB": 1024, "estimatedVCPU": 1, "replicas": 1 },
+    "restartPolicy": { "type": "ON_FAILURE", "maxRetries": 3 },
+    "variables": {
+      "ADRANGE_REALM": "QWALORA.RANGE",
+      "ADRANGE_NETBIOS": "QWALORA",
+      "ADRANGE_ADMIN_PASSWORD": "<secret - strong random; proof target is its NT hash>",
+      "ADRANGE_FOOTHOLD_USER": "ranger",
+      "ADRANGE_FOOTHOLD_PASSWORD": "<secret - the creds the candidate is given>",
+      "ADRANGE_PROOF_TOKEN": "<secret - gates the private /validate endpoint>"
+    }
+  },
+  "portal_wiring": {
+    "_comment": "Set ONLY on the parallax-nonprod portal, never production. Enables the live range for boards 5-6 alongside the deterministic engine.",
+    "ADRANGE_ENABLED": "1",
+    "ADRANGE_HOST": "<the Railway TCP proxy host, e.g. caboose.proxy.rlwy.net>",
+    "ADRANGE_PORTS": "ldap=NNNNN,kerberos=NNNNN,smb=NNNNN,ldaps=NNNNN,gc=NNNNN,dns=NNNNN",
+    "ADRANGE_INTERNAL_URL": "http://parallax-adrange.railway.internal:9443",
+    "ADRANGE_REALM": "QWALORA.RANGE",
+    "ADRANGE_FOOTHOLD_USER": "ranger",
+    "ADRANGE_FOOTHOLD_PASSWORD": "<same as the DC secret - shown to the candidate as their foothold>",
+    "ADRANGE_ADMIN_PASSWORD": "<same as the DC secret - portal derives the proof NT hash>",
+    "ADRANGE_PROOF_TOKEN": "<same as the DC secret>"
+  }
+}
