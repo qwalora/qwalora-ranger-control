@@ -50,16 +50,23 @@ COURSES = {
     },
     "cyber-threat-management": {
         "title": "Cyber Threat Management",
-        "url": CATALOG_URL, "verified_direct": False, "hours": 16, "level": "Advanced",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/cyber-threat-management?courseLang=en-US&instance_id=69e33edc-1c18-42a8-ae61-19c539a6ecc6",
+        "verified_direct": True, "hours": 16, "level": "Advanced",
     },
     "ethical-hacker": {
         "title": "Ethical Hacker",
-        "url": CATALOG_URL, "verified_direct": False, "hours": 70, "level": "Advanced",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/ethical-hacker?courseLang=en-US&instance_id=81de5330-9a5b-4ced-8c2b-7c621f27f6f2",
+        "verified_direct": True, "hours": 70, "level": "Advanced",
     },
     "cybersecurity-essentials": {
         "title": "Cybersecurity Essentials",
-        "url": "https://www.netacad.com/portal/web/self-enroll/m/course-650455",
-        "verified_direct": True, "hours": 70, "level": "Intermediate",
+        # Cisco retired the standalone Cybersecurity Essentials course; it is no longer an
+        # offerable class in the academy catalog. Its competencies (cryptography, access
+        # control, defense principles) are now carried by Network Defense, which the PARALLAX
+        # track points at instead. Kept here only for reference; not a live class.
+        "url": CATALOG_URL, "verified_direct": False, "hours": 70, "level": "Intermediate",
     },
 }
 
@@ -93,8 +100,8 @@ TRACKS = {
         "steps": [
             {"course": "intro-cyber",
              "maps_to": "Orientation - core security concepts the research console assumes"},
-            {"course": "cybersecurity-essentials",
-             "maps_to": "All PARALLAX boards - cryptography, access control, and defense principles you "
+            {"course": "network-defense",
+             "maps_to": "All PARALLAX boards - access control, monitoring, and the defense principles you "
                         "carry into prompt-injection defense, secure architecture review, and the capstone"},
         ],
     },
