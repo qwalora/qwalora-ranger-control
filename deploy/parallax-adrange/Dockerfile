@@ -31,7 +31,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
-        microsocks \
         ca-certificates procps iproute2 dnsutils \
     && rm -rf /var/lib/apt/lists/* \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
@@ -39,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY seed.py /opt/adrange/seed.py
 COPY proof_server.py /opt/adrange/proof_server.py
+COPY socks_scoped.py /opt/adrange/socks_scoped.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

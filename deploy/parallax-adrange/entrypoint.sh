@@ -71,13 +71,17 @@ ADRANGE_ADMIN_PASSWORD="$ADMINPASS" ADRANGE_REALM="$REALM" \
 python3 /opt/adrange/proof_server.py &
 
 # SOCKS5 pivot: the ONE publicly-proxied port. Candidates point proxychains here (authenticated) and
-# then reach every AD service at its standard port on the DC's loopback, exactly as a red-teamer
-# pivots through a foothold. Bound on 0.0.0.0 for the Railway TCP proxy edge.
+# then reach the DC's AD services, exactly as a red-teamer pivots through a foothold. We run a SCOPED
+# SOCKS (socks_scoped.py) rather than microsocks: an internet-reachable, deliberately-vulnerable DC
+# must not double as an open relay, so the pivot requires auth, ALWAYS connects to the DC loopback
+# (ignoring the client's requested host), and only permits AD service ports. It also binds dual-stack
+# (IPv6, V6ONLY off) so the Railway TCP-proxy edge reaches it the same way the proof server is reached.
 SOCKS_PORT="${ADRANGE_SOCKS_PORT:-1080}"
 SOCKS_USER="${ADRANGE_SOCKS_USER:-ranger}"
 SOCKS_PASS="${ADRANGE_SOCKS_PASSWORD:?ADRANGE_SOCKS_PASSWORD must be set}"
-echo "[adrange] starting SOCKS5 pivot on :$SOCKS_PORT (user $SOCKS_USER)"
-microsocks -i 0.0.0.0 -p "$SOCKS_PORT" -u "$SOCKS_USER" -P "$SOCKS_PASS" &
+echo "[adrange] starting scoped SOCKS5 pivot on :$SOCKS_PORT (user $SOCKS_USER, DC loopback, AD ports only)"
+ADRANGE_SOCKS_PORT="$SOCKS_PORT" ADRANGE_SOCKS_USER="$SOCKS_USER" ADRANGE_SOCKS_PASSWORD="$SOCKS_PASS" \
+python3 /opt/adrange/socks_scoped.py &
 
 echo "[adrange] starting samba AD DC (foreground)"
 exec samba --foreground --no-process-group --debug-stdout -d 1 -s /etc/samba/smb.conf
