@@ -49,8 +49,6 @@ provision() {
     --adminpass="$ADMINPASS" \
     --option="dns forwarder=$FORWARDER" \
     --option="posix:eadb = /var/lib/samba/eadb.tdb" \
-    --option="rpc server port = 1024" \
-    --option="rpc server dynamic port range = 49152-49172" \
     >/tmp/provision.log 2>&1 || { echo "[adrange] provision FAILED"; cat /tmp/provision.log; exit 1; }
   touch "$SENTINEL"
 }
