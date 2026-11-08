@@ -99,32 +99,35 @@ def validate_directory():
         leg = one("(sAMAccountName=svc_legacy)", ["userAccountControl"])
         checks["asrep_decoy"] = bool(leg and (int(leg["userAccountControl"][0]) & 0x400000))
         checks["tier_group"] = one("(sAMAccountName=TierAdmins)", ["dn"]) is not None
-        # ACE presence: read the SDs and look for the planted extended rights.
+        # ACE presence: read the SDs and look for the planted extended rights. Match on the SDDL
+        # string (robust across samba structure versions) rather than walking the ACE union.
+        try:
+            dom_sid = db.get_domain_sid()
+        except Exception:  # noqa: BLE001
+            dom_sid = None
         svc_sd = one("(sAMAccountName=svc_mssql)", ["nTSecurityDescriptor"])
         dom_sd = db.search(base=base, scope=0, attrs=["nTSecurityDescriptor"])[0]
-        checks["forcechangepw_ace"] = _sd_has_right(svc_sd, GUID_FORCE_CHANGE_PW)
-        checks["dcsync_ace"] = _sd_has_right(dom_sd, GUID_DS_GET_CHANGES)
+        checks["forcechangepw_ace"] = _sd_has_right(svc_sd, GUID_FORCE_CHANGE_PW, dom_sid)
+        checks["dcsync_ace"] = _sd_has_right(dom_sd, GUID_DS_GET_CHANGES, dom_sid)
     except Exception as e:  # noqa: BLE001
         checks["error"] = str(e)
     return checks
 
 
-def _sd_has_right(entry, guid_str):
+def _sd_has_right(entry, guid_str, dom_sid=None):
     if not entry or "nTSecurityDescriptor" not in entry:
         return False
     try:
         from samba.dcerpc import security
         from samba.ndr import ndr_unpack
         sd = ndr_unpack(security.descriptor, entry["nTSecurityDescriptor"][0])
-        want = guid_str.lower()
-        for ace in (sd.dacl.aces if sd.dacl else []):
-            obj = getattr(ace, "object", None)
-            if obj and getattr(obj, "type", None):
-                if str(obj.type.inner.object_type).lower() == want:
-                    return True
+        try:
+            sddl = sd.as_sddl(dom_sid) if dom_sid is not None else sd.as_sddl()
+        except Exception:  # noqa: BLE001
+            sddl = sd.as_sddl()
+        return guid_str.lower() in (sddl or "").lower()
     except Exception:  # noqa: BLE001
         return False
-    return False
 
 
 class Handler(BaseHTTPRequestHandler):
