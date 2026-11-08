@@ -24,10 +24,9 @@ provision() {
     --realm="$REALM" \
     --domain="$DOMAIN" \
     --server-role=dc \
+    --host-name="${ADRANGE_DC_HOSTNAME:-DC01}" \
     --adminpass="$ADMINPASS" \
     --option="dns forwarder=$FORWARDER" \
-    --option="ad dc functional level=2016" \
-    --option="vfs objects=" \
     >/tmp/provision.log 2>&1 || { echo "[adrange] provision FAILED"; cat /tmp/provision.log; exit 1; }
   # Allow weak/legacy crypto so standard offensive tooling (impacket NTLM, RC4 Kerberoast) works as it
   # would against a real misconfigured enterprise DC. This is a TRAINING range, intentionally weak.
