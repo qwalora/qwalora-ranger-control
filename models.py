@@ -93,6 +93,10 @@ def ensure_schema(db):
         "board_results": [
             # S6: signed real-vs-mock range attestation for isolated boards (additive ALTER).
             ("range_attestation", "TEXT"),
+            # Live-execution AD range (Samba AD DC on Railway): signed proof-of-compromise
+            # attestation for boards 5/6 (DCSync of the live domain). Distinct from the Ludus
+            # range_attestation; additive ALTER.
+            ("live_attestation", "TEXT"),
         ],
         "cohort_scenario_plans": [
             # S3/S4: the cohort's approved portfolio, stored in a DEDICATED column so saving it never
@@ -438,6 +442,9 @@ class BoardResult(db.Model):
     # earned against a REAL validated Ludus range or a mock/simulated posture, so a simulated range
     # can never yield an isolated-board objective award (fail-closed). NULL for non-isolated boards.
     range_attestation = db.Column(db.Text, nullable=True)
+    # Live-execution AD range (Samba AD DC on Railway): signed proof-of-compromise attestation
+    # (DCSync of the live domain) for boards 5/6. NULL until the candidate proves a real compromise.
+    live_attestation = db.Column(db.Text, nullable=True)
     # Subjective channel (human report review).
     report_id = db.Column(db.Integer, db.ForeignKey("reports.id"), nullable=True)
     report_status = db.Column(db.String(20), nullable=True)

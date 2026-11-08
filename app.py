@@ -1799,6 +1799,22 @@ def create_app():
         # expired/forged attestation fails closed.
         if P.is_isolated(n) and _strata_portfolios_on():
             import json as _json
+            # Live-execution range (Samba AD DC on Railway): when it is switched on it IS the
+            # real-range proof. Require a verified, signed proof-of-compromise attestation (a real
+            # DCSync of the live domain); a missing/forged/foreign one fails closed, exactly like the
+            # Ludus path below. This never fabricates credit from a configured URL.
+            import adrange_live as _AL
+            if _AL.enabled():
+                try:
+                    _live = _json.loads(br.live_attestation) if br.live_attestation else None
+                except Exception:  # noqa: BLE001
+                    _live = None
+                ok, reason = _AL.verify_attestation(_live, handle=c.handle, board=int(n),
+                                                    cohort=c.cohort, attempt=getattr(br, "attempt", 1))
+                if not ok:
+                    app.logger.info("isolated board %s gate refused (live range): %s", n, reason)
+                    return False
+                return _promote(c)
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
             try:
@@ -4038,6 +4054,29 @@ def create_app():
             "recent": items[:6],
         }
 
+    def _live_range_vm(c, n):
+        """View model for the live-execution AD range (the Samba AD DC on Railway). Present only on
+        the AD boards (5/6) and only when the live range is switched on for this environment. Carries
+        the candidate-facing connection briefing and whether they have already proven a real
+        compromise (a verified, signed proof-of-compromise attestation)."""
+        import adrange_live as AL
+        if not AL.enabled() or _effective_env(n) != "ad-range":
+            return {"enabled": False}
+        vm = AL.connection_details(c)
+        br = _board_result(c, n, create=False)
+        compromised = False
+        if br and getattr(br, "live_attestation", None):
+            import json as _json
+            try:
+                rec = _json.loads(br.live_attestation)
+                ok, _ = AL.verify_attestation(rec, handle=c.handle, board=int(n), cohort=c.cohort)
+                compromised = ok
+            except Exception:  # noqa: BLE001
+                compromised = False
+        vm.update({"submit_url": "/me/workspace/compromise", "compromised": compromised,
+                   "adapter_verified": AL.adapter_verified()})
+        return vm
+
     def _me_vm(c, selected=None):
         """The candidate dashboard view model. Shared by /me and the admin
         preview so both render exactly what the ranger sees. Program-aware: `programs`
@@ -4152,6 +4191,7 @@ def create_app():
             "credentials": credentials, "verify_url": verify_url,
             "phase1_boards": list(P.DEFENSIVE_CORE), "phase2_boards": list(P.PHASE2_BOARDS),
             "ad_range": _effective_env(n) == "ad-range",
+            "live_range": _live_range_vm(c, n),
             "ad_workspace_url": "/me/workspace", "ad_bloodhound_url": "/me/workspace/bloodhound.zip",
             "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
             "has_wg": bool(rr and rr.wireguard_config),
@@ -4758,6 +4798,77 @@ def create_app():
         fn = "ranger-ad-%s.zip" % (_scenario_ref(c, n, seed) or "range")
         return Response(data, mimetype="application/zip",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
+
+    @app.get("/me/workspace/range")
+    @require_program("strata")
+    def candidate_live_range():
+        """Candidate-facing briefing for the LIVE AD range (the Samba AD DC on Railway): host, ports,
+        realm, the foothold creds they are given, the objective, and tool hints. Boards 5/6 only, and
+        only when the live range is switched on. Never returns the admin password or proof material."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        import adrange_live as AL
+        n = int(c.current_board)
+        if not AL.enabled() or _effective_env(n) != "ad-range":
+            return jsonify(enabled=False, error="no live range for this board"), 404
+        return jsonify(ok=True, board=n, live_range=_live_range_vm(c, n)), 200
+
+    @app.post("/me/workspace/compromise")
+    @require_program("strata")
+    def candidate_live_compromise():
+        """Submit proof of a REAL domain compromise against the live AD range: the Administrator NT
+        hash recovered by DCSync. The portal runs a real technical-validation probe of the live DC
+        (the planted attack path is actually present) and verifies the submitted hash against the
+        domain's true Administrator hash. On success it records a signed, verifiable
+        proof-of-compromise attestation. Under governance this attestation is the isolated-board
+        real-range proof; without governance it is an additional verifiable live-range credential
+        (the board still clears on objective + report)."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        import adrange_live as AL
+        n = int(c.current_board)
+        if not AL.enabled() or _effective_env(n) != "ad-range":
+            return jsonify(error="no live range for this board"), 404
+        body = request.get_json(silent=True) or {}
+        proof_text = body.get("proof") or body.get("nt_hash") or body.get("submission") or ""
+        if not isinstance(proof_text, str) or not proof_text.strip():
+            return jsonify(error="submit the Administrator NT hash recovered via DCSync"), 400
+        validation = AL.validate_live()
+        proof = AL.verify_compromise(proof_text)
+        br = _board_result(c, n)
+        attempt = getattr(br, "attempt", 1)
+        creditable, att = AL.attest(c, n, cohort=c.cohort, attempt=attempt,
+                                    validation=validation, proof=proof,
+                                    scenario={"scenario_ref": _scenario_ref(c, n)})
+        import json as _json
+        # Store the signed record only when it is a verified, creditable compromise; a failed attempt
+        # never overwrites a prior success and never records a creditable attestation.
+        if creditable:
+            br.live_attestation = _json.dumps(att)
+        _touch(c, n)
+        promoted = False
+        if creditable and _strata_portfolios_on():
+            promoted = _evaluate_gate(c)
+        db.session.commit()
+        return jsonify(
+            ok=bool(proof.get("ok")),
+            validated=bool(validation.get("ok")),
+            creditable=bool(creditable),
+            compromised=bool(creditable),
+            promoted=promoted,
+            proof={"verified": bool(proof.get("ok")), "reason": proof.get("reason")},
+            validation={"passed": bool(validation.get("ok")),
+                        "reachable": bool(validation.get("reachable")),
+                        "reason": validation.get("reason")},
+            note=("Real domain compromise verified and recorded." if creditable
+                  else "Not yet verified: %s" % (proof.get("reason") or validation.get("reason"))),
+        ), 200
 
     @app.post("/me/workspace/draft")
     @require_program("strata")
