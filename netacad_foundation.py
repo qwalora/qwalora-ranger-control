@@ -26,7 +26,8 @@ CATALOG_URL = "https://www.netacad.com/courses/cybersecurity"
 COURSES = {
     "intro-cyber": {
         "title": "Introduction to Cybersecurity",
-        "url": "https://www.netacad.com/portal/web/self-enroll/m/course-1605348",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/introduction-to-cybersecurity?courseLang=en-US&instance_id=07160b4f-b734-42fb-aaba-d7d43c27bcdc",
         "verified_direct": True, "hours": 6, "level": "Foundational",
     },
     "networking-basics": {
