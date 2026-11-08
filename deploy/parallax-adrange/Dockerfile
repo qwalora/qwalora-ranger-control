@@ -31,7 +31,7 @@ FROM debian:11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 # Samba AD DC + tooling. krb5-config/winbind pulled for completeness; python3-samba for the seed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        samba samba-ad-provision samba-dsdb-modules samba-vfs-modules \
+        samba samba-dsdb-modules samba-vfs-modules \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
