@@ -28,11 +28,18 @@ FOOTHOLD_USER="${ADRANGE_FOOTHOLD_USER:-ranger}"
 FOOTHOLD_PASS="${ADRANGE_FOOTHOLD_PASSWORD:?ADRANGE_FOOTHOLD_PASSWORD must be set}"
 FORWARDER="${ADRANGE_DNS_FORWARDER:-1.1.1.1}"
 
-SAMDB=/var/lib/samba/private/sam.ldb
+# A completion sentinel, written only after a FULLY successful provision. A bare sam.ldb is not
+# enough: provisioning can create sam.ldb and then fail later (e.g. at the sysvol ACL step), leaving a
+# half-provisioned domain that must NOT be reused. On any boot without the sentinel we wipe and
+# provision cleanly.
+SENTINEL=/var/lib/samba/.adrange_provisioned
 
 provision() {
   echo "[adrange] provisioning AD DC: realm=$REALM domain=$DOMAIN"
-  rm -f /etc/samba/smb.conf
+  rm -rf /etc/samba/smb.conf /var/lib/samba/private/* /var/lib/samba/sysvol/* 2>/dev/null || true
+  # posix:eadb routes extended attributes (including the NT ACLs Samba sets on SYSVOL) into a TDB
+  # file instead of privileged security.* filesystem xattrs, which the container's overlay fs cannot
+  # store (provisioning otherwise aborts at setsysvolacl with NT_STATUS_ACCESS_DENIED).
   samba-tool domain provision \
     --use-rfc2307 \
     --realm="$REALM" \
@@ -41,10 +48,12 @@ provision() {
     --host-name="${ADRANGE_DC_HOSTNAME:-DC01}" \
     --adminpass="$ADMINPASS" \
     --option="dns forwarder=$FORWARDER" \
+    --option="posix:eadb = /var/lib/samba/eadb.tdb" \
     >/tmp/provision.log 2>&1 || { echo "[adrange] provision FAILED"; cat /tmp/provision.log; exit 1; }
+  touch "$SENTINEL"
 }
 
-if [ ! -f "$SAMDB" ]; then
+if [ ! -f "$SENTINEL" ]; then
   provision
 else
   echo "[adrange] existing domain found; reusing"
