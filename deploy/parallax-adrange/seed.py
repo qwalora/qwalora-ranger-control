@@ -135,6 +135,31 @@ def dsacl_add(object_dn, trustee_sid, right_guids):
     print("[seed] ACE(s) %s on %s -> %s" % (",".join(right_guids), object_dn, trustee_sid))
 
 
+def dsacl_add_sddl(object_dn, sddl, label):
+    """Append an arbitrary SDDL ACE string to object_dn via samba-tool dsacl set."""
+    subprocess.run(
+        ["samba-tool", "dsacl", "set", "--objectdn=%s" % object_dn, "--sddl=%s" % sddl],
+        check=True, capture_output=True, text=True,
+    )
+    print("[seed] ACE %s on %s (%s)" % (sddl, object_dn, label))
+
+
+def ensure_trophy_ou(db, domain_dn):
+    """Create OU=Trophies: the container the candidate writes their per-candidate proof object into
+    once they have won domain dominance. Idempotent."""
+    ou_dn = "OU=Trophies,%s" % domain_dn
+    try:
+        db.create_ou(ou_dn)
+        print("[seed] created %s" % ou_dn)
+    except Exception as e:  # noqa: BLE001 - already exists, etc.
+        if "already exists" not in str(e).lower() and "attribute_or_value_exists" not in str(e).lower():
+            # create_ou raises on an existing OU; tolerate that, re-raise anything else.
+            res = db.search(base=domain_dn, expression="(ou=Trophies)", attrs=["dn"])
+            if not res:
+                raise
+    return ou_dn
+
+
 def main():
     db = samdb()
     domain_dn = db.domain_dn()
@@ -164,8 +189,19 @@ def main():
     # Hop 1: foothold can ForceChangePassword svc_mssql.
     dsacl_add(_dn(db, "svc_mssql"), _sid(db, FOOTHOLD_USER), [GUID_FORCE_CHANGE_PW])
 
-    # Hop 3: TierAdmins holds DCSync (replication) rights on the domain head.
+    # Hop 3: TierAdmins holds DCSync (replication) rights on the domain head. Kept for fidelity - the
+    # BloodHound graph still shows the full DCSync path and the candidate genuinely wins domain
+    # dominance - even though the trophy write (below) is what the portal verifies as proof.
     dsacl_add(domain_dn, _sid(db, "TierAdmins"), [GUID_DS_GET_CHANGES, GUID_DS_GET_CHANGES_ALL])
+
+    # Proof-of-compromise primitive: TierAdmins holds Create-Child on OU=Trophies, so a candidate who
+    # has won the chain can create their per-candidate trophy object CN=<flag>,OU=Trophies over plain
+    # LDAP. CC = DS-Create-Child; CI so it covers the OU's object children. This is a standard,
+    # Samba-reliable privileged write - no DRSUAPI, no brittle DRS client - and uniquely-named per
+    # candidate so concurrent candidates never collide. The portal verifies the object's existence.
+    trophy_ou = ensure_trophy_ou(db, domain_dn)
+    dsacl_add_sddl(trophy_ou, "(A;CI;CC;;;%s)" % _sid(db, "TierAdmins"),
+                   "TierAdmins Create-Child on OU=Trophies")
 
     print("[seed] attack path planted OK")
     return 0

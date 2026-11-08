@@ -15,30 +15,25 @@
 #   foothold (ForceChangePassword) -> Kerberoastable service account -> group with DCSync rights
 #   -> DCSync of the domain (Administrator / krbtgt).
 #
-# Proof of compromise is the Administrator NT hash, obtainable ONLY by DCSync (the candidate never
-# learns the password). The portal verifies the submitted hash against MD4(UTF-16LE(adminpass))
-# derived from the shared ADRANGE_ADMIN_PASSWORD secret, so a pass is cryptographic proof of a real
-# domain compromise and cannot be faked.
+# Proof of compromise is a TROPHY WRITE: the candidate uses the domain dominance won through the
+# planted path (TierAdmins holds Create-Child on OU=Trophies, a continuation of the ACL-abuse chain)
+# to create a per-candidate trophy object CN=<flag>,OU=Trophies over LDAP. The portal issues each
+# candidate a unique flag (HMAC over their identity with a portal-only key), so writing it proves both
+# domain dominance and candidate identity, and the portal verifies it by reading the DC directly. This
+# replaces the impacket DCSync proof: impacket's rpcrt.py request() mis-reads Samba 4.17's
+# DRSGetNCChanges reply (it sniffs the last 4 bytes of the reply as a status DWORD; Samba ends the
+# packet non-zero there), wrongly aborting a successful dump with "code 0x0 ERROR_SUCCESS" - proven
+# locally with no proxy, as both svc_mssql and a full Domain Admin. The trophy write uses only
+# standard, Samba-reliable LDAP, so the proof no longer depends on a brittle third-party DRS client.
 #
 # Build/deploy is manual (deploy/ is outside the portal autodeploy hold). Deploy ONLY to a
 # NONPRODUCTION environment; this service deliberately exposes an attackable DC on the internet.
-# Samba 4.13 (Debian 11/bullseye). impacket's rpcrt.py request() decides error-vs-success by sniffing
-# the LAST 4 BYTES of the reply as a status DWORD; Samba 4.17 ends the DRSGetNCChanges reply so those
-# bytes are non-zero, and impacket wrongly aborts a successful DCSync ("code 0x0 ERROR_SUCCESS") -
-# reproduced locally, no proxy, as both svc_mssql and a full Domain Admin. Samba 4.13 marshals the
-# reply differently and is the era where impacket DCSync against Samba AD works. Pin to it.
-FROM debian:11-slim
+FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Drop the bullseye-security suite before updating: it prunes superseded point-release .debs, so apt
-# 404s on the exact ~deb11uN versions its index lists. The stable base pool still carries Samba 4.13
-# and everything here; a throwaway range does not need the security-update deltas.
-RUN sed -i '/deb .*-security/d; /debian-security/d' /etc/apt/sources.list \
-    && find /etc/apt/sources.list.d -type f -exec sed -i '/-security/d; /debian-security/d' {} + 2>/dev/null; true
-# Samba AD DC + tooling. On bullseye the AD provisioning tooling ships inside the samba package
-# (no samba-ad-provision split-out). krb5-config/winbind for completeness; python3-samba for the seed.
-RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-recommends \
-        samba samba-dsdb-modules samba-vfs-modules \
+# Samba AD DC + tooling. krb5-config/winbind pulled for completeness; python3-samba for the seed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        samba samba-ad-provision samba-dsdb-modules samba-vfs-modules \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
@@ -46,12 +41,6 @@ RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/* \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
     && rm -f /etc/samba/smb.conf
-
-# DEBUG ONLY (nonprod): impacket for the ADRANGE_DIAG loopback DCSync self-test, to confirm Samba 4.13
-# parses cleanly. Revert once proven; the DC should not ship with attack tooling on it.
-RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-recommends python3-pip \
-    && pip3 install --no-cache-dir 'impacket==0.13.1' \
-    && rm -rf /var/lib/apt/lists/* || true
 
 COPY seed.py /opt/adrange/seed.py
 COPY proof_server.py /opt/adrange/proof_server.py

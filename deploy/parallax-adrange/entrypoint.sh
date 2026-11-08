@@ -83,25 +83,5 @@ echo "[adrange] starting scoped SOCKS5 pivot on :$SOCKS_PORT (user $SOCKS_USER, 
 ADRANGE_SOCKS_PORT="$SOCKS_PORT" ADRANGE_SOCKS_USER="$SOCKS_USER" ADRANGE_SOCKS_PASSWORD="$SOCKS_PASS" \
 python3 /opt/adrange/socks_scoped.py &
 
-# DEBUG ONLY (ADRANGE_DIAG): a loopback DCSync self-test. Runs impacket secretsdump against the DC on
-# 127.0.0.1 with NO proxy, so we can tell an impacket<->Samba DRS reply-parse failure apart from the
-# SOCKS pivot. Local success + pivot failure => the pivot/splice; local failure => impacket<->Samba.
-# svc_mssql keeps its seed password (Password123!) and is already in TierAdmins (DCSync rights).
-if [ -n "${ADRANGE_DIAG:-}" ] && command -v secretsdump.py >/dev/null 2>&1; then
-  ( sleep 25
-    echo "[adrange][selftest] ===== loopback DCSync self-test (no proxy): rights vs impacket ====="
-    echo "[adrange][selftest] --- A) as svc_mssql (planted TierAdmins DCSync rights) ---"
-    secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
-      -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest][A] /' | head -40
-    echo "[adrange][selftest] --- D) as Administrator (full DA - decisive rights-vs-impacket test) ---"
-    secretsdump.py "qwalora.range/Administrator:${ADMINPASS}@127.0.0.1" \
-      -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest][D] /' | head -40
-    echo "[adrange][selftest] --- E) samba-native check: ldbsearch unicodePwd of Administrator ---"
-    ldbsearch -H /var/lib/samba/private/sam.ldb '(sAMAccountName=Administrator)' unicodePwd 2>&1 \
-      | sed 's/^/[adrange][selftest][E] /' | head -8
-    echo "[adrange][selftest] ===== self-test done ====="
-  ) &
-fi
-
 echo "[adrange] starting samba AD DC (foreground)"
 exec samba --foreground --no-process-group --debug-stdout -d 1 -s /etc/samba/smb.conf

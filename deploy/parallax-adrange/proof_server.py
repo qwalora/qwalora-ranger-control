@@ -17,6 +17,8 @@ import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import re
+
 PROOF_TOKEN = os.environ.get("ADRANGE_PROOF_TOKEN", "")
 ADMIN_PASS = os.environ.get("ADRANGE_ADMIN_PASSWORD", "")
 REALM = os.environ.get("ADRANGE_REALM", "QWALORA.RANGE")
@@ -26,6 +28,11 @@ SAMDB_PATH = "/var/lib/samba/private/sam.ldb"
 
 GUID_FORCE_CHANGE_PW = "00299570-246d-11d0-a768-00aa006e0529"
 GUID_DS_GET_CHANGES = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"
+
+# A candidate's trophy flag is an HMAC-derived token the portal issues; restrict to this charset so
+# the value is always safe to splice into an LDAP filter / RDN (defence-in-depth; the portal already
+# produces hex-ish tokens).
+_FLAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 # --- MD4 (modern OpenSSL disables it, so ship a compact implementation) -------
@@ -78,6 +85,7 @@ def validate_directory():
         "provisioned": False, "foothold_present": False, "kerberoastable_spn": False,
         "asrep_decoy": False, "tier_group": False,
         "forcechangepw_ace": False, "dcsync_ace": False,
+        "trophy_ou": False, "trophy_create_ace": False,
     }
     try:
         from samba.auth import system_session
@@ -109,9 +117,63 @@ def validate_directory():
         dom_sd = db.search(base=base, scope=0, attrs=["nTSecurityDescriptor"])[0]
         checks["forcechangepw_ace"] = _sd_has_right(svc_sd, GUID_FORCE_CHANGE_PW, dom_sid)
         checks["dcsync_ace"] = _sd_has_right(dom_sd, GUID_DS_GET_CHANGES, dom_sid)
+        # Trophy container + the Create-Child grant to TierAdmins that lets a compromised candidate
+        # write their per-candidate proof object.
+        tier = one("(sAMAccountName=TierAdmins)", ["objectSid"])
+        tier_sid = None
+        if tier and tier.get("objectSid"):
+            from samba.dcerpc import security as _sec
+            from samba.ndr import ndr_unpack as _unpack
+            tier_sid = str(_unpack(_sec.dom_sid, tier["objectSid"][0]))
+        ou = db.search(base=base, expression="(ou=Trophies)", attrs=["nTSecurityDescriptor"])
+        checks["trophy_ou"] = bool(ou)
+        checks["trophy_create_ace"] = bool(ou) and _sd_has_createchild(ou[0], tier_sid, dom_sid)
     except Exception as e:  # noqa: BLE001
         checks["error"] = str(e)
     return checks
+
+
+def _sd_has_createchild(entry, trustee_sid, dom_sid=None):
+    """True when the object's DACL grants Create-Child (SDDL right 'CC') to trustee_sid."""
+    if not entry or "nTSecurityDescriptor" not in entry or not trustee_sid:
+        return False
+    try:
+        from samba.dcerpc import security
+        from samba.ndr import ndr_unpack
+        sd = ndr_unpack(security.descriptor, entry["nTSecurityDescriptor"][0])
+        try:
+            sddl = sd.as_sddl(dom_sid) if dom_sid is not None else sd.as_sddl()
+        except Exception:  # noqa: BLE001
+            sddl = sd.as_sddl()
+        sddl = sddl or ""
+        # Match an allow ACE that both carries the Create-Child right and ends with the trustee SID.
+        for ace in re.findall(r"\(([^)]*)\)", sddl):
+            f = ace.split(";")
+            if len(f) >= 6 and f[0].startswith("A") and "CC" in f[2] and f[5].rstrip(")") == trustee_sid:
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def trophy_present(flag):
+    """True when CN=<flag>,OU=Trophies exists in the directory. flag is validated against _FLAG_RE
+    before use so it is safe to place in the LDAP filter."""
+    if not flag or not _FLAG_RE.match(flag):
+        return False
+    try:
+        from samba.auth import system_session
+        from samba.param import LoadParm
+        from samba.samdb import SamDB
+        lp = LoadParm()
+        lp.load(SMB_CONF)
+        db = SamDB(url=SAMDB_PATH, session_info=system_session(), lp=lp)
+        base = db.domain_dn()
+        res = db.search(base="OU=Trophies,%s" % base,
+                        expression="(cn=%s)" % flag, attrs=["dn"])
+        return len(res) >= 1
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _sd_has_right(entry, guid_str, dom_sid=None):
@@ -153,10 +215,16 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/validate":
             checks = validate_directory()
             ok = all(v is True for k, v in checks.items() if k != "error")
-            # Structural validation only. The Administrator NT hash is deliberately NOT returned:
-            # the portal derives the expected hash itself from the shared ADRANGE_ADMIN_PASSWORD, so
-            # the proof answer never transits the network, even over the token-gated pivot channel.
+            # Structural validation only - confirms the range is live and the attack path (including
+            # the trophy container + its Create-Child grant) is genuinely planted. No secret is
+            # returned; proof of a specific candidate's compromise is the /trophy check below.
             return self._send(200, {"ok": ok, "realm": REALM, "checks": checks})
+        if u.path == "/trophy":
+            # Proof of compromise: did the candidate create their per-candidate trophy object? The
+            # portal passes the flag it issued that candidate; only a candidate who won domain
+            # dominance could have written CN=<flag>,OU=Trophies over LDAP.
+            flag = (q.get("flag", [""])[0] or "").strip()
+            return self._send(200, {"present": trophy_present(flag), "realm": REALM})
         return self._send(404, {"error": "not found"})
 
     def log_message(self, *a):  # quiet
