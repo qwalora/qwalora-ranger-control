@@ -31,7 +31,7 @@ except Exception:  # markdown is optional; fall back to escaped <pre>
 import secrets
 import urllib.parse
 
-from flask import (Flask, abort, jsonify, redirect, render_template, request,
+from flask import (Flask, Response, abort, jsonify, redirect, render_template, request,
                    session, url_for)
 
 import broker
@@ -960,6 +960,8 @@ def create_app():
         import strata_catalog as _sc
         if int(n) == 2 and not _strata_portfolios_on():
             return "soc-dataset"
+        if int(n) == 5 and not _strata_portfolios_on():
+            return "ad-range"   # Railway AD analysis range (BloodHound + attack-path submission)
         return _sc.ENVIRONMENT.get(int(n))
 
     def _slots_used(host="primary"):
@@ -1794,7 +1796,7 @@ def create_app():
         # exact candidate/board/cohort/attempt/scenario/range identity + freshness + creditable mode);
         # a fresh one is never minted to make a prior award pass. A mock/simulated/unavailable/foreign/
         # expired/forged attestation fails closed.
-        if P.is_isolated(n):
+        if P.is_isolated(n) and _strata_portfolios_on():
             import json as _json
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
@@ -1894,11 +1896,14 @@ def create_app():
         br = _board_result(c, n)
         br.objective_score = float(score)
         passed = float(score) >= P.PASS_BAR
-        # S6 fail-closed chokepoint: on ISOLATED boards (5 Raider / 6 Vanguard), an objective is
-        # awardable ONLY against a REAL, validated Ludus range. The broker's mock mode reports a
-        # range as 'deployed' unconditionally, so without this a simulated range could award credit.
-        # Record a signed real-vs-mock attestation and refuse the award unless the range is real.
-        if P.is_isolated(n):
+        # S6 fail-closed chokepoint: on ISOLATED boards (5 Raider / 6 Vanguard) UNDER GOVERNANCE,
+        # an objective is awardable ONLY against a REAL, validated Ludus range. The broker's mock
+        # mode reports a range as 'deployed' unconditionally, so without this a simulated range could
+        # award credit. Record a signed real-vs-mock attestation and refuse the award unless real.
+        # Without governance, board 5 is the Railway AD analysis range: it is submission-graded
+        # (attack-path reconstruction via ad_range) and clears on objective + report like a shared
+        # board, with no live-range attestation.
+        if P.is_isolated(n) and _strata_portfolios_on():
             import json as _json
             import strata_range_attestation as _ra
             rr = _board_range(c, n)
@@ -4058,6 +4063,12 @@ def create_app():
                 next_action = ("Open your SOC console (Wazuh), investigate the intrusion, then record your triage"
                                if not obj_done else
                                "Refine your triage adjudication and resubmit to reach %g%%" % P.PASS_BAR)
+            elif _effective_env(n) == "ad-range":
+                next_action = ("Download your BloodHound dataset, map the path from your foothold to "
+                               "Domain Admin, then submit your attack path"
+                               if not obj_done else
+                               "Refine your attack path and resubmit to reach %g%%" % P.PASS_BAR) \
+                    if not obj_passed else next_action
             elif P.tier_of(n) == "isolated" and rst in ("none", "configured", "failed", "destroyed", "queued_slot"):
                 next_action = "Start your lab for board %d" % n
             elif n != 1 and not strata_missions.environment_availability(n)["available"]:
@@ -4139,6 +4150,8 @@ def create_app():
             "badges": bc["chain"], "certified": bc["certified"],
             "credentials": credentials, "verify_url": verify_url,
             "phase1_boards": list(P.DEFENSIVE_CORE), "phase2_boards": list(P.PHASE2_BOARDS),
+            "ad_range": _effective_env(n) == "ad-range",
+            "ad_workspace_url": "/me/workspace", "ad_bloodhound_url": "/me/workspace/bloodhound.zip",
             "range_status": rst, "range_label": rlabel, "range_pcls": rpcls, "range_dot": rdot,
             "has_wg": bool(rr and rr.wireguard_config),
             "scenario_ref": _scenario_ref(c, n), "token": c.token,
@@ -4214,6 +4227,14 @@ def create_app():
                     "available": True, "console_user": "", "console_pw": "",
                     "note": ("Pivot through the evidence in OpenSearch, build your findings, and submit "
                              "a signed evidence record to clear the board.")}
+        if kind == "ad-range":
+            return {"kind": "ad-range", "name": "Active Directory range",
+                    "platform": "A seeded AD estate you analyze in BloodHound CE; reconstruct the path to Domain Admin.",
+                    "launch_url": "/me/workspace", "launch_label": "Open the Red Team workspace",
+                    "new_tab": False, "available": True, "console_user": "", "console_pw": "",
+                    "bloodhound_url": "/me/workspace/bloodhound.zip",
+                    "note": ("Download your BloodHound dataset, map the path from your foothold to "
+                             "Domain Admin, then submit your attack path to clear the board.")}
         if kind == "goad-range":
             return {"kind": "range", "name": "Isolated range (GOAD)",
                     "platform": "A dedicated, isolated Active Directory range reached over WireGuard.",
@@ -4503,13 +4524,29 @@ def create_app():
     # response). Each investigates in the SOC console and submits here; grading dispatches by
     # board in scenarios.grade. Governed cohorts use board 2's signed-citation case flow instead
     # (the generic worksheet endpoints refuse governance with 409). Boards 5/6 are not here.
-    WORKSHEET_BOARDS = (1, 2, 3, 4)
+    WORKSHEET_BOARDS = (1, 2, 3, 4, 5)
     _WS_TEMPLATE = {1: "board1_workspace.html", 2: "board2_workspace.html",
-                    3: "board3_workspace.html", 4: "board4_workspace.html"}
+                    3: "board3_workspace.html", 4: "board4_workspace.html",
+                    5: "board5_workspace.html"}
 
     def _ws_kind(n):
         # Per-board draft kind; board 1 keeps its original key so existing drafts are preserved.
         return "board1_triage" if int(n) == 1 else "board%d_ws" % int(n)
+
+    def _ws_dataset(n, seed):
+        """Worksheet dataset for a board. The AD range (board 5, non-governed) serves the
+        enumerable AD graph from ad_range; every other board uses the scenarios generator."""
+        if _effective_env(n) == "ad-range":
+            import ad_range as _ar
+            m = _ar.generate_domain(seed)
+            return _ar.public_view(m), m["domain"]["name"]
+        return scenarios.dataset(n, seed), None
+
+    def _ws_grade(n, seed, submission):
+        if _effective_env(n) == "ad-range":
+            import ad_range as _ar
+            return _ar.grade(seed, submission)
+        return scenarios.grade(n, seed, submission)
 
     def _dataset_version(seed):
         """A short, stable identifier for the candidate's current dataset attempt, derived from the
@@ -4626,7 +4663,7 @@ def create_app():
             seed = _current_seed(c)
         _touch(c, n)
         db.session.commit()
-        ds = scenarios.dataset(n, seed)   # answer-free (public_board* strips the answer key)
+        ds, ad_theme = _ws_dataset(n, seed)   # answer-free (public view strips the answer key)
         case_ref = _scenario_ref(c, n, seed)
         # restore the candidate's own in-progress draft (answer-free; their inputs only)
         import drafts as _drafts
@@ -4634,7 +4671,8 @@ def create_app():
         # `dataset` carries the full answer-free view each board's worksheet needs (board 1/4 alerts;
         # board 3 threats + baseline + detectable_fields). `alerts` is kept for board 1/4 back-compat.
         return jsonify(ok=True, board=n, case_ref=case_ref,
-                       theme=ds.get("theme"), dataset=ds, alerts=ds.get("alerts", []),
+                       theme=ds.get("theme") or ad_theme, dataset=ds, alerts=ds.get("alerts", []),
+                       env=_effective_env(n),
                        status=_soc_status_vm(c, n),
                        dataset_version=_dataset_version(seed),
                        draft=draft), 200
@@ -4672,7 +4710,7 @@ def create_app():
         # Graded server-side against the candidate's own seed. The second value is a per-item
         # feedback list whose shape is board-specific (board 1: per-alert correctness flags;
         # board 3: detection validation metrics; board 4: per-section IR correctness).
-        score, detail = scenarios.grade(n, seed, submission)
+        score, detail = _ws_grade(n, seed, submission)
         br = _record_objective(c, n, score)
         _touch(c, n)
         promoted = _evaluate_gate(c)
@@ -4681,6 +4719,32 @@ def create_app():
                        pass_bar=P.PASS_BAR, per_alert=detail, feedback=detail, promoted=promoted,
                        status=_soc_status_vm(c, n),
                        note="Report approval is also required to clear the board."), 200
+
+    @app.get("/me/workspace/bloodhound.zip")
+    @require_program("strata")
+    def candidate_workspace_bloodhound():
+        """Download the candidate's seeded AD domain as a BloodHound CE ingest zip (board 5 only).
+        The dataset is derived from the session candidate's own seed; the attack-path answer key
+        is never part of it (candidates analyze the graph to find the path themselves)."""
+        c = _current_candidate()
+        if not c:
+            abort(401)
+        if not c.is_active:
+            return jsonify(error="candidate is %s" % c.status), 409
+        n = int(c.current_board)
+        if _effective_env(n) != "ad-range":
+            abort(404)
+        seed = _current_seed(c)
+        if not seed:
+            _ensure_seed(c, n)
+            db.session.commit()
+            seed = _current_seed(c)
+        import ad_range as _ar
+        import ad_bloodhound as _bh
+        data = _bh.zip_bytes(_ar.generate_domain(seed))
+        fn = "ranger-ad-%s.zip" % (_scenario_ref(c, n, seed) or "range")
+        return Response(data, mimetype="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="%s"' % fn})
 
     @app.post("/me/workspace/draft")
     @require_program("strata")

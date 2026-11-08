@@ -98,7 +98,8 @@
     <a href="#b2">B2 · Enterprise case</a>
     <a href="#b3">B3 · Detection</a>
     <a href="#b4">B4 · Incident response</a>
-    <a href="#b56">B5–B6 · GOAD ranges</a>
+    <a href="#b56">B5 · AD range</a>
+    <a href="#b6">B6 · Capstone</a>
     <div class="tl">PARALLAX</div>
     <a href="#parallax">Submission contract</a>
     <a href="#pxboards">Boards &amp; grading</a>
@@ -242,11 +243,27 @@ score = 100 · Σ(weightᵢ · componentᵢ)</div>
     </div>
 
     <div class="board" id="b56">
-      <div class="bh"><span class="bn">BOARD 5–6</span><span class="bt">Phase 2 Capstone — GOAD ranges</span><span class="br">Raider · Vanguard</span></div>
+      <div class="bh"><span class="bn">BOARD 5</span><span class="bt">Red Team — Active Directory range</span><span class="br">Raider</span></div>
       <div class="bb">
         <span class="label">Environment</span>
-        <p>The offensive capstone beyond the defensive core: an isolated Active Directory estate provisioned per candidate from a Ludus <code>ludus-goad-ranger</code> template, reached over a per-candidate WireGuard tunnel (download your <code>.conf</code> from the dashboard, start the range with <b>Start lab</b>). Ranges are RAM-scheduled and torn down on clearance. Board 5 is a scoped red-team engagement; board 6 the full capstone that completes the <b>Qwalora Ranger</b> certification. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
-        <div class="note warn"><span class="h">Status: Phase 2 in activation</span>Phase 1 (boards 1-4, the STRATA Defender credential) is live and earnable now. Phase 2's live Ludus adapter is not yet wired, so the range attestation fails closed — boards 5 and 6 display <b>"Live range access is not yet available"</b> and cannot yet be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
+        <p>A seeded Active Directory estate unique to you: a domain of ~40 users, custom groups, DCs and member servers, with planted misconfigurations that form a path from a low-privilege foothold to Domain Admin (a Kerberoastable service account reachable by DACL abuse, a privileged-group ACL hop, a DCSync finish), seeded with AS-REP and unconstrained-delegation decoys as noise. Download the <b>BloodHound Community Edition</b> dataset from your workspace, ingest it, and run <code>Shortest paths to Domain Admins</code>; the same graph is available as enumeration tables (users, groups, computers, DACLs) if you prefer raw analysis.</p>
+        <span class="label">Submission contract</span>
+        <div class="spec"><span class="lbl">submission (foothold -> Domain Admin, in order)</span>{ <span class="k">"path"</span>: [
+  { <span class="k">"source"</span>: <span class="s">"&lt;your foothold&gt;"</span>, <span class="k">"technique"</span>: <span class="s">"ForceChangePassword"</span>, <span class="k">"target"</span>: <span class="s">"svc_sql"</span> },
+  { <span class="k">"source"</span>: <span class="s">"svc_sql"</span>,          <span class="k">"technique"</span>: <span class="s">"Kerberoasting"</span>,       <span class="k">"target"</span>: <span class="s">"svc_sql"</span> },
+  { <span class="k">"source"</span>: <span class="s">"svc_sql"</span>,          <span class="k">"technique"</span>: <span class="s">"ACL abuse: AddMember"</span>, <span class="k">"target"</span>: <span class="s">"Server Admins"</span> },
+  { <span class="k">"source"</span>: <span class="s">"Server Admins"</span>,    <span class="k">"technique"</span>: <span class="s">"DCSync"</span>,              <span class="k">"target"</span>: <span class="s">"&lt;domain&gt;"</span> }
+] }</div>
+        <span class="label">Scoring</span>
+        <p>Reconstruct the intended path. Scored on key principals (0.35), techniques (0.40) and ordering (0.25); naming off-path abuses (AS-REP, delegation decoys) does not help and dilutes precision. The intended path is re-derived server-side and never served. Pass ≥ {{ pass_bar|int }}%.</p>
+      </div>
+    </div>
+    <div class="board" id="b6">
+      <div class="bh"><span class="bn">BOARD 6</span><span class="bt">Vanguard Capstone — full forest</span><span class="br">Vanguard</span></div>
+      <div class="bb">
+        <span class="label">Environment</span>
+        <p>The capstone that completes the <b>Qwalora Ranger</b> certification: an end-to-end, multi-domain forest compromise with a cross-forest trust pivot, on a live isolated range reached over WireGuard. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
+        <div class="note warn"><span class="h">Status: capstone in activation</span>Board 5 (the AD analysis range) is live and clearable now. The board 6 live-forest range is being provisioned; it displays <b>"Live range access is not yet available"</b> and cannot yet be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
       </div>
     </div>
 

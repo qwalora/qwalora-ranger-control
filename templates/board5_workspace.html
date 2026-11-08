@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% from "_icons.html" import ic %}
+{% from "_candnav.html" import candnav %}
+{% block title %}Red Team Range · Board 5 · Qwalora Ranger{% endblock %}
+{% block body %}
+<div class="shell">
+  <div class="app app-2col">
+    {{ candnav('workspace', vm) }}
+
+    <section class="ranges-main">
+      <div class="rg-head">
+        <div>
+          <div class="eyebrow"><span class="d"></span>STRATA · Board 5 · Red Team (Phase 2)</div>
+          <div class="ttl" style="margin-top:6px">{{ vm.mission.title if vm.mission else 'Active Directory range' }}</div>
+          <div class="rg-sub">Compromise a seeded Active Directory estate: map it, find the path from your foothold to Domain Admin, and submit the attack chain. The domain is unique to you; the path is not given.</div>
+        </div>
+        <div class="iw-head-side">
+          <div class="muted" style="font-size:11px">Case reference</div>
+          <code class="mono" id="case-ref" style="font-size:12px">{{ vm.case_ref }}</code>
+          <span id="status-pill-wrap">
+            {% if vm.soc.submitted %}
+            <span class="pill {% if vm.soc.passed %}pill-ok{% else %}pill-amber{% endif %}"><span class="dot"></span>{{ vm.soc.score }}% {% if vm.soc.passed %}· cleared{% else %}· need {{ vm.soc.pass_bar }}%{% endif %}</span>
+            {% else %}<span class="pill pill-violet"><span class="dot"></span>awaiting submission</span>{% endif %}
+          </span>
+        </div>
+      </div>
+
+      <div class="iw">
+        <div id="ws-error" class="note-err" hidden style="margin-bottom:12px"></div>
+
+        <div class="card iw-card" style="margin-bottom:14px">
+          <div class="iw-card-h"><h2>{{ ic('server','ic ic-sm') }} Your engagement</h2><span class="mono dim" id="dom-meta"></span></div>
+          <div class="iw-note" id="foothold-note">Loading your domain.</div>
+          <div style="padding:12px 15px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--line)">
+            <a class="btn btn-primary btn-sm" href="/me/workspace/bloodhound.zip">{{ ic('inbox','ic ic-sm') }} Download BloodHound dataset (.zip)</a>
+            <span class="muted" style="font-size:12px">Ingest into BloodHound Community Edition, then run <span class="mono">Shortest paths to Domain Admins</span>. The enumeration tables below are the same graph if you prefer raw analysis.</span>
+          </div>
+        </div>
+
+        <div class="card iw-card" style="margin-bottom:14px">
+          <details class="soc-brief"><summary><span class="role">Enumeration reference (click to expand)</span></summary>
+            <div style="padding:4px 2px">
+              <div class="tabs" role="tablist">
+                <button class="tab on" data-tab="users">Users</button>
+                <button class="tab" data-tab="groups">Groups</button>
+                <button class="tab" data-tab="computers">Computers</button>
+                <button class="tab" data-tab="aces">ACLs</button>
+              </div>
+              <div class="iw-tbl-wrap" style="max-height:44vh"><table class="iw-tbl"><thead id="enum-head"></thead><tbody id="enum-rows"></tbody></table></div>
+            </div>
+          </details>
+        </div>
+
+        <div class="card iw-card">
+          <div class="iw-card-h"><h2>{{ ic('flag','ic ic-sm') }} Attack path — foothold to Domain Admin</h2><span class="mono dim" id="hop-count"></span></div>
+          <div class="iw-note">Add each abuse in order, from your foothold to a domain-compromise primitive (DCSync / Domain Admin). For each hop name the <b>source</b> you control, the <b>technique</b>, and the <b>target</b> you gain. Scored on the principals, the techniques, and the ordering; abuses that do not advance the path dilute your score.</div>
+          <div id="ws-loading" class="iw-empty">Loading your seeded domain. It is unique to you and to this attempt; the intended path stays on the server.</div>
+          <div id="path-wrap" hidden>
+            <div id="hops"></div>
+            <div style="padding:10px 15px"><button class="btn btn-outline btn-sm" id="add-hop" type="button">{{ ic('plus','ic ic-sm') }} Add hop</button></div>
+          </div>
+          <div class="iw-submit" id="submit-bar" hidden>
+            <div class="muted" style="font-size:12px"><b id="hc2">0</b> hops <span id="save-status" class="save-status" aria-live="polite"></span></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-outline btn-sm" id="btn-save" type="button">{{ ic('inbox','ic ic-sm') }} Save</button>
+              <button class="btn btn-primary btn-sm" id="btn-submit">{{ ic('inbox','ic ic-sm') }} Submit attack path</button>
+            </div>
+          </div>
+          <div id="result-panel" class="iw-result" hidden>
+            <div class="iw-result-h"><span class="pill" id="result-pill"></span> <span class="dim" id="result-note" style="font-size:11.5px"></span></div>
+            <div class="dim" id="result-detail" style="font-size:12px;margin-top:8px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  [hidden]{display:none!important}
+  .ranges-main .rg-head{display:flex;gap:20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding:20px 24px 14px;border-bottom:1px solid var(--line)}
+  .rg-head .ttl{font:700 20px/1.1 var(--f);letter-spacing:-.4px;color:var(--ink)}
+  .rg-head .rg-sub{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:6px;max-width:820px}
+  .iw-head-side{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+  .iw{padding:18px 24px 28px}
+  .iw-card{max-width:none;box-shadow:none;border:1px solid var(--line)}
+  .iw-card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+  .iw-card-h h2{font:600 13px/1 var(--f);margin:0;display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .iw-note{padding:11px 15px;border-bottom:1px solid var(--line);font-size:12px;color:var(--mut);line-height:1.55;background:var(--light)}
+  .soc-brief{padding:12px 15px}.soc-brief summary{cursor:pointer;font:600 12.5px/1.4 var(--f);color:var(--ink)}
+  .tabs{display:flex;gap:6px;margin:10px 0}
+  .tab{border:1px solid var(--line2);background:#fff;color:var(--mut);border-radius:7px;padding:5px 11px;font:600 11.5px/1 var(--f);cursor:pointer}
+  .tab.on{background:var(--violet-50);color:var(--violet);border-color:transparent}
+  .iw-tbl-wrap{overflow:auto}
+  .iw-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .iw-tbl th{position:sticky;top:0;background:var(--sub);text-align:left;font:600 10px/1 var(--f);letter-spacing:.5px;text-transform:uppercase;color:var(--dim);padding:8px 9px;border-bottom:1px solid var(--line)}
+  .iw-tbl td{padding:7px 9px;border-bottom:1px solid var(--line);color:var(--ink);vertical-align:top}
+  .iw-tbl .mono{font-family:var(--m);font-size:11px}
+  .yes{color:#b4232b;font-weight:600}.no{color:var(--dim)}
+  .hop{display:flex;gap:8px;align-items:center;padding:8px 15px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .hop .n{font:700 11px/1 var(--m);color:var(--violet);background:var(--violet-50);border-radius:6px;padding:5px 7px;flex:none}
+  .hop input,.hop select{height:32px;border:1px solid var(--line2);border-radius:7px;padding:0 8px;font:500 12px/1 var(--f);background:#fff;color:var(--ink)}
+  .hop .src{flex:1;min-width:120px}.hop .tgt{flex:1;min-width:120px}.hop .tech{flex:1.2;min-width:150px}
+  .hop .rm{border:none;background:transparent;color:var(--dim);cursor:pointer;font-size:16px;flex:none}
+  .iw-empty{padding:26px 16px;color:var(--mut);font-size:12.5px;text-align:center}
+  .iw-submit{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid var(--line)}
+  .save-status{margin-left:10px;font:600 11px/1 var(--f)}.save-status.saved{color:#0f7a48}.save-status.saving{color:var(--mut)}.save-status.failed{color:#b4232b}
+  .iw-result{border-top:1px solid var(--line);padding:12px 15px}.iw-result-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .note-err{background:#fdecee;border:1px solid #f3b9bf;color:#b4232b;border-radius:9px;padding:10px 13px;font-size:12.5px}
+  @media (max-width:860px){.app.app-2col{grid-template-columns:1fr}.nav{display:none}}
+</style>
+
+<script>
+(function(){
+  var CSRF="{{ csrf_token }}", PASS={{ vm.soc.pass_bar|default(95) }};
+  var $=function(id){return document.getElementById(id);};
+  var data=null, hops=[], draftVersion=0, saveTimer=null, saving=false, dirty=false;
+  var TECHS=["ForceChangePassword","Kerberoasting","AS-REP Roasting","ACL abuse: GenericAll",
+    "ACL abuse: WriteDacl","ACL abuse: AddMember","ACL abuse: GenericWrite","Unconstrained Delegation",
+    "Constrained Delegation / RBCD","DCSync","Pass-the-Hash","Golden Ticket","Other"];
+  function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+  function setStatus(cls,txt){var el=$('save-status');if(el){el.className='save-status '+cls;el.textContent=txt;}}
+  function fmtTime(iso){try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
+  async function getJSON(u){var r=await fetch(u,{headers:{'Accept':'application/json'},credentials:'same-origin'});if(r.status!==200)throw new Error('('+r.status+')');return r.json();}
+  async function postJSON(u,b){var r=await fetch(u,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify(b)});var j=null;try{j=await r.json();}catch(e){}return {status:r.status,body:j};}
+
+  function buildDraft(){return {path:hops};}
+  function markDirty(){dirty=true;setStatus('saving','Saving…');clearTimeout(saveTimer);saveTimer=setTimeout(doSave,800);}
+  async function doSave(){if(saving){markDirty();return;}saving=true;var res;try{res=await postJSON('/me/workspace/draft',{payload:buildDraft(),base_version:draftVersion});}catch(e){saving=false;setStatus('failed','Save failed');return;}saving=false;if(res.status===200&&res.body&&res.body.ok){draftVersion=res.body.version;dirty=false;setStatus('saved','Saved '+fmtTime(res.body.saved_at));}else if(res.status===409&&res.body&&res.body.conflict){draftVersion=(res.body.current&&res.body.current.version)||0;markDirty();}else{setStatus('failed','Save failed');}}
+
+  function hopRow(i){var h=hops[i]||{source:'',technique:'',target:''};
+    var opts=TECHS.map(function(t){return '<option'+(h.technique===t?' selected':'')+'>'+esc(t)+'</option>';}).join('');
+    return '<div class="hop" data-i="'+i+'"><span class="n">'+(i+1)+'</span>'
+      +'<input class="src" placeholder="source you control (e.g. your foothold)" value="'+esc(h.source)+'" data-f="source">'
+      +'<select class="tech" data-f="technique"><option value="">technique…</option>'+opts+'</select>'
+      +'<input class="tgt" placeholder="target you gain" value="'+esc(h.target)+'" data-f="target">'
+      +'<button class="rm" type="button" title="remove">&times;</button></div>';}
+  function renderHops(){
+    $('hops').innerHTML=hops.map(function(_,i){return hopRow(i);}).join('')||'<div class="iw-empty" style="padding:14px">No hops yet. Add the first abuse from your foothold.</div>';
+    $('hop-count').textContent=hops.length+' hops';$('hc2').textContent=hops.length;
+    document.querySelectorAll('#hops .hop').forEach(function(row){
+      var i=+row.dataset.i;
+      row.querySelectorAll('[data-f]').forEach(function(el){el.addEventListener('input',function(){hops[i][el.dataset.f]=el.value;markDirty();});});
+      row.querySelector('.rm').addEventListener('click',function(){hops.splice(i,1);renderHops();markDirty();});
+    });
+  }
+  $('add-hop').addEventListener('click',function(){hops.push({source:'',technique:'',target:''});renderHops();markDirty();});
+
+  // enumeration tables
+  var TAB='users';
+  function renderEnum(){
+    if(!data)return;var head,rows;
+    if(TAB==='users'){head='<tr><th>sAMAccountName</th><th>SPN</th><th>AS-REP</th><th>Member of</th></tr>';
+      rows=data.users.map(function(u){return '<tr><td class="mono">'+esc(u.sam)+'</td><td>'+(u.spns&&u.spns.length?'<span class="yes">'+esc(u.spns.join(', '))+'</span>':'<span class="no">no</span>')+'</td><td>'+(u.asrep?'<span class="yes">yes</span>':'<span class="no">no</span>')+'</td><td class="mono">'+esc((u.memberof||[]).join(', '))+'</td></tr>';}).join('');}
+    else if(TAB==='groups'){head='<tr><th>Group</th><th>Members</th></tr>';
+      rows=data.groups.map(function(g){return '<tr><td class="mono">'+esc(g.display)+'</td><td>'+esc((g.members||[]).length)+'</td></tr>';}).join('');}
+    else if(TAB==='computers'){head='<tr><th>Computer</th><th>OS</th><th>Unconstrained deleg.</th></tr>';
+      rows=data.computers.map(function(c){return '<tr><td class="mono">'+esc(c.sam)+'</td><td>'+esc(c.os)+'</td><td>'+(c.unconstrained?'<span class="yes">yes</span>':'<span class="no">no</span>')+'</td></tr>';}).join('');}
+    else{head='<tr><th>Principal</th><th>Right</th><th>Over</th></tr>';
+      rows=data.aces.map(function(a){return '<tr><td class="mono">'+esc(a.source_sam)+'</td><td><span class="yes">'+esc(a.right)+'</span></td><td class="mono">'+esc(a.target_sam)+'</td></tr>';}).join('');}
+    $('enum-head').innerHTML=head;$('enum-rows').innerHTML=rows;
+  }
+  document.querySelectorAll('.tab').forEach(function(t){t.addEventListener('click',function(){document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on');});t.classList.add('on');TAB=t.dataset.tab;renderEnum();});});
+
+  function result(res){var p=$('result-panel');p.hidden=false;
+    var pill=$('result-pill');pill.className='pill '+(res.passed?'pill-ok':'pill-amber');
+    pill.innerHTML='<span class="dot"></span>'+res.score+'% '+(res.passed?'· objective cleared':'· need '+res.pass_bar+'%');
+    var fb=res.feedback||{};
+    $('result-note').textContent=(fb.note)||'';
+    var bits=[];
+    if(fb.key_principals)bits.push('Key principals identified: '+fb.key_principals.identified+' / '+fb.key_principals.required);
+    if(fb.techniques)bits.push('Correct techniques: '+((fb.techniques.correct||[]).join(', ')||'none')+(fb.techniques.missing_count?' · '+fb.techniques.missing_count+' still missing':''));
+    if(typeof fb.ordering!=='undefined')bits.push('Ordering: '+Math.round(fb.ordering*100)+'%');
+    if(fb.off_path&&fb.off_path.length)bits.push('Off-path abuses named: '+fb.off_path.join(', '));
+    bits.push(res.passed?(res.promoted?'Objective met and you have been promoted.':'Objective met. A report approval is also required to clear the board.'):'Not yet. Confirm each hop in BloodHound and resubmit; your domain and attempt are preserved.');
+    $('result-detail').innerHTML=bits.map(esc).join('<br>');
+    var sp=$('status-pill-wrap');sp.innerHTML='<span class="pill '+(res.passed?'pill-ok':'pill-amber')+'"><span class="dot"></span>'+res.score+'% '+(res.passed?'· cleared':'· need '+res.pass_bar+'%')+'</span>';}
+
+  async function submit(){var b=$('btn-submit');b.disabled=true;b.textContent='Grading…';
+    var clean=hops.filter(function(h){return (h.source||h.technique||h.target);});
+    var r=await postJSON('/me/workspace/submit',{submission:{path:clean}});b.disabled=false;b.innerHTML='Submit attack path';
+    if(r.status!==200||!r.body||!r.body.ok){$('ws-error').hidden=false;$('ws-error').textContent='Submission failed: '+((r.body&&r.body.error)||('HTTP '+r.status));return;}
+    $('ws-error').hidden=true;result(r.body);}
+  $('btn-submit').addEventListener('click',submit);$('btn-save').addEventListener('click',function(){clearTimeout(saveTimer);doSave();});
+
+  async function load(){try{var d=await getJSON('/me/workspace/data');data=d.dataset||{};
+    var dom=(data.domain||{});var fh=(data.foothold||{});
+    $('dom-meta').textContent=(dom.netbios||'')+' · '+(dom.name||'')+' · '+((data.stats||{}).users||0)+' users / '+((data.stats||{}).computers||0)+' hosts';
+    $('foothold-note').innerHTML='Domain <b>'+esc(dom.name||'')+'</b> ('+esc(dom.org||'')+'). You hold valid credentials for <b class="mono">'+esc(fh.sam||'')+'</b> ('+esc(fh.note||'')+'). Reach a Domain Admin / DCSync primitive.';
+    if(d.draft&&d.draft.payload&&d.draft.payload.path){hops=d.draft.payload.path;draftVersion=d.draft.version||0;setStatus('saved','Saved '+fmtTime(d.draft.updated_at));}
+    if(!hops.length)hops=[{source:(fh.sam||''),technique:'',target:''}];
+    $('ws-loading').hidden=true;$('path-wrap').hidden=false;$('submit-bar').hidden=false;
+    renderHops();renderEnum();
+  }catch(e){$('ws-loading').textContent='Could not load your range: '+e.message+'. Re-open your workspace to retry.';}}
+
+  function flush(){if(!dirty)return;clearTimeout(saveTimer);try{fetch('/me/workspace/draft',{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF},body:JSON.stringify({payload:buildDraft(),base_version:draftVersion})});}catch(e){}}
+  window.addEventListener('pagehide',flush);document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flush();});
+  load();
+})();
+</script>
+{% endblock %}
