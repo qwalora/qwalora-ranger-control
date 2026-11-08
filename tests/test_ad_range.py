@@ -52,6 +52,45 @@ def test_grader_discriminates():
         assert AR.grade(seed, {"path": list(reversed(ref["path"]))})[0] < 95.0
 
 
+def test_bloodhound_export_schema_conformance():
+    """Conformance to the BloodHound CE (v5) ingest contract, for both a single domain and a
+    forest. This is the standing schema check; a live-ingest smoke test into BloodHound CE is a
+    separate manual step (documented in ad_bloodhound)."""
+    import ad_bloodhound as BH
+    VALID_TYPES = {"User", "Group", "Computer", "Domain", "GPO", "OU", "Container", "Base"}
+    VALID_RIGHTS = {"GenericAll", "GenericWrite", "WriteDacl", "WriteOwner", "Owns", "AddMember",
+                    "ForceChangePassword", "AddKeyCredentialLink", "ReadLAPSPassword",
+                    "ReadGMSAPassword", "GetChanges", "GetChangesAll", "AllExtendedRights", "AddSelf"}
+    for gen in (AR.generate_domain("conf-1"), AR.generate_forest("conf-2")):
+        files = BH.build(gen)
+        for name in ("users.json", "groups.json", "computers.json", "domains.json"):
+            assert name in files, "missing %s" % name
+            obj = files[name]
+            assert isinstance(obj["data"], list)
+            meta = obj["meta"]
+            assert meta["count"] == len(obj["data"]) and isinstance(meta["version"], int)
+            assert meta["type"] == name.split(".")[0]
+            for node in obj["data"]:
+                assert node["ObjectIdentifier"] and isinstance(node["ObjectIdentifier"], str)
+                props = node["Properties"]
+                assert props["name"] and props["domain"] and props["domainsid"]
+                for ace in node.get("Aces", []):
+                    assert ace["PrincipalSID"]
+                    assert ace["PrincipalType"] in VALID_TYPES
+                    assert ace["RightName"] in VALID_RIGHTS, "bad RightName %s" % ace["RightName"]
+                    assert isinstance(ace["IsInherited"], bool)
+        for g in files["groups.json"]["data"]:
+            for mem in g.get("Members", []):
+                assert mem["ObjectIdentifier"] and mem["ObjectType"] in VALID_TYPES
+        for c in files["computers.json"]["data"]:
+            assert "Results" in c["LocalAdmins"] and c["LocalAdmins"]["Collected"] is True
+            assert "Results" in c["Sessions"]
+        for d in files["domains.json"]["data"]:
+            for t in d["Trusts"]:
+                assert t["TargetDomainSid"] and t["TargetDomainName"]
+                assert isinstance(t["IsTransitive"], bool) and isinstance(t["SidFilteringEnabled"], bool)
+
+
 def test_forest_capstone_generation_and_grading():
     m = AR.generate_forest("cap-0001")
     assert m["stats"]["domains"] == 3 and len(m["domains"]) == 3
