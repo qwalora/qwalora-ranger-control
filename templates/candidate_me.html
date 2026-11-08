@@ -62,6 +62,15 @@
         </div>
         {% endif %}
 
+        {% if vm.next_action and vm.status == 'active' and not vm.no_access %}
+        <div class="cm-next">
+          <span class="ni">{{ ic(('medal' if vm.foundation and not vm.foundation.complete else 'activity'),'ic') }}</span>
+          <div class="nt"><span class="k">Next</span><b>{{ vm.next_action }}</b></div>
+          {% if vm.foundation and not vm.foundation.complete %}<a class="btn btn-primary btn-sm" href="/me/foundation">Open foundation {{ ic('arrow','ic ic-sm') }}</a>
+          {% elif vm.selected_program == 'strata' %}<a class="btn btn-primary btn-sm" href="#board-work">Go to your board {{ ic('arrow','ic ic-sm') }}</a>{% endif %}
+        </div>
+        {% endif %}
+
         {% if vm.selected_program == 'strata' and vm.status == 'active' and not vm.no_access %}
         <div class="kpis">
           <div class="kpi"><span class="kpi-n">{{ vm.board }}<span class="kpi-sub">/6</span></span><span class="kpi-l">Current board</span></div>
@@ -75,15 +84,11 @@
 
         {% if vm.foundation and vm.status == 'active' and not vm.no_access and not vm.rejected %}
         {% set f = vm.foundation %}
-        <a href="/me/foundation" class="card" style="text-decoration:none;display:block">
-          <div class="card-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-            <span class="pill {% if f.complete %}pill-ok{% else %}pill-amber{% endif %}" style="flex:none"><span class="dot {% if f.complete %}dot-ok{% else %}dot-amber{% endif %}"></span>{{ ic('medal','ic ic-sm') }} Foundation</span>
-            <div style="flex:1;min-width:0">
-              <b style="color:var(--ink);font-size:13px">Cisco NetAcad foundation {% if f.complete %}· complete{% else %}· {{ f.done }}/{{ f.total }}{% endif %}</b>
-              <span class="muted" style="display:block;font-size:12px">{% if f.complete %}Your baseline is done.{% else %}Required before your ladder work counts. Next: {{ f.next_title }}.{% endif %}</span>
-            </div>
-            <span class="btn btn-ghost btn-sm" style="flex:none">{{ ic('arrow','ic ic-sm') }} Open</span>
-          </div>
+        <a class="cm-found {% if not f.complete %}todo{% endif %}" href="/me/foundation">
+          <span class="fi">{{ ic('medal','ic') }}</span>
+          <div class="ft"><b>Cisco NetAcad foundation{% if f.complete %} · complete{% endif %}</b>
+            <span>{% if f.complete %}Your baseline is done.{% else %}Required before your ladder work counts. Next: {{ f.next_title }}.{% endif %}</span></div>
+          <div class="fmeter"><div class="fbar"><i style="width:{{ ((100 * f.done / f.total) | round(0, 'floor')) if f.total else 0 }}%"></i></div><span class="fnum">{{ f.done }}/{{ f.total }}</span></div>
         </a>
         {% endif %}
 
@@ -149,13 +154,6 @@
         </div></div>
         {% endif %}
 
-        {% if vm.next_action and vm.status == 'active' and not vm.no_access %}
-        <div class="cand-next">
-          <span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>Next</span>
-          <b>{{ vm.next_action }}</b>
-        </div>
-        {% endif %}
-
         {% if not vm.applied and not vm.rejected and vm.selected_program == 'strata' %}
         {% if vm.status == 'active' %}
         <details class="card sh-collapse"><summary class="card-head" style="cursor:pointer"><span class="eyebrow"><span class="d"></span>Start here</span><span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>how a board works</span>{{ ic('chevdown','ic ic-sm') }}</summary>
@@ -185,27 +183,43 @@
           </div>
         </div>
         {% endif %}
-        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your progress</span></div>
-          <div class="card-body">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              {% if vm.status == 'graduated' %}
-              <span class="pill pill-ok"><span class="dot dot-ok"></span>Graduated · certified</span>
-              <a class="btn btn-sm" href="/verify/{{ vm.handle }}" style="margin-left:auto">{{ ic('medal','ic ic-sm') }} View your certificate</a>
-              <a class="btn btn-sm" href="/verify/{{ vm.handle }}">{{ ic('shield','ic ic-sm') }} Share verification link</a>
-              {% else %}
-              <b style="font:600 15px/1 var(--f)">Board {{ vm.board }}</b><span class="muted">{{ vm.role_title }}</span>
-              <span class="pill {% if vm.tier=='isolated' %}pill-amber{% else %}pill-violet{% endif %}"><span class="dot {% if vm.tier=='isolated' %}dot-amber{% else %}dot-violet{% endif %}"></span>{{ vm.tier }}</span>
-              {% endif %}
-            </div>
-            <div class="chain" style="margin-top:12px;align-items:center">
-              <span class="muted" style="font-size:10px;letter-spacing:.4px;text-transform:uppercase" title="Defensive core">Phase 1</span>
-              {% for b in vm.badges %}{% if b.board in (vm.phase1_boards or [1,2,3,4]) %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endif %}{% endfor %}
-              <span class="muted" style="font-size:10px;letter-spacing:.4px;text-transform:uppercase;margin-left:7px" title="GOAD capstone">Phase 2</span>
-              {% for b in vm.badges %}{% if b.board in (vm.phase2_boards or [5,6]) %}<span class="pip {% if b.earned %}on t{{ b.board }}{% endif %}" title="{{ b.name }} · board {{ b.board }}">{{ b.board }}</span>{% endif %}{% endfor %}
-              <span class="pip cert {% if vm.certified %}on{% endif %}" title="Qwalora Ranger, Certified">{{ ic('medal','ic ic-sm') }}</span>
-            </div>
-            {% if vm.board_coverage %}<p class="dim" style="font-size:12px;margin-top:10px"><b>This board covers:</b> {{ vm.board_coverage }}</p>{% endif %}
+        {% set blurbs = {
+          1:('Triage a live intrusion in the SOC console and record your adjudication.','SOC console · Wazuh','activity'),
+          2:('Hunt the adversary across enterprise telemetry and prove the chain.','Hunt case','search'),
+          3:('Engineer detections against live ATT&CK telemetry.','Detection workspace','edit'),
+          4:('Run incident response and forensics to scope and evict.','IR workspace','server'),
+          5:('Pivot into an isolated Active Directory range and reach Domain Admin.','Isolated AD range','server'),
+          6:('A full-scope capstone across the whole kill chain.','Isolated capstone range','flag') } %}
+        <div class="card" id="roadmap">
+          <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span class="eyebrow"><span class="d"></span>Path to Certified</span>
+            {% if vm.status == 'graduated' %}<a class="btn btn-sm" href="/verify/{{ vm.handle }}">{{ ic('medal','ic ic-sm') }} Your certificate</a>
+            {% else %}<span class="pill pill-violet" style="flex:none"><span class="dot dot-violet"></span>board {{ vm.board }} of 6</span>{% endif %}
           </div>
+          <div class="card-body"><div class="cm-road"><div class="cm-conn"></div>
+            <div class="cm-phase"><span class="pl">Phase 1 · Defensive core</span><span class="ln"></span><span class="pm">boards 1-4</span></div>
+            {% for p in vm.progress %}
+            {% if p.board == 5 %}
+            <div class="cm-mile {% if vm.progress[3].state=='cleared' %}on{% endif %}"><span class="mnode">{{ ic('medal','ic ic-sm') }}</span><div class="mt"><b>STRATA Defender</b><span>Intermediate credential for clearing the defensive core (boards 1-4).</span></div></div>
+            <div class="cm-phase"><span class="pl">Phase 2 · Red capstone</span><span class="ln"></span><span class="pm">boards 5-6</span></div>
+            {% endif %}
+            {% set bl = blurbs.get(p.board) %}
+            <div class="cm-step">
+              <span class="cm-node {% if p.state=='cleared' %}done{% elif p.state=='current' %}cur{% else %}locked{% endif %}">{{ p.board }}</span>
+              <div class="cm-sbody">
+                <div class="st {% if p.state=='locked' %}lock{% endif %}"><b>{{ p.role_title }}</b><span class="rank">{{ p.name }}</span></div>
+                {% if bl %}<div class="d">{{ bl[0] }}</div><span class="env">{{ ic(bl[2],'ic') }} {{ bl[1] }}</span>{% endif %}
+              </div>
+              <div class="cm-sstate">
+                {% if p.objective_score is not none %}<span class="cm-score">{{ p.objective_score }}%</span>{% endif %}
+                {% if p.state=='cleared' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Cleared</span>
+                {% elif p.state=='current' %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Current</span>
+                {% else %}<span class="pill"><span class="dot"></span>Locked</span>{% endif %}
+              </div>
+            </div>
+            {% endfor %}
+            <div class="cm-mile cap {% if vm.certified %}on{% endif %}"><span class="mnode">{{ ic('medal','ic ic-sm') }}</span><div class="mt"><b>Qwalora Ranger, Certified</b><span>The signed, independently verifiable terminal credential.</span></div></div>
+          </div></div>
         </div>
         {% endif %}
 
@@ -224,7 +238,7 @@
         {% endif %}
 
         {% if vm.status == 'active' and vm.selected_program == 'strata' %}
-        <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Assignment &amp; lab</span></div>
+        <div class="card" id="board-work"><div class="card-head"><span class="eyebrow"><span class="d"></span>Assignment &amp; lab</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
             {% if vm.mission %}
             <div>
@@ -365,28 +379,12 @@
 
         {% if vm.selected_program == 'strata' %}
         <div class="card"><div class="card-head"><span class="eyebrow"><span class="d"></span>Your record</span></div>
-          <div class="card-body"><div class="record">
-            {% for p in vm.progress %}
-            <div class="rec-row rec-{{ p.state }}">
-              <span class="rec-pip t{{ p.board }}">{{ p.board }}</span>
-              <div class="rec-id"><b>{{ p.name }}</b><span class="muted">{{ p.role_title }}</span></div>
-              <div class="rec-meta">
-                {% if p.objective_score is not none %}<span class="mono dim">obj {{ p.objective_score }}%</span>{% endif %}
-                {% if p.report_status %}<span class="mono dim">report {{ p.report_status }}</span>{% endif %}
-              </div>
-              {% if p.state=='cleared' %}<span class="pill pill-ok"><span class="dot dot-ok"></span>Cleared</span>
-              {% elif p.state=='current' %}<span class="pill pill-violet"><span class="dot dot-violet"></span>Current</span>
-              {% else %}<span class="pill"><span class="dot"></span>Locked</span>{% endif %}
-            </div>
-            {% endfor %}
-          </div>
-          <div class="rowline" style="margin-top:14px">
+          <div class="card-body cm-detail">
             <div class="field"><label class="label">Your scenario</label>
               <div class="tokenbox"><code>{{ vm.scenario_ref or 'assigned when you start' }}</code></div></div>
             <div class="field"><label class="label">Submission token</label>
               <div class="tokenbox"><code>{{ vm.token }}</code></div>
               <p class="dim" style="font-size:11.5px">Send as <span class="mono">X-Candidate-Token</span> for the API.</p></div>
-          </div>
           </div>
         </div>
         {% endif %}
@@ -685,16 +683,10 @@
 </div>
 
 <style>
-  .cand-body{padding:22px 28px 30px;display:flex;flex-direction:column;gap:16px}
+  /* candidate-page specifics not in app.css (.cand-body, .cm-*, .kpi* live in app.css) */
   .save-status{font:600 11px/1 var(--f)}
   .save-status.saving{color:var(--mut)} .save-status.saved{color:#0f7a48}
   .save-status.failed{color:#b4232b} .save-status.unsaved{color:#9a7b1f}
-  .cand-body .card{max-width:none}
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-  .kpi{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:5px;background:var(--surface,transparent)}
-  .kpi-n{font:650 24px/1 var(--f);color:var(--ink);display:flex;align-items:baseline;gap:3px}
-  .kpi-sub{font-size:14px;font-weight:500;color:var(--mut)}
-  .kpi-l{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .cve-row{display:flex;align-items:center;gap:10px;text-decoration:none;border:1px solid var(--line2);border-radius:9px;padding:8px 11px}
   .cve-row:hover{border-color:var(--violet)}
   .sev{font:600 10px/1 var(--f);padding:4px 7px;border-radius:5px;flex:none;text-transform:uppercase;letter-spacing:.03em}
@@ -704,7 +696,5 @@
   .sh-collapse>summary{list-style:none;display:flex;align-items:center;gap:8px}
   .sh-collapse>summary::-webkit-details-marker{display:none}
   .sh-collapse[open]>summary .ic{transform:rotate(180deg)}
-  .cand-next{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--violet-100);background:var(--violet-50);border-radius:10px}
-  .cand-next b{font:600 13px/1.35 var(--f);color:var(--ink)}
 </style>
 {% endblock %}

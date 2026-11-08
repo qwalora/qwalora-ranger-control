@@ -551,3 +551,103 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
+/* ================= candidate dashboard (redesign) =================
+   Scoped to the candidate "Your Ranger" page. Builds on the Qwalora tokens in app.css.
+   Goal: one aligned column with a clear information hierarchy and a roadmap-led journey. */
+
+.cand-body{padding:24px 28px 40px;display:flex;flex-direction:column;gap:18px;max-width:900px;width:100%;margin:0 auto}
+
+/* The global .card is an auth-modal (heavy pop shadow, 460px). On the dashboard, cards are
+   quiet panels: subtle border + soft shadow, full width, consistent padding. */
+.cand-body .card{max-width:none;box-shadow:var(--sh-card);border:1px solid var(--line2);border-radius:var(--r)}
+.cand-body .card>.card-head{padding:16px 18px 2px}
+.cand-body .card>.card-body{padding:14px 18px 18px}
+
+/* ---- welcome header ---- */
+.cm-hello{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.cm-hello h1{font:650 23px/1.18 var(--f);letter-spacing:-.5px;color:var(--ink)}
+.cm-hello .sub{font-size:13px;color:var(--mut);margin-top:3px}
+.cm-hello .who{display:flex;align-items:center;gap:11px;min-width:0}
+.cm-hello .av{flex:none}
+
+/* ---- the single next action (hero) ---- */
+.cm-next{display:flex;align-items:center;gap:14px;padding:15px 16px;border-radius:14px;
+  background:linear-gradient(180deg,var(--violet-50),#fff);border:1px solid var(--violet-100)}
+.cm-next .ni{width:38px;height:38px;border-radius:11px;background:var(--violet);color:#fff;
+  display:grid;place-items:center;flex:none}
+.cm-next .nt{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.cm-next .nt .k{font:600 10px/1 var(--f);letter-spacing:.16em;text-transform:uppercase;color:var(--violet-700)}
+.cm-next .nt b{font:600 14.5px/1.4 var(--f);color:var(--ink)}
+.cm-next .btn{flex:none}
+
+/* ---- KPI strip (compact) ---- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px}
+.kpi{border:1px solid var(--line2);border-radius:11px;padding:12px 13px;display:flex;flex-direction:column;gap:5px;background:#fff}
+.kpi-n{font:650 22px/1 var(--f);color:var(--ink);display:flex;align-items:baseline;gap:3px}
+.kpi-sub{font-size:13px;font-weight:500;color:var(--mut)}
+.kpi-l{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+
+/* ---- foundation banner ---- */
+.cm-found{display:flex;align-items:center;gap:13px;padding:14px 16px;border-radius:12px;
+  border:1px solid var(--line2);background:#fff;text-decoration:none}
+.cm-found.todo{border-color:var(--amber-dot);background:linear-gradient(180deg,var(--amber-bg),#fff)}
+.cm-found .fi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;
+  background:var(--violet-50);color:var(--violet)}
+.cm-found.todo .fi{background:#fff;color:var(--amber)}
+.cm-found .ft{flex:1;min-width:0}
+.cm-found .ft b{display:block;font:600 13px/1.3 var(--f);color:var(--ink)}
+.cm-found .ft span{display:block;font-size:12px;color:var(--mut);margin-top:1px}
+.cm-found .fmeter{display:flex;align-items:center;gap:9px;flex:none}
+.cm-found .fbar{width:84px;height:6px;border-radius:999px;background:var(--light);overflow:hidden}
+.cm-found .fbar i{display:block;height:100%;background:var(--violet);border-radius:999px}
+.cm-found.todo .fbar i{background:var(--amber-dot)}
+.cm-found .fnum{font:600 12px/1 var(--m);color:var(--med)}
+
+/* ---- roadmap: Path to Certified ---- */
+.cm-road{position:relative;padding-left:4px}
+.cm-road .cm-conn{position:absolute;left:19px;top:16px;bottom:34px;width:2px;background:var(--line);z-index:0}
+.cm-phase{display:flex;align-items:center;gap:9px;margin:10px 0 2px}
+.cm-phase:first-child{margin-top:2px}
+.cm-phase .pl{font:600 10px/1 var(--f);letter-spacing:.13em;text-transform:uppercase;color:var(--mut)}
+.cm-phase .ln{flex:1;height:1px;background:var(--line)}
+.cm-phase .pm{font:500 10.5px/1 var(--f);color:var(--dim)}
+.cm-step{display:grid;grid-template-columns:30px 1fr auto;gap:14px;align-items:center;padding:11px 0;position:relative;z-index:1}
+.cm-node{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font:700 12px/1 var(--f);
+  background:#fff;border:1.5px solid var(--line2);color:var(--dim);flex:none}
+.cm-node.done{background:var(--ok);border-color:transparent;color:#fff}
+.cm-node.cur{background:var(--violet);border-color:transparent;color:#fff;box-shadow:0 0 0 4px var(--violet-100)}
+.cm-node.cap{border-radius:50%}
+.cm-node .ic{width:15px;height:15px}
+.cm-sbody{min-width:0;display:flex;flex-direction:column;gap:2px}
+.cm-sbody .st{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.cm-sbody .st b{font:600 14px/1.2 var(--f);color:var(--ink)}
+.cm-sbody .st.lock b{color:var(--med)}
+.cm-sbody .rank{font:500 11px/1 var(--m);color:var(--dim)}
+.cm-sbody .d{font-size:12.5px;color:var(--mut);line-height:1.45}
+.cm-sbody .env{display:inline-flex;align-items:center;gap:6px;font:500 11px/1 var(--f);color:var(--med);margin-top:3px}
+.cm-sbody .env .ic{width:13px;height:13px;color:var(--dim)}
+.cm-sstate{flex:none;display:flex;align-items:center;gap:8px}
+.cm-score{font:600 12px/1 var(--m);color:var(--med)}
+
+/* milestone + certified endpoints sit on the same rail */
+.cm-mile{display:grid;grid-template-columns:30px 1fr;gap:14px;align-items:center;padding:9px 0;position:relative;z-index:1}
+.cm-mile .mnode{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;flex:none;
+  background:#fff;border:1.5px dashed var(--line2);color:var(--dim)}
+.cm-mile.on .mnode{background:var(--ok);border:1.5px solid transparent;color:#fff}
+.cm-mile.cap .mnode{border-radius:50%}
+.cm-mile.cap.on .mnode{background:#140c3c}
+.cm-mile .mt b{font:600 13px/1.2 var(--f);color:var(--ink)}
+.cm-mile .mt span{display:block;font-size:12px;color:var(--mut);margin-top:1px}
+
+/* ---- compact detail row (scenario + token) ---- */
+.cm-detail{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:560px){.cm-detail{grid-template-columns:1fr}}
+
+/* ---- responsive ---- */
+@media(max-width:720px){
+  .cand-body{padding:16px 16px 32px}
+  .cm-next{flex-wrap:wrap}
+  .cm-next .btn{width:100%;justify-content:center}
+  .cm-step{grid-template-columns:30px 1fr;gap:12px}
+  .cm-sstate{grid-column:2 / -1;justify-content:flex-start;margin-top:2px}
+}
