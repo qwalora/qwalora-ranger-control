@@ -1989,6 +1989,22 @@ def create_app():
         return jsonify(status="ok" if dbok else "degraded", db=dbok,
                        broker=broker_status()), code
 
+    @app.get("/admin/adrange")
+    def adrange_status():
+        """Operator/verification view of the live-execution AD range: whether it is enabled, whether
+        the operator-confirmed flag is set, and a live technical-validation probe of the DC over the
+        private network (is it up and is the attack path actually planted). Gated by the shared
+        ADRANGE_PROOF_TOKEN so the DC's internal status is never public."""
+        import adrange_live as AL
+        token = os.environ.get("ADRANGE_PROOF_TOKEN", "")
+        supplied = request.headers.get("X-Proof-Token") or request.args.get("token", "")
+        if not token or supplied != token:
+            abort(403)
+        out = {"enabled": AL.enabled(), "adapter_verified": AL.adapter_verified(),
+               "realm": AL.realm()}
+        out["validation"] = AL.validate_live()
+        return jsonify(out), 200
+
     @app.get("/enroll")
     def enroll_form():
         return render_template("enroll.html",
