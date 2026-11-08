@@ -32,15 +32,21 @@ COURSES = {
     },
     "networking-basics": {
         "title": "Networking Basics",
-        "url": CATALOG_URL, "verified_direct": False, "hours": 25, "level": "Foundational",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/networking-basics?courseLang=en-US&instance_id=3975214f-6bb5-4427-b830-d6b5fca74da9",
+        "verified_direct": True, "hours": 22, "level": "Foundational",
     },
     "endpoint-security": {
         "title": "Endpoint Security",
-        "url": CATALOG_URL, "verified_direct": False, "hours": 27, "level": "Introductory",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/endpoint-security?courseLang=en-US&instance_id=e5aa9867-b652-4fe0-b115-97884dd30c01",
+        "verified_direct": True, "hours": 27, "level": "Introductory",
     },
     "network-defense": {
         "title": "Network Defense",
-        "url": CATALOG_URL, "verified_direct": False, "hours": 27, "level": "Intermediate",
+        # Live QWALORA LLC academy class, published on NetAcad; self-enroll deep link.
+        "url": "https://www.netacad.com/courses/network-defense?courseLang=en-US&instance_id=2478667b-3096-436b-a0d9-63055e781c93",
+        "verified_direct": True, "hours": 27, "level": "Intermediate",
     },
     "cyber-threat-management": {
         "title": "Cyber Threat Management",
