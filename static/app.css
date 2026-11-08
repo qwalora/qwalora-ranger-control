@@ -555,7 +555,7 @@ textarea.input{width:100%;resize:vertical;min-height:90px;font:13px/1.5 var(--f)
    Scoped to the candidate "Your Ranger" page. Builds on the Qwalora tokens in app.css.
    Goal: one aligned column with a clear information hierarchy and a roadmap-led journey. */
 
-.cand-body{padding:24px 28px 40px;display:flex;flex-direction:column;gap:18px;max-width:900px;width:100%;margin:0 auto}
+.cand-body{padding:22px 28px 34px;display:flex;flex-direction:column;gap:18px}
 
 /* The global .card is an auth-modal (heavy pop shadow, 460px). On the dashboard, cards are
    quiet panels: subtle border + soft shadow, full width, consistent padding. */
