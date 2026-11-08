@@ -37,7 +37,12 @@ DC = "127.0.0.1"  # the DC runs in this same container; only loopback is ever di
 #     (DNS, Kerberos, EPM, LDAP, SMB, kpasswd, LDAPS, Global Catalog);
 #   - the VALIDATOR cred (used only by the portal) reaches only the token-gated proof server (9443),
 #     so a candidate holding the attack cred cannot reach the proof endpoint at all.
-AD_PORTS = frozenset({53, 88, 135, 389, 445, 464, 636, 3268, 3269})
+# AD service ports, plus the DC's DCE/RPC endpoints. Samba's AD DC serves DRSUAPI (the replication
+# interface DCSync uses) over dynamic RPC endpoints registered with the endpoint mapper (135); we pin
+# those to a fixed port (1024) and a narrow dynamic range (49152-49172) in the DC's smb.conf so the
+# pivot can allow exactly them. Without this, secretsdump's DCSync reaches 135, is handed a random high
+# port, and the pivot blocks it. Still DC-loopback only, so nothing else is reachable.
+AD_PORTS = frozenset({53, 88, 135, 389, 445, 464, 636, 3268, 3269, 1024} | set(range(49152, 49173)))
 VALIDATOR_PORTS = frozenset({9443})
 
 CAND_USER = os.environ.get("ADRANGE_SOCKS_USER", "ranger").encode()
