@@ -22,12 +22,23 @@
 #
 # Build/deploy is manual (deploy/ is outside the portal autodeploy hold). Deploy ONLY to a
 # NONPRODUCTION environment; this service deliberately exposes an attackable DC on the internet.
-FROM debian:12-slim
+# Samba 4.13 (Debian 11/bullseye). impacket's rpcrt.py request() decides error-vs-success by sniffing
+# the LAST 4 BYTES of the reply as a status DWORD; Samba 4.17 ends the DRSGetNCChanges reply so those
+# bytes are non-zero, and impacket wrongly aborts a successful DCSync ("code 0x0 ERROR_SUCCESS") -
+# reproduced locally, no proxy, as both svc_mssql and a full Domain Admin. Samba 4.13 marshals the
+# reply differently and is the era where impacket DCSync against Samba AD works. Pin to it.
+FROM debian:11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Samba AD DC + tooling. krb5-config/winbind pulled for completeness; python3-samba for the seed.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        samba samba-ad-provision samba-dsdb-modules samba-vfs-modules \
+# Drop the bullseye-security suite before updating: it prunes superseded point-release .debs, so apt
+# 404s on the exact ~deb11uN versions its index lists. The stable base pool still carries Samba 4.13
+# and everything here; a throwaway range does not need the security-update deltas.
+RUN sed -i '/deb .*-security/d; /debian-security/d' /etc/apt/sources.list \
+    && find /etc/apt/sources.list.d -type f -exec sed -i '/-security/d; /debian-security/d' {} + 2>/dev/null; true
+# Samba AD DC + tooling. On bullseye the AD provisioning tooling ships inside the samba package
+# (no samba-ad-provision split-out). krb5-config/winbind for completeness; python3-samba for the seed.
+RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-recommends \
+        samba samba-dsdb-modules samba-vfs-modules \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
@@ -36,20 +47,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
     && rm -f /etc/samba/smb.conf
 
-# DEBUG ONLY (nonprod): several DCSync clients so the ADRANGE_DIAG loopback self-test can find one
-# that parses Samba 4.17's DRSGetNCChanges reply (stock impacket 0.11.x-0.13.x cannot: "code 0x0
-# ERROR_SUCCESS"). Each install is best-effort (|| true) so one flaky dep cannot fail the DC build;
-# the self-test guards on what is actually present. Revert once the proof client is chosen; the DC
-# should not ship with attack tooling on it.
-RUN apt-get update && apt-get install -y --no-install-recommends python3-pip python3-venv git pipx \
-    && rm -rf /var/lib/apt/lists/*
-# 1) stock impacket 0.13.1 (baseline)
-RUN pip3 install --break-system-packages --no-cache-dir 'impacket==0.13.1' || true
-# 2) impacket git master in its own venv (may carry a Samba DRS fix not yet released)
-RUN python3 -m venv /opt/impkt-master \
-    && /opt/impkt-master/bin/pip install --no-cache-dir 'impacket @ git+https://github.com/fortra/impacket.git' || true
-# 3) netexec (ships its own impacket pin; known to handle Samba AD --ntds)
-RUN PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install netexec || true
+# DEBUG ONLY (nonprod): impacket for the ADRANGE_DIAG loopback DCSync self-test, to confirm Samba 4.13
+# parses cleanly. Revert once proven; the DC should not ship with attack tooling on it.
+RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-recommends python3-pip \
+    && pip3 install --no-cache-dir 'impacket==0.13.1' \
+    && rm -rf /var/lib/apt/lists/* || true
 
 COPY seed.py /opt/adrange/seed.py
 COPY proof_server.py /opt/adrange/proof_server.py
