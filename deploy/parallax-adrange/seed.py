@@ -82,7 +82,8 @@ def ensure_user(db, sam, password, *, desc=None):
 
 def ensure_group(db, name):
     if not _exists(db, name):
-        db.newgroup(name, grouptype=security.GROUP_TYPE_SECURITY_GLOBAL_GROUP)
+        # newgroup defaults to a global security group, which is what we want for TierAdmins.
+        db.newgroup(name)
         print("[seed] created group %s" % name)
 
 
