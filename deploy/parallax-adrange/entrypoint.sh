@@ -7,6 +7,16 @@
 # that secret is stable; krbtgt and machine keys are random per provision.
 set -euo pipefail
 
+# Samba's ldb modules (samba_secrets, etc.) are not always on ldb's default search path in a slim
+# image; without them `samba-tool domain provision` fails at secrets.ldb. Point LDB_MODULES_PATH at
+# whichever directory actually holds the samba ldb modules.
+if [ -z "${LDB_MODULES_PATH:-}" ]; then
+  for d in /usr/lib/*/samba/ldb /usr/lib/samba/ldb /usr/lib/*/ldb/modules/ldb; do
+    if [ -d "$d" ]; then export LDB_MODULES_PATH="$d"; break; fi
+  done
+fi
+echo "[adrange] LDB_MODULES_PATH=${LDB_MODULES_PATH:-<unset>}"
+
 REALM="${ADRANGE_REALM:-QWALORA.RANGE}"
 DOMAIN="${ADRANGE_NETBIOS:-QWALORA}"
 ADMINPASS="${ADRANGE_ADMIN_PASSWORD:?ADRANGE_ADMIN_PASSWORD must be set}"
