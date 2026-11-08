@@ -89,13 +89,22 @@ python3 /opt/adrange/socks_scoped.py &
 # svc_mssql keeps its seed password (Password123!) and is already in TierAdmins (DCSync rights).
 if [ -n "${ADRANGE_DIAG:-}" ] && command -v secretsdump.py >/dev/null 2>&1; then
   ( sleep 25
-    echo "[adrange][selftest] ===== loopback DCSync self-test (no proxy) ====="
-    echo "[adrange][selftest] --- A) whole-NC replication: -just-dc-ntlm (no per-user EXOP) ---"
-    secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
-      -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest] /'
-    echo "[adrange][selftest] --- B) single-object path with traceback: -just-dc-user Administrator -debug ---"
-    secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
-      -just-dc-user 'QWALORA\Administrator' -debug 2>&1 | sed 's/^/[adrange][selftest] /' | head -60
+    TGT="qwalora.range/svc_mssql:Password123!@127.0.0.1"
+    echo "[adrange][selftest] ===== loopback DCSync self-test (no proxy): multi-client ====="
+    echo "[adrange][selftest] --- A) stock impacket 0.13.1 secretsdump -just-dc-ntlm ---"
+    secretsdump.py "$TGT" -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest][A] /' | head -40
+    if [ -x /opt/impkt-master/bin/secretsdump.py ]; then
+      echo "[adrange][selftest] --- B) impacket git-master secretsdump -just-dc-ntlm ---"
+      /opt/impkt-master/bin/secretsdump.py "$TGT" -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest][B] /' | head -40
+    else
+      echo "[adrange][selftest] --- B) impacket git-master NOT installed ---"
+    fi
+    if command -v nxc >/dev/null 2>&1; then
+      echo "[adrange][selftest] --- C) netexec nxc smb --ntds ---"
+      nxc smb 127.0.0.1 -u svc_mssql -p 'Password123!' --ntds 2>&1 | sed 's/^/[adrange][selftest][C] /' | head -40
+    else
+      echo "[adrange][selftest] --- C) netexec (nxc) NOT installed ---"
+    fi
     echo "[adrange][selftest] ===== self-test done ====="
   ) &
 fi

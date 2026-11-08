@@ -22,16 +22,12 @@
 #
 # Build/deploy is manual (deploy/ is outside the portal autodeploy hold). Deploy ONLY to a
 # NONPRODUCTION environment; this service deliberately exposes an attackable DC on the internet.
-# Samba 4.13 (Debian 11/bullseye). impacket's DRSUAPI DCSync (secretsdump -just-dc) parses Samba's
-# DRSGetNCChanges reply cleanly on the 4.13 era; Samba 4.17 (Debian 12) returns a success reply that
-# impacket 0.11.x-0.13.x both fail to parse ("DRSR SessionError: code 0x0 - ERROR_SUCCESS"), proven
-# by a no-proxy loopback self-test inside the DC. Pin to the version candidates' tooling can consume.
-FROM debian:11-slim
+FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Samba AD DC + tooling. krb5-config/winbind pulled for completeness; python3-samba for the seed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        samba samba-dsdb-modules samba-vfs-modules \
+        samba samba-ad-provision samba-dsdb-modules samba-vfs-modules \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
@@ -40,12 +36,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
     && rm -f /etc/samba/smb.conf
 
-# DEBUG ONLY (nonprod): impacket, so entrypoint can run a loopback DCSync self-test (ADRANGE_DIAG)
-# that isolates an impacket<->Samba DRS reply-parse problem from the SOCKS pivot. Revert once the
-# live range's DCSync path is proven; the DC should not ship with attack tooling on it.
-RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
-    && pip3 install --break-system-packages --no-cache-dir 'impacket==0.13.1' \
+# DEBUG ONLY (nonprod): several DCSync clients so the ADRANGE_DIAG loopback self-test can find one
+# that parses Samba 4.17's DRSGetNCChanges reply (stock impacket 0.11.x-0.13.x cannot: "code 0x0
+# ERROR_SUCCESS"). Each install is best-effort (|| true) so one flaky dep cannot fail the DC build;
+# the self-test guards on what is actually present. Revert once the proof client is chosen; the DC
+# should not ship with attack tooling on it.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip python3-venv git pipx \
     && rm -rf /var/lib/apt/lists/*
+# 1) stock impacket 0.13.1 (baseline)
+RUN pip3 install --break-system-packages --no-cache-dir 'impacket==0.13.1' || true
+# 2) impacket git master in its own venv (may carry a Samba DRS fix not yet released)
+RUN python3 -m venv /opt/impkt-master \
+    && /opt/impkt-master/bin/pip install --no-cache-dir 'impacket @ git+https://github.com/fortra/impacket.git' || true
+# 3) netexec (ships its own impacket pin; known to handle Samba AD --ntds)
+RUN PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install netexec || true
 
 COPY seed.py /opt/adrange/seed.py
 COPY proof_server.py /opt/adrange/proof_server.py
