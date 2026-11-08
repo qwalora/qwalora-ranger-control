@@ -49,8 +49,8 @@ def test_strata_foundation_card_renders_with_real_links(client):
     _login(client, _mkcand("naf-strata", "strata"))
     html = client.get("/me/foundation").get_data(as_text=True)
     assert "Must take" in html
-    # verified public self-enroll deep link for the universal entry course
-    assert "self-enroll/m/course-1605348" in html
+    # verified public self-enroll deep link (instance-scoped) for the universal entry course
+    assert "instance_id=07160b4f-b734-42fb-aaba-d7d43c27bcdc" in html
     # the Junior Cybersecurity Analyst path courses are present and aligned
     assert "Network Defense" in html and "Cyber Threat Management" in html and "Ethical Hacker" in html
     assert "Maps to:" in html
@@ -59,9 +59,11 @@ def test_strata_foundation_card_renders_with_real_links(client):
 def test_parallax_foundation_is_security_fundamentals(client):
     _login(client, _mkcand("naf-parallax", "parallax"))
     html = client.get("/me/foundation").get_data(as_text=True)
-    assert "Cybersecurity Essentials" in html
-    assert "self-enroll/m/course-650455" in html
-    # PARALLAX foundation is the 2-course fundamentals set, not the full STRATA ladder path
+    # PARALLAX foundation is the 2-course security-fundamentals set: intro + network defense
+    # (Cisco retired the standalone Cybersecurity Essentials; Network Defense now carries it).
+    assert "Introduction to Cybersecurity" in html and "Network Defense" in html
+    assert "instance_id=2478667b-3096-436b-a0d9-63055e781c93" in html  # network-defense self-enroll
+    # the 2-course fundamentals set, not the full STRATA ladder path
     assert "0/2" in html
 
 
