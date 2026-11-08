@@ -218,6 +218,147 @@ def generate_domain(seed):
     return model
 
 
+def _domain_block(r, fqdn, netbios, is_root, n_users=14):
+    """Build one domain's objects (users, groups, computers) tagged with their domain and SID.
+    Returns (dsid, objects dict, index of key principals) for the forest wiring."""
+    dsid = _mk_domain_sid(r)
+    rid = [1100]
+
+    def nr():
+        rid[0] += 1
+        return rid[0]
+
+    users, groups, computers = [], [], []
+    used = set()
+
+    def name():
+        for _ in range(40):
+            f, l = r.choice(_FIRST), r.choice(_LAST)
+            s = "%s.%s" % (f, l)
+            if s not in used:
+                used.add(s); return s, "%s %s" % (f.title(), l.title())
+        s = "user%d" % nr(); used.add(s); return s, s
+
+    def add_user(sam, display, **kw):
+        u = {"sam": sam, "name": "%s@%s" % (sam, fqdn), "display": display, "domain": fqdn,
+             "domainsid": dsid, "sid": _sid(dsid, nr()), "enabled": True, "spns": [],
+             "asrep": False, "admincount": False, "memberof": [], "description": "", "crackable": False}
+        u.update(kw); users.append(u); return u
+
+    def add_group(sam, display, rid_fixed=None, **kw):
+        g = {"sam": sam, "display": display, "domain": fqdn, "domainsid": dsid,
+             "sid": _sid(dsid, rid_fixed) if rid_fixed else _sid(dsid, nr()),
+             "members": [], "memberof": []}
+        g.update(kw); groups.append(g); return g
+
+    def add_comp(sam, **kw):
+        c = {"sam": sam, "name": "%s.%s" % (sam.rstrip("$").lower(), fqdn), "domain": fqdn,
+             "domainsid": dsid, "sid": _sid(dsid, nr()), "os": "Windows Server 2019",
+             "unconstrained": False, "rbcd": [], "memberof": []}
+        c.update(kw); computers.append(c); return c
+
+    g_da = add_group("Domain Admins (%s)" % netbios, "Domain Admins", rid_fixed=512)
+    g_ea = add_group("Enterprise Admins", "Enterprise Admins", rid_fixed=519) if is_root else None
+    g_custom = add_group("%s Server Admins" % netbios, "%s Server Admins" % netbios)
+    dc = add_comp("%s-DC01$" % netbios, os="Windows Server 2022", is_dc=True)
+    for _ in range(r.randint(1, 2)):
+        add_comp("%s-SRV%02d$" % (netbios, r.randint(1, 9)))
+    for _ in range(n_users):
+        s, d = name(); add_user(s, d)
+    # a service account with an SPN (Kerberoastable) in this domain
+    svc_sam, spn_class, host = r.choice(_SVC)
+    svc = add_user("%s_%s" % (svc_sam, netbios.lower()), svc_sam,
+                   spns=["%s/%s.%s" % (spn_class, host.lower(), fqdn)],
+                   description="service account for %s" % host)
+    idx = {"dsid": dsid, "da": g_da, "ea": g_ea, "custom": g_custom, "dc": dc, "svc": svc,
+           "users": users, "groups": groups, "computers": computers}
+    return dsid, {"users": users, "groups": groups, "computers": computers}, idx
+
+
+def generate_forest(seed):
+    """Board 6 capstone: a multi-domain forest. A child domain (dev.<root>) and its parent forest
+    root, plus a second forest reached over a trust. The planted path runs foothold -> child Domain
+    Admin -> parent Enterprise Admin via intra-forest trust abuse (SID history) -> forest persistence
+    (DCSync) -> cross-forest pivot. Same model shape and grader as board 5; the intended path and
+    crackable flags are hidden."""
+    r = _random.Random("ad-forest:v1:%s" % seed)
+    (k1, root_name), (k2, _f2name) = r.sample(_ORGS, 2)
+    root_fqdn, root_nb = "%s.local" % k1, k1.upper()
+    child_fqdn, child_nb = "dev.%s.local" % k1, "DEV"
+    f2_fqdn, f2_nb = "%s.local" % k2, k2.upper()
+
+    cs, cobj, ci = _domain_block(r, child_fqdn, child_nb, is_root=False)
+    ps, pobj, pi = _domain_block(r, root_fqdn, root_nb, is_root=True)
+    fs, fobj, fi = _domain_block(r, f2_fqdn, f2_nb, is_root=True)
+
+    users = cobj["users"] + pobj["users"] + fobj["users"]
+    groups = cobj["groups"] + pobj["groups"] + fobj["groups"]
+    computers = cobj["computers"] + pobj["computers"] + fobj["computers"]
+    aces = []
+
+    def ace(src, right, dst, intended=False):
+        aces.append({"source_sam": src["sam"], "source_sid": src["sid"], "right": right,
+                     "target_sam": dst["sam"], "target_sid": dst["sid"], "intended": intended})
+
+    # intra-child path: foothold -> ForceChangePassword -> child svc (kerberoastable) ->
+    # GenericAll -> child privileged group -> DCSync child
+    foothold = r.choice([u for u in ci["users"] if u is not ci["svc"]])
+    foothold["description"] = "standard user in the child domain (your assumed initial access)"
+    child_svc = ci["svc"]; child_svc["crackable"] = True
+    child_svc["description"] = "service account; %s" % _CRACKABLE_HINT
+    child_grp = ci["custom"]   # distinct privileged group that holds replication on the child
+    ace(foothold, "ForceChangePassword", child_svc, intended=True)
+    ace(child_svc, "GenericAll", child_grp, intended=True)
+    ace(child_grp, "GetChangesAll", {"sam": child_fqdn, "sid": cs}, intended=True)
+    # parent EA holds replication on the parent (DCSync); represent the right for BloodHound
+    ace(pi["ea"], "GetChangesAll", {"sam": root_fqdn, "sid": ps}, intended=True)
+
+    trusts = [
+        {"from": child_fqdn, "to": root_fqdn, "type": "ParentChild", "transitive": True,
+         "sid_filtering": False},
+        {"from": root_fqdn, "to": f2_fqdn, "type": "Forest", "transitive": True,
+         "sid_filtering": False},
+    ]
+
+    intended_path = [
+        {"step": 1, "source": foothold["sam"], "technique": "ForceChangePassword",
+         "target": child_svc["sam"], "detail": "Abuse the DACL to reset the service account."},
+        {"step": 2, "source": child_svc["sam"], "technique": "Kerberoasting",
+         "target": child_svc["sam"], "detail": "Crack the roastable service account."},
+        {"step": 3, "source": child_svc["sam"], "technique": "ACL abuse: GenericAll -> AddMember",
+         "target": child_grp["display"], "detail": "Use GenericAll to join the privileged group."},
+        {"step": 4, "source": child_grp["display"], "technique": "DCSync",
+         "target": child_fqdn, "detail": "DCSync the child to reach child Domain Admin."},
+        {"step": 5, "source": "Domain Admins (%s)" % child_nb,
+         "technique": "Trust abuse: SID history / ExtraSids", "target": "Enterprise Admins",
+         "detail": "Forge an inter-realm TGT adding the parent Enterprise Admins SID (no SID "
+                   "filtering on the parent-child trust)."},
+        {"step": 6, "source": "Enterprise Admins", "technique": "DCSync",
+         "target": root_fqdn, "detail": "DCSync the forest root (krbtgt) for forest persistence."},
+        {"step": 7, "source": "Enterprise Admins", "technique": "Cross-forest trust abuse",
+         "target": f2_fqdn, "detail": "Abuse the forest trust (SID filtering off) to pivot into "
+                                      "the second forest."},
+    ]
+
+    foothold_blk = {"sam": foothold["sam"], "name": foothold["name"],
+                    "note": "Valid credentials for a standard user in %s." % child_fqdn}
+    model = {
+        "domain": {"name": root_fqdn, "netbios": root_nb, "org": root_name, "sid": ps,
+                   "functional_level": "2016", "forest": True},
+        "domains": [
+            {"name": child_fqdn, "netbios": child_nb, "sid": cs, "role": "child"},
+            {"name": root_fqdn, "netbios": root_nb, "sid": ps, "role": "forest-root"},
+            {"name": f2_fqdn, "netbios": f2_nb, "sid": fs, "role": "second-forest"},
+        ],
+        "trusts": trusts,
+        "users": users, "groups": groups, "computers": computers, "aces": aces,
+        "foothold": foothold_blk, "intended_path": intended_path,
+        "stats": {"domains": 3, "users": len(users), "groups": len(groups),
+                  "computers": len(computers), "aces": len(aces)},
+    }
+    return model
+
+
 _HIDDEN_USER_FIELDS = ("crackable",)
 
 
@@ -227,7 +368,7 @@ def public_view(model):
     all visible - that is the point; the skill is reasoning the path from them."""
     def strip(d, hide):
         return {k: v for k, v in d.items() if k not in hide}
-    return {
+    out = {
         "domain": model["domain"],
         "foothold": model["foothold"],
         "users": [strip(u, _HIDDEN_USER_FIELDS) for u in model["users"]],
@@ -236,6 +377,10 @@ def public_view(model):
         "aces": [strip(a, ("intended",)) for a in model["aces"]],
         "stats": model["stats"],
     }
+    if "domains" in model:   # forest (board 6)
+        out["domains"] = model["domains"]
+        out["trusts"] = model.get("trusts", [])
+    return out
 
 
 # --- grading -----------------------------------------------------------------
@@ -247,6 +392,14 @@ _TECH_CATS = {
                   "add self", "acl abuse", "acl", "dacl", "writeowner", "add to group", "group member"],
     "dcsync": ["dcsync", "dc sync", "drsuapi", "replication", "getchanges", "get changes",
                "ds-replication", "secretsdump", "krbtgt dump"],
+    # forest-capstone (board 6) tradecraft
+    "trust-abuse": ["sid history", "sidhistory", "extrasids", "extra sids", "inter-realm",
+                    "interrealm", "trust key", "trust ticket", "child to parent", "child-to-parent",
+                    "sid filtering", "intra-forest trust", "parent trust"],
+    "golden-ticket": ["golden ticket", "golden-ticket", "forest persistence", "krbtgt golden",
+                      "forge tgt", "forged tgt"],
+    "cross-forest": ["cross forest", "cross-forest", "forest trust", "foreign", "inter-forest",
+                     "sid-filtering bypass", "external trust"],
 }
 # decoy categories a candidate might name that are NOT on the intended path
 _DECOY_CATS = {"asrep": ["asrep", "as-rep", "as rep"], "delegation": ["unconstrained", "delegation",
@@ -294,7 +447,17 @@ def _lcs_ratio(a, b):
 
 
 def grade(seed, submission):
-    """Score a submitted attack path against the hidden intended path.
+    """Score a board-5 (single-domain) attack path against the hidden intended path."""
+    return _grade_model(generate_domain(seed), submission)
+
+
+def grade_forest(seed, submission):
+    """Score a board-6 (multi-domain forest) attack path against the hidden intended path."""
+    return _grade_model(generate_forest(seed), submission)
+
+
+def _grade_model(model, submission):
+    """Score a submitted attack path against a model's hidden intended path.
 
     submission = {"path": [{"source","technique","target"}, ...]}  (ordered, foothold -> DA)
     Returns (score 0..100, feedback dict). Weights: key principals 0.35, techniques 0.40,
@@ -302,7 +465,6 @@ def grade(seed, submission):
     scores 100; naming decoy abuses (AS-REP, delegation) that are not on the path does not help
     and dilutes precision.
     """
-    model = generate_domain(seed)
     path = model["intended_path"]
     dom = model["domain"]["name"]
 

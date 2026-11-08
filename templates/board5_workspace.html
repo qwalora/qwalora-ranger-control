@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_icons.html" import ic %}
 {% from "_candnav.html" import candnav %}
-{% block title %}Red Team Range · Board 5 · Qwalora Ranger{% endblock %}
+{% block title %}AD Range · Board {{ vm.board }} · Qwalora Ranger{% endblock %}
 {% block body %}
 <div class="shell">
   <div class="app app-2col">
@@ -10,9 +10,9 @@
     <section class="ranges-main">
       <div class="rg-head">
         <div>
-          <div class="eyebrow"><span class="d"></span>STRATA · Board 5 · Red Team (Phase 2)</div>
+          <div class="eyebrow"><span class="d"></span>STRATA · Board {{ vm.board }} · {{ 'Capstone' if vm.board == 6 else 'Red Team' }} (Phase 2)</div>
           <div class="ttl" style="margin-top:6px">{{ vm.mission.title if vm.mission else 'Active Directory range' }}</div>
-          <div class="rg-sub">Compromise a seeded Active Directory estate: map it, find the path from your foothold to Domain Admin, and submit the attack chain. The domain is unique to you; the path is not given.</div>
+          <div class="rg-sub">{% if vm.board == 6 %}Compromise a seeded multi-domain forest: own the child domain, abuse the trust to reach the forest root, then pivot across the forest trust. Map it, then submit the full attack chain. The forest is unique to you; the path is not given.{% else %}Compromise a seeded Active Directory estate: map it, find the path from your foothold to Domain Admin, and submit the attack chain. The domain is unique to you; the path is not given.{% endif %}</div>
         </div>
         <div class="iw-head-side">
           <div class="muted" style="font-size:11px">Case reference</div>

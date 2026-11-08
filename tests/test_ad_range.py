@@ -52,6 +52,38 @@ def test_grader_discriminates():
         assert AR.grade(seed, {"path": list(reversed(ref["path"]))})[0] < 95.0
 
 
+def test_forest_capstone_generation_and_grading():
+    m = AR.generate_forest("cap-0001")
+    assert m["stats"]["domains"] == 3 and len(m["domains"]) == 3
+    assert len(m["trusts"]) == 2
+    # intended path spans trust abuse + cross-forest
+    techs = " ".join(h["technique"].lower() for h in m["intended_path"])
+    assert "sid history" in techs and "cross-forest" in techs and "dcsync" in techs
+    ref = {"path": [{"source": h["source"], "technique": h["technique"], "target": h["target"]}
+                    for h in m["intended_path"]]}
+    assert AR.grade_forest("cap-0001", ref)[0] >= 99.0
+    assert AR.grade_forest("cap-0001", {"path": []})[0] == 0.0
+    # partial forest compromise (stop at child DA) fails the capstone bar
+    assert AR.grade_forest("cap-0001", {"path": ref["path"][:4]})[0] < 95.0
+    # answer-free public view, with forest structure exposed
+    pv = AR.public_view(m)
+    assert "intended_path" not in pv and "domains" in pv and "trusts" in pv
+
+
+def test_forest_bloodhound_exports_all_domains_and_trusts():
+    import ad_bloodhound as BH
+    m = AR.generate_forest("cap-0002")
+    files = BH.build(m)
+    assert files["domains.json"]["meta"]["count"] == 3
+    trusts = [t for d in files["domains.json"]["data"] for t in d["Trusts"]]
+    assert len(trusts) == 2
+    # a child-domain object carries the child domain SID, not the forest root's
+    child_sid = next(d["sid"] for d in m["domains"] if d["role"] == "child")
+    cu = next(u for u in m["users"] if u.get("domainsid") == child_sid)
+    exp = next(u for u in files["users.json"]["data"] if u["ObjectIdentifier"] == cu["sid"])
+    assert exp["Properties"]["domainsid"] == child_sid
+
+
 def test_bloodhound_export_encodes_path():
     m = AR.generate_domain("adr-0001")
     files = BH.build(m)

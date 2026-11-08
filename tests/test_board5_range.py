@@ -70,3 +70,39 @@ def test_board5_clears_and_advances(client, monkeypatch):
         c = db.session.get(Candidate, cid)
         assert c.current_board == 6, "board 5 did not clear/advance to the capstone"
         assert Badge.query.filter_by(candidate_id=cid, level="5").first() is not None  # Raider rank
+
+
+def test_board6_forest_serves_and_clears_to_certified(client, monkeypatch):
+    monkeypatch.delenv("RANGER_STRATA_PORTFOLIOS", raising=False)
+    import ad_range as AR
+    monkeypatch.setattr(AR, "grade_forest", lambda seed, sub: (100.0, {"note": "ok"}))
+    with A.app.app_context():
+        c = Candidate.query.filter_by(github_id="b6-clear").first()
+        if c is None:
+            c = Candidate(handle="b6-clear", name="b6", email="b6@nonprod.invalid", cohort="2026-A",
+                          github_id="b6-clear", status="active", current_board=6)
+            db.session.add(c); db.session.commit()
+            db.session.add(ProgramMembership(candidate_id=c.id, program="strata", status="active",
+                                             cohort="2026-A")); db.session.commit()
+        db.session.add(BoardResult(candidate_id=c.id, board=6, role="capstone",
+                                   report_status="approved"))
+        db.session.commit()
+        cid = c.id
+    # the forest workspace serves a 3-domain graph
+    with client.session_transaction() as sess:
+        sess["cand"] = cid
+    data = client.get("/me/workspace/data").get_json()
+    assert data["env"] == "ad-range" and "domains" in data["dataset"]
+    assert len(data["dataset"]["domains"]) == 3
+    # clearing board 6 graduates the candidate (certified)
+    with client.session_transaction() as sess:
+        sess["cand"] = cid
+        sess["csrf"] = "t"
+    r = client.post("/me/workspace/submit",
+                    data=json.dumps({"submission": {"path": [{"source": "a", "technique": "DCSync",
+                                                              "target": "b"}]}}),
+                    content_type="application/json", headers={"X-CSRF-Token": "t"})
+    assert r.status_code == 200, r.data
+    with A.app.app_context():
+        assert Badge.query.filter_by(candidate_id=cid, level="certified").first() is not None, \
+            "clearing board 6 did not mint the terminal certification"

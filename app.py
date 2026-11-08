@@ -960,8 +960,9 @@ def create_app():
         import strata_catalog as _sc
         if int(n) == 2 and not _strata_portfolios_on():
             return "soc-dataset"
-        if int(n) == 5 and not _strata_portfolios_on():
-            return "ad-range"   # Railway AD analysis range (BloodHound + attack-path submission)
+        if int(n) in (5, 6) and not _strata_portfolios_on():
+            return "ad-range"   # Railway AD analysis range (BloodHound + attack-path submission);
+            #                     board 5 is a single domain, board 6 a multi-domain forest capstone
         return _sc.ENVIRONMENT.get(int(n))
 
     def _slots_used(host="primary"):
@@ -4228,13 +4229,20 @@ def create_app():
                     "note": ("Pivot through the evidence in OpenSearch, build your findings, and submit "
                              "a signed evidence record to clear the board.")}
         if kind == "ad-range":
-            return {"kind": "ad-range", "name": "Active Directory range",
-                    "platform": "A seeded AD estate you analyze in BloodHound CE; reconstruct the path to Domain Admin.",
-                    "launch_url": "/me/workspace", "launch_label": "Open the Red Team workspace",
+            forest = int(n) == 6
+            return {"kind": "ad-range",
+                    "name": "Active Directory forest" if forest else "Active Directory range",
+                    "platform": ("A seeded multi-domain forest you analyze in BloodHound CE; own the "
+                                 "forest end to end." if forest else
+                                 "A seeded AD estate you analyze in BloodHound CE; reconstruct the path to Domain Admin."),
+                    "launch_url": "/me/workspace",
+                    "launch_label": "Open the Capstone workspace" if forest else "Open the Red Team workspace",
                     "new_tab": False, "available": True, "console_user": "", "console_pw": "",
                     "bloodhound_url": "/me/workspace/bloodhound.zip",
-                    "note": ("Download your BloodHound dataset, map the path from your foothold to "
-                             "Domain Admin, then submit your attack path to clear the board.")}
+                    "note": ("Download your BloodHound dataset, map the path %s, then submit your "
+                             "attack path to clear the board." %
+                             ("across the forest to the root and the trusted forest" if forest
+                              else "from your foothold to Domain Admin"))}
         if kind == "goad-range":
             return {"kind": "range", "name": "Isolated range (GOAD)",
                     "platform": "A dedicated, isolated Active Directory range reached over WireGuard.",
@@ -4524,28 +4532,34 @@ def create_app():
     # response). Each investigates in the SOC console and submits here; grading dispatches by
     # board in scenarios.grade. Governed cohorts use board 2's signed-citation case flow instead
     # (the generic worksheet endpoints refuse governance with 409). Boards 5/6 are not here.
-    WORKSHEET_BOARDS = (1, 2, 3, 4, 5)
+    WORKSHEET_BOARDS = (1, 2, 3, 4, 5, 6)
     _WS_TEMPLATE = {1: "board1_workspace.html", 2: "board2_workspace.html",
                     3: "board3_workspace.html", 4: "board4_workspace.html",
-                    5: "board5_workspace.html"}
+                    5: "board5_workspace.html", 6: "board5_workspace.html"}
 
     def _ws_kind(n):
         # Per-board draft kind; board 1 keeps its original key so existing drafts are preserved.
         return "board1_triage" if int(n) == 1 else "board%d_ws" % int(n)
 
+    def _ad_model(n, seed):
+        """The AD estate for a board: a single domain (board 5) or a multi-domain forest (board 6)."""
+        import ad_range as _ar
+        return _ar.generate_forest(seed) if int(n) == 6 else _ar.generate_domain(seed)
+
     def _ws_dataset(n, seed):
-        """Worksheet dataset for a board. The AD range (board 5, non-governed) serves the
+        """Worksheet dataset for a board. The AD ranges (boards 5/6, non-governed) serve the
         enumerable AD graph from ad_range; every other board uses the scenarios generator."""
         if _effective_env(n) == "ad-range":
             import ad_range as _ar
-            m = _ar.generate_domain(seed)
+            m = _ad_model(n, seed)
             return _ar.public_view(m), m["domain"]["name"]
         return scenarios.dataset(n, seed), None
 
     def _ws_grade(n, seed, submission):
         if _effective_env(n) == "ad-range":
             import ad_range as _ar
-            return _ar.grade(seed, submission)
+            return (_ar.grade_forest(seed, submission) if int(n) == 6
+                    else _ar.grade(seed, submission))
         return scenarios.grade(n, seed, submission)
 
     def _dataset_version(seed):
@@ -4739,9 +4753,8 @@ def create_app():
             _ensure_seed(c, n)
             db.session.commit()
             seed = _current_seed(c)
-        import ad_range as _ar
         import ad_bloodhound as _bh
-        data = _bh.zip_bytes(_ar.generate_domain(seed))
+        data = _bh.zip_bytes(_ad_model(n, seed))
         fn = "ranger-ad-%s.zip" % (_scenario_ref(c, n, seed) or "range")
         return Response(data, mimetype="application/zip",
                         headers={"Content-Disposition": 'attachment; filename="%s"' % fn})

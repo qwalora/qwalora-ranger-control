@@ -259,11 +259,23 @@ score = 100 · Σ(weightᵢ · componentᵢ)</div>
       </div>
     </div>
     <div class="board" id="b6">
-      <div class="bh"><span class="bn">BOARD 6</span><span class="bt">Vanguard Capstone — full forest</span><span class="br">Vanguard</span></div>
+      <div class="bh"><span class="bn">BOARD 6</span><span class="bt">Vanguard Capstone — multi-domain forest</span><span class="br">Vanguard</span></div>
       <div class="bb">
         <span class="label">Environment</span>
-        <p>The capstone that completes the <b>Qwalora Ranger</b> certification: an end-to-end, multi-domain forest compromise with a cross-forest trust pivot, on a live isolated range reached over WireGuard. Clearance is a signed <b>range attestation</b>: an independent technical validation classifies the deployment as real / unavailable / test-fixture / mock, and only an independently verified <i>real</i> governed range is creditable.</p>
-        <div class="note warn"><span class="h">Status: capstone in activation</span>Board 5 (the AD analysis range) is live and clearable now. The board 6 live-forest range is being provisioned; it displays <b>"Live range access is not yet available"</b> and cannot yet be cleared (an unverified or mock range yields no objective credit by design). Your mission brief and dashboard announce availability.</div>
+        <p>The capstone that completes the <b>Qwalora Ranger</b> certification: a seeded multi-domain forest unique to you (a child domain, its forest root, and a second forest reached over a trust). Own it end to end, then submit the full attack chain. Download the <b>BloodHound CE</b> dataset (all three domains and their trusts) and reconstruct the path.</p>
+        <span class="label">Submission contract</span>
+        <div class="spec"><span class="lbl">submission (foothold -> forest compromise, in order)</span>{ <span class="k">"path"</span>: [
+  { <span class="k">"source"</span>: <span class="s">"&lt;child foothold&gt;"</span>, <span class="k">"technique"</span>: <span class="s">"ForceChangePassword"</span>, <span class="k">"target"</span>: <span class="s">"svc_*"</span> },
+  { <span class="k">"source"</span>: <span class="s">"svc_*"</span>, <span class="k">"technique"</span>: <span class="s">"Kerberoasting"</span>, <span class="k">"target"</span>: <span class="s">"svc_*"</span> },
+  { <span class="k">"source"</span>: <span class="s">"svc_*"</span>, <span class="k">"technique"</span>: <span class="s">"ACL abuse: AddMember"</span>, <span class="k">"target"</span>: <span class="s">"&lt;child privileged group&gt;"</span> },
+  { <span class="k">"source"</span>: <span class="s">"&lt;child group&gt;"</span>, <span class="k">"technique"</span>: <span class="s">"DCSync"</span>, <span class="k">"target"</span>: <span class="s">"&lt;child domain&gt;"</span> },
+  { <span class="k">"source"</span>: <span class="s">"Domain Admins (child)"</span>, <span class="k">"technique"</span>: <span class="s">"Trust abuse: SID history"</span>, <span class="k">"target"</span>: <span class="s">"Enterprise Admins"</span> },
+  { <span class="k">"source"</span>: <span class="s">"Enterprise Admins"</span>, <span class="k">"technique"</span>: <span class="s">"DCSync"</span>, <span class="k">"target"</span>: <span class="s">"&lt;forest root&gt;"</span> },
+  { <span class="k">"source"</span>: <span class="s">"Enterprise Admins"</span>, <span class="k">"technique"</span>: <span class="s">"Cross-forest trust abuse"</span>, <span class="k">"target"</span>: <span class="s">"&lt;second forest&gt;"</span> }
+] }</div>
+        <span class="label">Scoring</span>
+        <p>Reconstruct the full forest-compromise chain: intra-domain to child Domain Admin, intra-forest trust abuse (SID history / ExtraSids) to Enterprise Admin, DCSync the root, then the cross-forest pivot. Same weighting as board 5 (principals 0.35, techniques 0.40, ordering 0.25). Clearing board 6 mints the terminal <b>Qwalora Ranger, Certified</b> badge. Pass ≥ {{ pass_bar|int }}%.</p>
+        <div class="note"><span class="h">Live-execution range</span>A live Windows/Samba forest reached over WireGuard, where you run the chain with real tooling end to end, is the higher-fidelity upgrade and is provisioned separately. The analysis capstone above is live and clearable now.</div>
       </div>
     </div>
 

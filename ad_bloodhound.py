@@ -84,29 +84,37 @@ def build(model):
             admin_to.setdefault(a["target_sid"], []).append(
                 {"ObjectIdentifier": a["source_sid"], "ObjectType": tmap.get(a["source_sid"], "Group")})
 
+    def _du(obj):
+        return (obj.get("domain") or dom["name"]).upper()
+
+    def _ds(obj):
+        return obj.get("domainsid") or dsid
+
     users = []
     for u in model["users"]:
+        du, ds = _du(u), _ds(u)
         users.append({
             "ObjectIdentifier": u["sid"],
             "Properties": {
-                "name": "%s@%s" % (u["sam"].upper(), dname), "domain": dname, "domainsid": dsid,
-                "distinguishedname": "CN=%s,DC=%s" % (u["sam"], ",DC=".join(dom["name"].split("."))),
+                "name": "%s@%s" % (u["sam"].upper(), du), "domain": du, "domainsid": ds,
+                "distinguishedname": "CN=%s,DC=%s" % (u["sam"], ",DC=".join((u.get("domain") or dom["name"]).split("."))),
                 "enabled": u.get("enabled", True), "hasspn": bool(u.get("spns")),
                 "dontreqpreauth": bool(u.get("asrep")), "admincount": bool(u.get("admincount")),
                 "serviceprincipalnames": u.get("spns", []),
                 "description": u.get("description", ""), "unconstraineddelegation": False,
             },
-            "PrimaryGroupSID": "%s-513" % dsid,
+            "PrimaryGroupSID": "%s-513" % ds,
             "Aces": _aces_for(u["sid"], model, tmap),
             "SPNTargets": [], "HasSIDHistory": [], "AllowedToDelegate": [],
         })
 
     groups = []
     for g in model["groups"]:
+        du, ds = _du(g), _ds(g)
         groups.append({
             "ObjectIdentifier": g["sid"],
-            "Properties": {"name": "%s@%s" % (g["display"].upper().replace(" ", ""), dname),
-                           "domain": dname, "domainsid": dsid},
+            "Properties": {"name": "%s@%s" % (g["display"].upper().replace(" ", ""), du),
+                           "domain": du, "domainsid": ds},
             "Members": [{"ObjectIdentifier": sid, "ObjectType": tmap.get(sid, "Base")}
                         for sid in g.get("members", [])],
             "Aces": _aces_for(g["sid"], model, tmap),
@@ -114,14 +122,15 @@ def build(model):
 
     computers = []
     for c in model["computers"]:
+        du, ds = _du(c), _ds(c)
         computers.append({
             "ObjectIdentifier": c["sid"],
-            "Properties": {"name": "%s@%s" % (c["sam"].rstrip("$").upper(), dname),
-                           "domain": dname, "domainsid": dsid,
+            "Properties": {"name": "%s@%s" % (c["sam"].rstrip("$").upper(), du),
+                           "domain": du, "domainsid": ds,
                            "operatingsystem": c.get("os", "Windows Server 2019"),
                            "unconstraineddelegation": bool(c.get("unconstrained")),
                            "enabled": True},
-            "PrimaryGroupSID": "%s-515" % dsid,
+            "PrimaryGroupSID": "%s-515" % ds,
             "Aces": _aces_for(c["sid"], model, tmap),
             "AllowedToDelegate": [],
             "AllowedToAct": [{"ObjectIdentifier": s, "ObjectType": tmap.get(s, "Computer")}
@@ -131,18 +140,43 @@ def build(model):
                             "FailureReason": None},
         })
 
-    domains = [{
-        "ObjectIdentifier": dsid,
-        "Properties": {"name": dname, "domain": dname, "domainsid": dsid,
-                       "distinguishedname": "DC=" + ",DC=".join(dom["name"].split(".")),
-                       "functionallevel": "2016 Functional Level"},
-        "ChildObjects": ([{"ObjectIdentifier": u["sid"], "ObjectType": "User"} for u in model["users"]]
-                         + [{"ObjectIdentifier": g["sid"], "ObjectType": "Group"} for g in model["groups"]]
-                         + [{"ObjectIdentifier": c["sid"], "ObjectType": "Computer"} for c in model["computers"]]),
-        "Trusts": [], "Links": [], "Aces": domain_aces,
-        "GPOChanges": {"LocalAdmins": [], "RemoteDesktopUsers": [], "DcomUsers": [],
-                       "PSRemoteUsers": [], "AffectedComputers": []},
-    }]
+    # one or more domains (a forest exports every domain with its trusts)
+    dom_list = model.get("domains") or [{"name": dom["name"], "netbios": dom.get("netbios", ""),
+                                         "sid": dsid}]
+    by_dsid_trusts = {}
+    for t in model.get("trusts", []):
+        src_sid = next((d["sid"] for d in dom_list if d["name"] == t["from"]), None)
+        tgt = next((d for d in dom_list if d["name"] == t["to"]), None)
+        if src_sid and tgt:
+            by_dsid_trusts.setdefault(src_sid, []).append({
+                "TargetDomainSid": tgt["sid"], "TargetDomainName": tgt["name"].upper(),
+                "IsTransitive": bool(t.get("transitive", True)), "TrustDirection": "Inbound",
+                "TrustType": t.get("type", "ParentChild"),
+                "SidFilteringEnabled": bool(t.get("sid_filtering", False))})
+    domains = []
+    for d in dom_list:
+        dsid_i = d["sid"]
+        children = ([{"ObjectIdentifier": u["sid"], "ObjectType": "User"} for u in model["users"] if _ds(u) == dsid_i]
+                    + [{"ObjectIdentifier": g["sid"], "ObjectType": "Group"} for g in model["groups"] if _ds(g) == dsid_i]
+                    + [{"ObjectIdentifier": c["sid"], "ObjectType": "Computer"} for c in model["computers"] if _ds(c) == dsid_i])
+        # DCSync aces specific to this domain object
+        d_srcs = {a["source_sid"] for a in model["aces"]
+                  if a["target_sid"] == dsid_i and a["right"] in ("GetChanges", "GetChangesAll")}
+        d_aces = []
+        for s in sorted(d_srcs):
+            for rn in ("GetChanges", "GetChangesAll"):
+                d_aces.append({"PrincipalSID": s, "PrincipalType": tmap.get(s, "Group"),
+                               "RightName": rn, "IsInherited": False})
+        domains.append({
+            "ObjectIdentifier": dsid_i,
+            "Properties": {"name": d["name"].upper(), "domain": d["name"].upper(), "domainsid": dsid_i,
+                           "distinguishedname": "DC=" + ",DC=".join(d["name"].split(".")),
+                           "functionallevel": "2016 Functional Level"},
+            "ChildObjects": children,
+            "Trusts": by_dsid_trusts.get(dsid_i, []), "Links": [], "Aces": d_aces,
+            "GPOChanges": {"LocalAdmins": [], "RemoteDesktopUsers": [], "DcomUsers": [],
+                           "PSRemoteUsers": [], "AffectedComputers": []},
+        })
 
     return {
         "users.json": {"data": users, "meta": _meta("users", len(users))},
