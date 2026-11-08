@@ -12,6 +12,7 @@ grader's truth, never exposed on the candidate-facing proxy.
 """
 import json
 import os
+import socket
 import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -161,8 +162,21 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _V6Server(ThreadingHTTPServer):
+    # Railway private networking is IPv6 (<service>.railway.internal resolves AAAA), so bind IPv6.
+    # On Linux a "::" bind with IPV6_V6ONLY off also accepts IPv4-mapped connections.
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (AttributeError, OSError):
+            pass
+        super().server_bind()
+
+
 def main():
-    srv = ThreadingHTTPServer(("::", 9443), Handler)
+    srv = _V6Server(("::", 9443), Handler)
     srv.serve_forever()
 
 
