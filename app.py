@@ -4093,6 +4093,78 @@ def create_app():
                    "adapter_verified": AL.adapter_verified()})
         return vm
 
+    def _submit_guide(program, n):
+        """One source of truth for how a candidate submits and is scored on their current board,
+        matching the real endpoints. Drives the dashboard 'How this board works' block so the
+        submission contract is explicit and consistent per board instead of implied by scattered
+        buttons."""
+        if program == pathways.PATHWAY_PARALLAX:
+            return {
+                "kind": "parallax",
+                "submit_what": "your defense repo and writeup, through the board's checklist",
+                "graded_how": ("A submit-time checklist verifies your entry is complete (an incomplete "
+                               "submission is refused). An isolated grader then measures how your defense "
+                               "actually behaves and a pinned model-judge scores your approach. Pass bar "
+                               "75. You can resubmit; your best attempt counts."),
+                "steps": ["Provision your workspace, then do the work in your repo.",
+                          "Complete the checklist and submit.",
+                          "The grader measures your defense and scores it; open the receipt for feedback."],
+                "clears_when": "your assessment score reaches 75",
+                "proof": None, "pass_bar": 75,
+            }
+        governed = _strata_portfolios_on()
+        bar = int(P.PASS_BAR)
+        if P.is_isolated(n):
+            live = adrange_live.enabled()
+            guide = {
+                "kind": "strata-isolated",
+                "submit_what": ("your reconstructed attack path from the BloodHound graph, plus the "
+                                "Administrator hash you recover by compromising the live domain"),
+                "graded_how": ("Your attack-path reconstruction is auto-graded on the server against your "
+                               "own seeded domain (the answer key is re-derived server-side and never sent "
+                               "to you); pass bar %d. The live compromise is verified cryptographically, a "
+                               "constant-time hash check plus a real probe of the domain controller, and "
+                               "recorded as a signed attestation. Your written report is reviewed and "
+                               "approved separately." % bar),
+                "steps": ["Open the range workspace and download your BloodHound dataset.",
+                          "Reconstruct the path from your foothold to Domain Admin and submit it.",
+                          ("Pivot into the live range, DCSync the Administrator hash, and submit it as proof."
+                           if live else "Compromise the range and submit your proof of Domain Admin."),
+                          "Write and submit your report."],
+                "pass_bar": bar,
+            }
+            if governed:
+                guide["clears_when"] = "your verified live compromise is attested and your report is approved"
+                guide["proof"] = {"required": True,
+                                  "note": "A verified live compromise is required to clear this board."}
+            else:
+                guide["clears_when"] = "your attack-path score reaches %d and your report is approved" % bar
+                guide["proof"] = {"required": False,
+                                  "note": ("A verified live compromise is recorded as an additional signed "
+                                           "credential; in this cohort the board clears on your attack-path "
+                                           "score and your report.")}
+            return guide
+        submit_by_board = {
+            1: "your alert-by-alert triage adjudication from the SOC console",
+            2: "your threat-hunt findings",
+            3: "your detection rules and their validation results",
+            4: "your incident timeline, scope, and eviction steps",
+        }
+        what = submit_by_board.get(n, "your board submission")
+        return {
+            "kind": "strata-defensive",
+            "submit_what": what,
+            "graded_how": ("Auto-graded on the server against your own seeded scenario (the answer key is "
+                           "re-derived server-side and never sent to you); pass bar %d. Your written "
+                           "report is reviewed against a rubric and approved separately." % bar),
+            "steps": ["Open your board workspace and investigate the scenario.",
+                      "Submit %s for objective scoring." % what,
+                      "Write and submit your report.",
+                      "Both the objective score and the report must pass."],
+            "clears_when": "your objective score reaches %d and your report is approved" % bar,
+            "proof": None, "pass_bar": bar,
+        }
+
     def _me_vm(c, selected=None):
         """The candidate dashboard view model. Shared by /me and the admin
         preview so both render exactly what the ranger sees. Program-aware: `programs`
@@ -4222,6 +4294,7 @@ def create_app():
             "cur_report_notes": (last_report.reviewer_notes if last_report else None),
             "report_open": (c.is_active and rep_status in (None, "needs_changes", "rejected")),
             "pass_bar": P.PASS_BAR,
+            "submit_guide": (_submit_guide(selected, n) if c.is_active else None),
             "notifications": [{"kind": nt.kind, "title": nt.title, "body": nt.body,
                                "when": _ago(nt.created_at), "read": nt.read}
                               for nt in (Notification.query.filter_by(candidate_id=c.id)

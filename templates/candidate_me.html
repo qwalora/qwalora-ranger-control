@@ -240,6 +240,19 @@
         {% if vm.status == 'active' and vm.selected_program == 'strata' %}
         <div class="card" id="board-work"><div class="card-head"><span class="eyebrow"><span class="d"></span>Assignment &amp; lab</span></div>
           <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+            {% if vm.submit_guide %}{% set g = vm.submit_guide %}
+            <div class="cm-guide">
+              <div class="cm-guide-h">{{ ic('help','ic ic-sm') }} How board {{ vm.board }} is scored and submitted</div>
+              <div class="cm-guide-grid">
+                <div><span class="gl">What you submit</span><p>{{ g.submit_what[0]|upper }}{{ g.submit_what[1:] }}.</p></div>
+                <div><span class="gl">How it is graded</span><p>{{ g.graded_how }}</p></div>
+              </div>
+              <div class="cm-guide-steps"><span class="gl">How to do it</span>
+                <ol>{% for s in g.steps %}<li>{{ s }}</li>{% endfor %}</ol>
+              </div>
+              <div class="cm-guide-clear">{{ ic('flag','ic ic-sm') }} <b>Clears when</b> {{ g.clears_when }}.{% if g.proof and not g.proof.required %} <span class="dim">{{ g.proof.note }}</span>{% endif %}</div>
+            </div>
+            {% endif %}
             {% if vm.mission %}
             <div>
               <label class="label">Mission brief</label>
@@ -291,6 +304,12 @@
                   <span class="pill {% if vm.cur_report_status=='approved' %}pill-ok{% elif vm.cur_report_status %}pill-amber{% else %}pill{% endif %}"><span class="dot {% if vm.cur_report_status=='approved' %}dot-ok{% elif vm.cur_report_status %}dot-amber{% else %}dot{% endif %}"></span>Report</span>
                   <span class="muted" style="font-size:12.5px">{{ vm.cur_report_label or 'not submitted yet' }}</span>
                 </div>
+                {% if vm.submit_guide and vm.submit_guide.proof and vm.live_range and vm.live_range.enabled %}
+                <div class="gate-ch">
+                  <span class="pill"><span class="dot"></span>Live proof</span>
+                  <span class="muted" style="font-size:12.5px">{% if vm.submit_guide.proof.required %}required to clear{% else %}additional credential{% endif %}</span>
+                </div>
+                {% endif %}
               </div>
               {% if vm.report_ok %}<p class="note-ok">{{ ic('medal','ic ic-sm') }} Report submitted. It is now in review.</p>{% endif %}
               {% if vm.report_error %}<p class="note-warn">{{ vm.report_error }}</p>{% endif %}
