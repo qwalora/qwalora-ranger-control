@@ -22,7 +22,11 @@
 #
 # Build/deploy is manual (deploy/ is outside the portal autodeploy hold). Deploy ONLY to a
 # NONPRODUCTION environment; this service deliberately exposes an attackable DC on the internet.
-FROM debian:12-slim
+# Samba 4.13 (Debian 11/bullseye). impacket's DRSUAPI DCSync (secretsdump -just-dc) parses Samba's
+# DRSGetNCChanges reply cleanly on the 4.13 era; Samba 4.17 (Debian 12) returns a success reply that
+# impacket 0.11.x-0.13.x both fail to parse ("DRSR SessionError: code 0x0 - ERROR_SUCCESS"), proven
+# by a no-proxy loopback self-test inside the DC. Pin to the version candidates' tooling can consume.
+FROM debian:11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Samba AD DC + tooling. krb5-config/winbind pulled for completeness; python3-samba for the seed.
