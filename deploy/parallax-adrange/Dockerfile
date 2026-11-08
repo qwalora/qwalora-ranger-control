@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         smbclient winbind libnss-winbind libpam-winbind \
         krb5-user krb5-config \
         python3 python3-samba ldb-tools \
+        microsocks \
         ca-certificates procps iproute2 dnsutils \
     && rm -rf /var/lib/apt/lists/* \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
@@ -41,9 +42,10 @@ COPY proof_server.py /opt/adrange/proof_server.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# AD DC service ports. The Railway TCP proxy maps a public port to each of the candidate-facing
-# ports; 53/88/389/445/636/3268 are the set the attack chain needs. 9443 is the PRIVATE-only proof
-# server (never proxied publicly) the portal reads expected proof material from.
-EXPOSE 53 88 135 389 445 464 636 3268 3269 9443
+# The AD DC's own ports (53/88/389/445/636/3268 ...) stay on the container; candidates reach them by
+# pivoting through the SOCKS proxy on 1080, which is the ONE port the Railway TCP proxy exposes
+# publicly (Railway allows a single TCP proxy per service, so a SOCKS pivot gives access to every AD
+# port at its standard number via proxychains). 9443 is the PRIVATE-only proof server (never proxied).
+EXPOSE 1080 53 88 135 389 445 464 636 3268 3269 9443
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

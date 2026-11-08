@@ -70,5 +70,14 @@ echo "[adrange] starting private proof server on :9443"
 ADRANGE_ADMIN_PASSWORD="$ADMINPASS" ADRANGE_REALM="$REALM" \
 python3 /opt/adrange/proof_server.py &
 
+# SOCKS5 pivot: the ONE publicly-proxied port. Candidates point proxychains here (authenticated) and
+# then reach every AD service at its standard port on the DC's loopback, exactly as a red-teamer
+# pivots through a foothold. Bound on 0.0.0.0 for the Railway TCP proxy edge.
+SOCKS_PORT="${ADRANGE_SOCKS_PORT:-1080}"
+SOCKS_USER="${ADRANGE_SOCKS_USER:-ranger}"
+SOCKS_PASS="${ADRANGE_SOCKS_PASSWORD:?ADRANGE_SOCKS_PASSWORD must be set}"
+echo "[adrange] starting SOCKS5 pivot on :$SOCKS_PORT (user $SOCKS_USER)"
+microsocks -i 0.0.0.0 -p "$SOCKS_PORT" -u "$SOCKS_USER" -P "$SOCKS_PASS" &
+
 echo "[adrange] starting samba AD DC (foreground)"
 exec samba --foreground --no-process-group --debug-stdout -d 1 -s /etc/samba/smb.conf

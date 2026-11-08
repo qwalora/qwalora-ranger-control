@@ -49,16 +49,20 @@ def test_enabled_requires_flag_and_host(monkeypatch):
 def test_connection_details_never_leaks_admin(monkeypatch):
     monkeypatch.setenv("ADRANGE_ENABLED", "1")
     monkeypatch.setenv("ADRANGE_HOST", "proxy.rlwy.net")
-    monkeypatch.setenv("ADRANGE_PORTS", "ldap=11389,kerberos=11088,smb=11445")
+    monkeypatch.setenv("ADRANGE_SOCKS_PORT", "23456")
+    monkeypatch.setenv("ADRANGE_SOCKS_USER", "ranger")
+    monkeypatch.setenv("ADRANGE_SOCKS_PASSWORD", "SocksPw1!")
     monkeypatch.setenv("ADRANGE_ADMIN_PASSWORD", "SuperSecretAdmin1!")
     monkeypatch.setenv("ADRANGE_FOOTHOLD_USER", "ranger")
     monkeypatch.setenv("ADRANGE_FOOTHOLD_PASSWORD", "FootPw1!")
     d = AL.connection_details(_Cand())
     blob = repr(d)
-    assert "SuperSecretAdmin1!" not in blob
-    assert d["ports"]["ldap"] == 11389
+    assert "SuperSecretAdmin1!" not in blob  # admin password/hash never surfaced to the candidate
+    assert d["socks"]["host"] == "proxy.rlwy.net" and d["socks"]["port"] == 23456
+    assert d["socks"]["password"] == "SocksPw1!"
     assert d["foothold"]["username"] == "ranger"
     assert d["foothold"]["password"] == "FootPw1!"
+    assert "socks5 proxy.rlwy.net 23456" in d["proxychains_conf"]
 
 
 def test_verify_compromise(monkeypatch):
