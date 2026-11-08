@@ -90,11 +90,12 @@ python3 /opt/adrange/socks_scoped.py &
 if [ -n "${ADRANGE_DIAG:-}" ] && command -v secretsdump.py >/dev/null 2>&1; then
   ( sleep 25
     echo "[adrange][selftest] ===== loopback DCSync self-test (no proxy) ====="
-    for TARGETFORM in 'QWALORA\Administrator' 'Administrator'; do
-      echo "[adrange][selftest] --- -just-dc-user '$TARGETFORM' ---"
-      secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
-        -just-dc-user "$TARGETFORM" 2>&1 | sed 's/^/[adrange][selftest] /'
-    done
+    echo "[adrange][selftest] --- A) whole-NC replication: -just-dc-ntlm (no per-user EXOP) ---"
+    secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
+      -just-dc-ntlm 2>&1 | sed 's/^/[adrange][selftest] /'
+    echo "[adrange][selftest] --- B) single-object path with traceback: -just-dc-user Administrator -debug ---"
+    secretsdump.py "qwalora.range/svc_mssql:Password123!@127.0.0.1" \
+      -just-dc-user 'QWALORA\Administrator' -debug 2>&1 | sed 's/^/[adrange][selftest] /' | head -60
     echo "[adrange][selftest] ===== self-test done ====="
   ) &
 fi
