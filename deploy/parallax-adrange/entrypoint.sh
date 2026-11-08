@@ -16,6 +16,10 @@ if [ -z "${LDB_MODULES_PATH:-}" ]; then
   done
 fi
 echo "[adrange] LDB_MODULES_PATH=${LDB_MODULES_PATH:-<unset>}"
+if [ -n "${ADRANGE_DIAG:-}" ]; then
+  echo "[adrange][diag] secrets modules:"; find /usr/lib /usr/local/lib -name 'secrets*' 2>/dev/null | head -20
+  echo "[adrange][diag] ldb .so modules:"; find /usr/lib /usr/local/lib -name '*.so' -path '*ldb*' 2>/dev/null | head -60
+fi
 
 REALM="${ADRANGE_REALM:-QWALORA.RANGE}"
 DOMAIN="${ADRANGE_NETBIOS:-QWALORA}"
