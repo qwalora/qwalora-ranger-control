@@ -42,13 +42,6 @@ provision() {
     --adminpass="$ADMINPASS" \
     --option="dns forwarder=$FORWARDER" \
     >/tmp/provision.log 2>&1 || { echo "[adrange] provision FAILED"; cat /tmp/provision.log; exit 1; }
-  # Allow weak/legacy crypto so standard offensive tooling (impacket NTLM, RC4 Kerberoast) works as it
-  # would against a real misconfigured enterprise DC. This is a TRAINING range, intentionally weak.
-  {
-    echo "    ntlm auth = yes"
-    echo "    server min protocol = NT1"
-    echo "    kdc:force enable rc4 weak session keys = yes"
-  } >> /etc/samba/smb.conf
 }
 
 if [ ! -f "$SAMDB" ]; then
@@ -69,4 +62,4 @@ ADRANGE_ADMIN_PASSWORD="$ADMINPASS" ADRANGE_REALM="$REALM" \
 python3 /opt/adrange/proof_server.py &
 
 echo "[adrange] starting samba AD DC (foreground)"
-exec samba --foreground --no-process-group -s /etc/samba/smb.conf
+exec samba --foreground --no-process-group --debug-stdout -d 1 -s /etc/samba/smb.conf
