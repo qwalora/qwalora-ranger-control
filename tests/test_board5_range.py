@@ -106,3 +106,50 @@ def test_board6_forest_serves_and_clears_to_certified(client, monkeypatch):
     with A.app.app_context():
         assert Badge.query.filter_by(candidate_id=cid, level="certified").first() is not None, \
             "clearing board 6 did not mint the terminal certification"
+
+
+def test_board5_live_range_requires_compromise(client, monkeypatch):
+    """When the live range is enabled, the attack-path objective plus an approved report is NOT
+    enough to clear board 5: a verified live compromise is required (fail-closed). A creditable
+    compromise then drives promotion to board 6."""
+    monkeypatch.delenv("RANGER_STRATA_PORTFOLIOS", raising=False)  # governance off
+    import ad_range as AR
+    import adrange_live as AL
+    monkeypatch.setattr(AR, "grade", lambda seed, sub: (100.0, {"note": "ok"}))
+    monkeypatch.setattr(AL, "enabled", lambda: True)
+    monkeypatch.setattr(AL, "verify_attestation",
+                        lambda rec, **k: (bool(rec), "ok" if rec else "no attestation"))
+    with A.app.app_context():
+        c = _cand_board5("b5-live")
+        db.session.add(BoardResult(candidate_id=c.id, board=5, role="red-teamer",
+                                   report_status="approved"))
+        db.session.commit()
+        cid = c.id
+    with client.session_transaction() as sess:
+        sess["cand"] = cid
+        sess["csrf"] = "t"
+    # the isolated-board dashboard renders (exercises _submit_guide's live-range branch)
+    assert client.get("/me").status_code == 200
+    # attack-path objective passes, but without a live compromise the board does NOT clear
+    r = client.post("/me/workspace/submit",
+                    data=json.dumps({"submission": {"path": [{"source": "a", "technique": "DCSync",
+                                                              "target": "b"}]}}),
+                    content_type="application/json", headers={"X-CSRF-Token": "t"})
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body["passed"] is True and body["promoted"] is False
+    with A.app.app_context():
+        assert Candidate.query.filter_by(id=cid).first().current_board == 5
+    # a creditable, verified compromise then clears the board and advances to 6
+    monkeypatch.setattr(AL, "validate_live",
+                        lambda **k: {"ok": True, "reachable": True, "checks": {}, "reason": "ok"})
+    monkeypatch.setattr(AL, "verify_compromise", lambda t: {"ok": True, "reason": "match"})
+    monkeypatch.setattr(AL, "attest",
+                        lambda c, n, **k: (True, {"mode": "real", "real": True, "handle": "x"}))
+    r2 = client.post("/me/workspace/compromise",
+                     data=json.dumps({"proof": "deadbeefdeadbeefdeadbeefdeadbeef"}),
+                     content_type="application/json", headers={"X-CSRF-Token": "t"})
+    assert r2.status_code == 200, r2.data
+    assert r2.get_json()["promoted"] is True
+    with A.app.app_context():
+        assert Candidate.query.filter_by(id=cid).first().current_board == 6

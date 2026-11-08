@@ -1775,6 +1775,7 @@ def create_app():
         if not c.is_active:
             return False
         n = c.current_board
+        import adrange_live as _AL
         br = _board_result(c, n, create=False)
         if not br or not br.objective_passed or br.report_status != "approved":
             return False
@@ -1797,7 +1798,7 @@ def create_app():
         # exact candidate/board/cohort/attempt/scenario/range identity + freshness + creditable mode);
         # a fresh one is never minted to make a prior award pass. A mock/simulated/unavailable/foreign/
         # expired/forged attestation fails closed.
-        if P.is_isolated(n) and _strata_portfolios_on():
+        if P.is_isolated(n) and (_strata_portfolios_on() or _AL.enabled()):
             import json as _json
             # Live-execution range (Samba AD DC on Railway): when it is switched on it IS the
             # real-range proof. Require a verified, signed proof-of-compromise attestation (a real
@@ -2281,6 +2282,14 @@ def create_app():
             # like any shared board via the class-balanced hunt grader below.
             return jsonify(error="board 2 is graded through the signed-citation case workflow "
                            "(/case) under governance, not the generic grader", board=n), 409
+        if P.is_isolated(n) and not _strata_portfolios_on():
+            # Isolated boards (5/6) have ONE canonical grader: the attested isolated-range workflow
+            # (attack-path reconstruction in the range workspace, plus the live-compromise proof).
+            # The legacy flag grader below must never be a second, divergent scorer for the same
+            # board, so the token path refuses here and directs the candidate to the range workspace.
+            return jsonify(error="boards 5 and 6 are graded through the attested isolated-range "
+                           "workflow in your range workspace, not the generic token grader",
+                           board=n), 409
         if not scenarios.has_board(n):
             return jsonify(error="grader for this board is not available yet", board=n), 501
         submission = data.get("submission")
@@ -4115,7 +4124,8 @@ def create_app():
         governed = _strata_portfolios_on()
         bar = int(P.PASS_BAR)
         if P.is_isolated(n):
-            live = adrange_live.enabled()
+            import adrange_live as _AL
+            live = _AL.enabled()
             guide = {
                 "kind": "strata-isolated",
                 "submit_what": ("your reconstructed attack path from the BloodHound graph, plus the "
@@ -4133,16 +4143,20 @@ def create_app():
                           "Write and submit your report."],
                 "pass_bar": bar,
             }
-            if governed:
-                guide["clears_when"] = "your verified live compromise is attested and your report is approved"
+            if live:
+                guide["clears_when"] = ("you reconstruct the attack path, verify a real live compromise "
+                                        "of the domain, and your report is approved")
                 guide["proof"] = {"required": True,
-                                  "note": "A verified live compromise is required to clear this board."}
+                                  "note": ("A verified live compromise, a real DCSync of the domain, is "
+                                           "required to clear this board, on top of your attack-path "
+                                           "analysis and report.")}
+            elif governed:
+                guide["clears_when"] = ("your attack-path score reaches %d against a validated real range "
+                                        "and your report is approved" % bar)
+                guide["proof"] = None
             else:
                 guide["clears_when"] = "your attack-path score reaches %d and your report is approved" % bar
-                guide["proof"] = {"required": False,
-                                  "note": ("A verified live compromise is recorded as an additional signed "
-                                           "credential; in this cohort the board clears on your attack-path "
-                                           "score and your report.")}
+                guide["proof"] = None
             return guide
         submit_by_board = {
             1: "your alert-by-alert triage adjudication from the SOC console",
@@ -4912,9 +4926,10 @@ def create_app():
         hash recovered by DCSync. The portal runs a real technical-validation probe of the live DC
         (the planted attack path is actually present) and verifies the submitted hash against the
         domain's true Administrator hash. On success it records a signed, verifiable
-        proof-of-compromise attestation. Under governance this attestation is the isolated-board
-        real-range proof; without governance it is an additional verifiable live-range credential
-        (the board still clears on objective + report)."""
+        proof-of-compromise attestation. When the live range is enabled, this verified compromise is
+        REQUIRED to clear boards 5-6 at the promotion gate (together with the attack-path objective
+        and an approved report); it is not merely an extra credential. Fail-closed: a non-creditable
+        attempt records nothing and clears nothing."""
         c = _current_candidate()
         if not c:
             abort(401)
@@ -4942,7 +4957,12 @@ def create_app():
             br.live_attestation = _json.dumps(att)
         _touch(c, n)
         promoted = False
-        if creditable and _strata_portfolios_on():
+        # A verified, creditable live compromise drives the clear-board gate whether or not the
+        # cohort is under Ludus governance: with the live range enabled, _evaluate_gate requires this
+        # signed proof-of-compromise to clear boards 5-6 (on top of the attack-path objective and an
+        # approved report), so the real execution is what the credential rests on. Fail-closed:
+        # `creditable` already requires adapter verification plus a passing validation probe and proof.
+        if creditable:
             promoted = _evaluate_gate(c)
         db.session.commit()
         return jsonify(
