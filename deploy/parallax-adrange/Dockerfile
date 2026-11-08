@@ -36,6 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Remove the default smb.conf so `samba-tool domain provision` writes a clean AD DC config.
     && rm -f /etc/samba/smb.conf
 
+# DEBUG ONLY (nonprod): impacket, so entrypoint can run a loopback DCSync self-test (ADRANGE_DIAG)
+# that isolates an impacket<->Samba DRS reply-parse problem from the SOCKS pivot. Revert once the
+# live range's DCSync path is proven; the DC should not ship with attack tooling on it.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && pip3 install --break-system-packages --no-cache-dir 'impacket==0.13.1' \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY seed.py /opt/adrange/seed.py
 COPY proof_server.py /opt/adrange/proof_server.py
 COPY socks_scoped.py /opt/adrange/socks_scoped.py
