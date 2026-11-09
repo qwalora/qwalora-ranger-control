@@ -24,11 +24,12 @@ os.environ.setdefault("DEFAULT_COHORT", "2026-A")
 
 import pytest  # noqa: E402
 
-# The authoritative handbook destination (the published Ranger manual). Pinned so a
-# revert to the removed /handbook path, or any silent retarget, fails this suite.
-HANDBOOK_URL = "https://ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf"
-# The broken public-site path from the live-acceptance 404; must never reappear.
-BROKEN_HANDBOOK = "ranger.qwalora.com/handbook"
+# The authoritative handbook destination is the in-app /handbook page (HTML built from the markdown
+# source by scripts/build_handbook.py; the external PDF is only a build artifact, not the published
+# handbook). Pinned as the exact nav href so a silent retarget to the PDF fails this suite.
+HANDBOOK_URL = 'href="/handbook"'
+# The superseded external PDF; the candidate nav must no longer reference it.
+BROKEN_HANDBOOK = "ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf"
 
 
 @pytest.fixture()

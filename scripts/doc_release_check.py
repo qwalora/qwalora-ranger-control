@@ -47,9 +47,11 @@ REQUIRED_ROUTES = [
 # Per-board environment facts the docs state (board -> expected environment_kind).
 EXPECTED_ENV_KIND = {1: "dataset", 2: "siem", 3: "dataset", 4: "dataset", 5: "range", 6: "range"}
 
-# The authoritative published handbook (the "Ranger manual"); the removed /handbook path 404s.
-HANDBOOK_URL = "https://ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf"
-BROKEN_HANDBOOK = "ranger.qwalora.com/handbook"
+# The authoritative published handbook is the in-app /handbook page (built from the markdown source
+# by scripts/build_handbook.py and served by the /handbook route). The external PDF is only a build
+# artifact, not the published handbook, so the candidate nav must point at /handbook, not the PDF.
+HANDBOOK_URL = "/handbook"
+BROKEN_HANDBOOK = "ranger.qwalora.com/downloads/Qwalora-Ranger-Manual.pdf"
 
 
 def _app_routes():
@@ -101,14 +103,14 @@ def run_check():
         failures.append("false-opensearch-promise: board 2 reports available without the SOC "
                         "gateway + Board-2 UI configured")
 
-    # 3. handbook link is authoritative, not the broken path
+    # 3. handbook link points at the authoritative in-app /handbook page, not the PDF build artifact
     candnav = os.path.join(ROOT, "templates", "_candnav.html")
     if os.path.exists(candnav):
         txt = open(candnav).read()
         if HANDBOOK_URL not in txt:
-            failures.append("handbook-link: candidate nav does not point at the authoritative manual")
+            failures.append("handbook-link: candidate nav does not point at the authoritative /handbook page")
         if BROKEN_HANDBOOK in txt:
-            failures.append("handbook-link: candidate nav still references the broken /handbook path")
+            failures.append("handbook-link: candidate nav still references the superseded external PDF")
 
     # 4. required candidate-facing documents exist (a release must not drop them)
     for rel in ("docs/handbook/RANGER_CANDIDATE_HANDBOOK.md",

@@ -28,7 +28,11 @@ _PX_ENV = ("RANGER_PARALLAX_LABA", "RANGER_PARALLAX_LABA_ENV", "RANGER_ENV",
 def ctx():
     # Force PARALLAX nonprod on for this suite; restore the environment afterwards so we never
     # clobber a var another suite relies on.
-    saved = {k: os.environ.get(k) for k in _PX_ENV}
+    saved = {k: os.environ.get(k) for k in _PX_ENV + ("ADMIN_TOKEN",)}
+    # Pin ADMIN_TOKEN before create_app: the app captures it at build time, and a module-level
+    # setdefault is a no-op if a prior suite left a different ADMIN_TOKEN set, which would make this
+    # suite's Bearer header mismatch under an unlucky test order. Force it, then restore.
+    os.environ["ADMIN_TOKEN"] = "entitlements-admin-token"
     os.environ["RANGER_PARALLAX_LABA"] = "1"
     os.environ["RANGER_PARALLAX_LABA_ENV"] = "test"
     for k in ("RANGER_ENV", "APP_ENV", "ENVIRONMENT", "FLASK_ENV"):
