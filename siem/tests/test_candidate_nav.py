@@ -96,16 +96,16 @@ def test_handbook_renders_for_both_programs_identically(ctx):
         assert html.count(HANDBOOK_URL) == 1, f"expected exactly one Handbook link for {who}"
 
 
-def test_handbook_opens_external_pdf_safely(ctx):
-    """The manual is an external PDF; the link opens in a new tab without leaking the opener."""
+def test_handbook_opens_inline_in_the_portal(ctx):
+    """The handbook is a contained portal page (rendered in the app shell), so its nav link opens
+    inline in the same tab, not in a new window."""
     application, p = ctx
     html = _html(application, p["strata"].id)
     i = html.find(HANDBOOK_URL)
     assert i >= 0
     # the anchor's attributes follow the href; window forward past the URL to the tag close
-    seg = html[max(0, i - 60):i + 220]
-    assert 'target="_blank"' in seg, "Handbook should open in a new tab"
-    assert 'rel="noopener"' in seg, "Handbook new-tab link must set rel=noopener"
+    seg = html[max(0, i - 60):i + 120]
+    assert 'target="_blank"' not in seg, "Handbook is an in-portal page; it must not open in a new tab"
 
 
 def test_no_broken_handbook_path_on_dashboard(ctx):
