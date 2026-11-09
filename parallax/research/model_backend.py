@@ -4,9 +4,14 @@ A backend turns a (system_instructions, developer_instructions, user_task, retri
 into a generated completion, and reports whether it is a REAL model or a transparent stub. Three
 backends:
 
-  * HTTPBackend         - an OpenAI-/Ollama-compatible local inference endpoint. REAL. The endpoint host
-                          MUST be loopback or explicitly allow-listed (RANGER_RESEARCH_MODEL_HOSTS); any
-                          other host is refused (no unauthorized external AI endpoints). is_real=True.
+  * HTTPBackend         - an Ollama-native (/api/generate) local inference endpoint. REAL. The endpoint
+                          host MUST be loopback or explicitly allow-listed (RANGER_RESEARCH_MODEL_HOSTS);
+                          any other host is refused (no unauthorized external AI endpoints). is_real=True.
+  * OpenAICompatBackend - an OpenAI-compatible /v1/chat/completions endpoint (OpenAI, vLLM, TGI, Together,
+                          HF Inference Endpoints, LM Studio, ...). REAL. Same host allow-list gate, so a
+                          hosted Tier-B/frontier endpoint is a DELIBERATE operator opt-in. The experimental
+                          prompt is identical to HTTPBackend's (build_prompt sent as a single user turn), so
+                          a board can switch runtimes without changing what the model sees. is_real=True.
   * TransformersBackend - a local transformers model directory (weights already on disk). REAL.
                           is_real=True. Imported lazily so the package has no hard torch dependency.
   * DeterministicStub   - NOT a model. A fixed, rule-based responder used ONLY to exercise the harness
@@ -118,6 +123,76 @@ class HTTPBackend(Backend):
                          runtime=self.runtime, meta=meta)
 
 
+class OpenAICompatBackend(Backend):
+    """Real model via an OpenAI-compatible /v1/chat/completions endpoint.
+
+    Works with OpenAI, vLLM, Text-Generation-Inference, Together, HF Inference Endpoints, LM Studio and
+    any server that speaks the chat-completions schema. Transport differs from HTTPBackend (Ollama
+    /api/generate), but the EXPERIMENTAL PROMPT is byte-identical: build_prompt(req) is sent verbatim as
+    a single user message, so PROMPT_TEMPLATE_VERSION is unchanged and a board's runs stay comparable
+    when it is switched from an Ollama model to a hosted Tier-B model.
+
+    The endpoint host MUST be loopback or allow-listed (RANGER_RESEARCH_MODEL_HOSTS), so a frontier host
+    such as api.openai.com is a deliberate operator opt-in, never implicit. An API key is sent as a
+    Bearer token only when configured; it is a scoring-model credential, never a repo or model-download
+    token, and is never written into any record (provenance redacts secrets upstream)."""
+    is_real = True
+    name = "openai"
+
+    def __init__(self, base_url: str, model_id: str, api_key: Optional[str] = None,
+                 runtime: str = "openai", timeout: float = 60.0):
+        from urllib.parse import urlparse
+        host = urlparse(base_url).hostname or ""
+        if not _host_authorized(host):
+            raise ModelBackendError("refusing model endpoint host %r (not loopback/allow-listed)" % host)
+        self.base_url = base_url.rstrip("/")
+        self.model_id = model_id
+        self.api_key = api_key or None
+        self.runtime = runtime
+        self.timeout = timeout
+
+    def _endpoint(self) -> str:
+        b = self.base_url
+        if b.endswith("/chat/completions"):
+            return b
+        if b.endswith("/v1"):
+            return b + "/chat/completions"
+        return b + "/v1/chat/completions"
+
+    def generate(self, req: GenRequest) -> GenResult:
+        payload = {"model": self.model_id,
+                   "messages": [{"role": "user", "content": build_prompt(req)}],
+                   "temperature": req.temperature, "max_tokens": req.max_tokens, "stream": False}
+        data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = "Bearer %s" % self.api_key
+        r = urllib.request.Request(self._endpoint(), data=data, headers=headers)
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(r, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001 - surfaced as infrastructure failure, never faked
+            raise ModelBackendError("model endpoint call failed: %s" % e)
+        text = ""
+        choices = body.get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            text = msg.get("content") or choices[0].get("text") or ""
+        meta = {"latency_s": round(time.time() - t0, 3),
+                "temperature": req.temperature, "max_tokens": req.max_tokens}
+        if isinstance(body.get("usage"), dict):
+            meta["usage"] = body["usage"]
+        # server-reported provenance: the echoed model name, request id, and OpenAI's reproducibility
+        # fingerprint when present (the configured model_id stays authoritative; these are evidence)
+        for k in ("system_fingerprint", "model", "id"):
+            v = body.get(k)
+            if v:
+                meta["server_%s" % k if k == "model" else k] = v
+        return GenResult(text=text, backend=self.name, is_real=True, model_id=self.model_id,
+                         runtime=self.runtime, meta=meta)
+
+
 class TransformersBackend(Backend):
     """Real model from a local transformers directory (weights already on disk)."""
     is_real = True
@@ -205,6 +280,15 @@ def from_config(env: Optional[Dict[str, str]] = None) -> Backend:
     env = env or os.environ
     url = env.get("RANGER_RESEARCH_MODEL_URL")
     if url:
+        # Transport protocol: "ollama" (default; /api/generate) or "openai" (/v1/chat/completions).
+        # A board switches to a hosted Tier-B/frontier model by setting RANGER_RESEARCH_MODEL_PROTOCOL
+        # =openai + the endpoint URL + (optional) key, and allow-listing the host. No harness change.
+        proto = (env.get("RANGER_RESEARCH_MODEL_PROTOCOL") or "ollama").strip().lower()
+        if proto in ("openai", "openai-compat", "openai_compatible", "chat", "vllm", "tgi"):
+            return OpenAICompatBackend(
+                url, model_id=env.get("RANGER_RESEARCH_MODEL_ID", "local-model"),
+                api_key=(env.get("RANGER_RESEARCH_MODEL_API_KEY") or env.get("OPENAI_API_KEY")),
+                runtime=env.get("RANGER_RESEARCH_MODEL_RUNTIME", "openai"))
         return HTTPBackend(url, model_id=env.get("RANGER_RESEARCH_MODEL_ID", "local-model"),
                            runtime=env.get("RANGER_RESEARCH_MODEL_RUNTIME", "http"))
     mdir = env.get("RANGER_RESEARCH_MODEL_DIR")
