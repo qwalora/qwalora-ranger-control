@@ -83,36 +83,5 @@ echo "[adrange] starting scoped SOCKS5 pivot on :$SOCKS_PORT (user $SOCKS_USER, 
 ADRANGE_SOCKS_PORT="$SOCKS_PORT" ADRANGE_SOCKS_USER="$SOCKS_USER" ADRANGE_SOCKS_PASSWORD="$SOCKS_PASS" \
 python3 /opt/adrange/socks_scoped.py &
 
-# DIAG (ADRANGE_DIAG): after the DC is up, print the structural validation the portal reads, so we can
-# confirm the trophy container + its Create-Child grant are seen as planted (and the trophy write/read
-# path works) without reaching the private proof endpoint from outside.
-if [ -n "${ADRANGE_DIAG:-}" ]; then
-  ( sleep 20
-    python3 - <<'PY' 2>&1 | sed 's/^/[adrange][diag] /'
-import json, sys
-sys.path.insert(0, "/opt/adrange")
-import proof_server as ps
-print("validate:", json.dumps(ps.validate_directory()))
-# create a probe trophy as the DC (system session) and confirm the read path sees it
-try:
-    from samba.auth import system_session
-    from samba.param import LoadParm
-    from samba.samdb import SamDB
-    lp = LoadParm(); lp.load(ps.SMB_CONF)
-    db = SamDB(url=ps.SAMDB_PATH, session_info=system_session(), lp=lp)
-    base = db.domain_dn()
-    dn = "CN=pwn-diagprobe,OU=Trophies,%s" % base
-    try:
-        db.add({"dn": dn, "objectClass": "contact", "cn": "pwn-diagprobe"})
-    except Exception as e:
-        print("probe-add:", e)
-    print("trophy_present(pwn-diagprobe):", ps.trophy_present("pwn-diagprobe"))
-    print("trophy_present(pwn-absent):", ps.trophy_present("pwn-absent"))
-except Exception as e:
-    print("probe-error:", e)
-PY
-  ) &
-fi
-
 echo "[adrange] starting samba AD DC (foreground)"
 exec samba --foreground --no-process-group --debug-stdout -d 1 -s /etc/samba/smb.conf
