@@ -868,6 +868,7 @@ def test_gapf1_shared_promotion_gate_report_route():
     _pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
         _ser.Encoding.PEM, _ser.PrivateFormat.TraditionalOpenSSL, _ser.NoEncryption())
     flags = {"RANGER_CASE_UI": "1", "RANGER_B2_BINDING": "1", "RANGER_B2_QUAL_UI": "1",
+             "RANGER_STRATA_PORTFOLIOS": "1",  # governed Board 2: the gate runs the integrity check
              "RANGER_SOC_TEST_KEY": "soc-test-key", "ADMIN_TOKEN": "test-admin-token",
              "RANGER_JWT_PRIVATE_B64": base64.b64encode(_pem).decode(),
              "OPENSEARCH_ADMIN_PASSWORD": "x",
@@ -930,7 +931,10 @@ def test_gapf1_shared_promotion_gate_report_route():
         cl = application.test_client()
         with cl.session_transaction() as s:
             s["admin"] = True; s["admin_gid"] = "gid-admin"; s["csrf"] = "t"
-        return cl.post(f"/admin/reports/{r.id}", data={"action": "approve", "csrf": "t"},
+        # Report approval is now gated on the structured rubric; an explicit recorded override is a
+        # valid approval here (this test exercises the promotion gate, not the rubric scoring).
+        return cl.post(f"/admin/reports/{r.id}",
+                       data={"action": "approve", "override": "1", "csrf": "t"},
                        headers={"X-CSRF-Token": "t"})
 
     try:
