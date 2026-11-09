@@ -4087,7 +4087,7 @@ def create_app():
         import adrange_live as AL
         if not AL.enabled() or _effective_env(n) != "ad-range":
             return {"enabled": False}
-        vm = AL.connection_details(c)
+        vm = AL.connection_details(c, n)
         br = _board_result(c, n, create=False)
         compromised = False
         if br and getattr(br, "live_attestation", None):
@@ -4128,17 +4128,19 @@ def create_app():
             live = _AL.enabled()
             guide = {
                 "kind": "strata-isolated",
-                "submit_what": ("your reconstructed attack path from the BloodHound graph, plus the "
-                                "Administrator hash you recover by compromising the live domain"),
+                "submit_what": ("your reconstructed attack path from the BloodHound graph, plus proof you "
+                                "compromised the live domain by planting your trophy object"),
                 "graded_how": ("Your attack-path reconstruction is auto-graded on the server against your "
                                "own seeded domain (the answer key is re-derived server-side and never sent "
-                               "to you); pass bar %d. The live compromise is verified cryptographically, a "
-                               "constant-time hash check plus a real probe of the domain controller, and "
-                               "recorded as a signed attestation. Your written report is reviewed and "
-                               "approved separately." % bar),
+                               "to you); pass bar %d. The live compromise is verified by reading the domain "
+                               "controller directly to confirm you created your own per-candidate trophy "
+                               "object (a write only a real Domain Admin could make), and recorded as a "
+                               "signed attestation. Your written report is reviewed and approved "
+                               "separately." % bar),
                 "steps": ["Open the range workspace and download your BloodHound dataset.",
                           "Reconstruct the path from your foothold to Domain Admin and submit it.",
-                          ("Pivot into the live range, DCSync the Administrator hash, and submit it as proof."
+                          ("Pivot in, win domain dominance via the planted path, create your trophy object "
+                           "(CN=<your-flag>,OU=Trophies) over LDAP, then click Verify compromise."
                            if live else "Compromise the range and submit your proof of Domain Admin."),
                           "Write and submit your report."],
                 "pass_bar": bar,
@@ -4147,9 +4149,10 @@ def create_app():
                 guide["clears_when"] = ("you reconstruct the attack path, verify a real live compromise "
                                         "of the domain, and your report is approved")
                 guide["proof"] = {"required": True,
-                                  "note": ("A verified live compromise, a real DCSync of the domain, is "
-                                           "required to clear this board, on top of your attack-path "
-                                           "analysis and report.")}
+                                  "note": ("A verified live compromise is required to clear this board, on "
+                                           "top of your attack-path analysis and report: win domain "
+                                           "dominance through the planted path and prove it by creating "
+                                           "your per-candidate trophy object on the live DC.")}
             elif governed:
                 guide["clears_when"] = ("your attack-path score reaches %d against a validated real range "
                                         "and your report is approved" % bar)
@@ -4922,14 +4925,16 @@ def create_app():
     @app.post("/me/workspace/compromise")
     @require_program("strata")
     def candidate_live_compromise():
-        """Submit proof of a REAL domain compromise against the live AD range: the Administrator NT
-        hash recovered by DCSync. The portal runs a real technical-validation probe of the live DC
-        (the planted attack path is actually present) and verifies the submitted hash against the
-        domain's true Administrator hash. On success it records a signed, verifiable
-        proof-of-compromise attestation. When the live range is enabled, this verified compromise is
-        REQUIRED to clear boards 5-6 at the promotion gate (together with the attack-path objective
-        and an approved report); it is not merely an extra credential. Fail-closed: a non-creditable
-        attempt records nothing and clears nothing."""
+        """Verify a REAL domain compromise against the live AD range. The candidate wins domain
+        dominance through the planted path and proves it by creating their per-candidate trophy object
+        (CN=<flag>,OU=Trophies) on the live DC over LDAP. The portal runs a real technical-validation
+        probe of the DC (the planted attack path is actually present) and then reads the DC directly to
+        confirm the candidate's trophy exists - a write only a candidate who really owned the domain
+        could perform, and uniquely named per candidate so it cannot be shared or replayed. On success
+        it records a signed, verifiable proof-of-compromise attestation. When the live range is enabled,
+        this verified compromise is REQUIRED to clear boards 5-6 at the promotion gate (together with
+        the attack-path objective and an approved report). Fail-closed: a non-creditable attempt
+        records nothing and clears nothing."""
         c = _current_candidate()
         if not c:
             abort(401)
@@ -4939,14 +4944,11 @@ def create_app():
         n = int(c.current_board)
         if not AL.enabled() or _effective_env(n) != "ad-range":
             return jsonify(error="no live range for this board"), 404
-        body = request.get_json(silent=True) or {}
-        proof_text = body.get("proof") or body.get("nt_hash") or body.get("submission") or ""
-        if not isinstance(proof_text, str) or not proof_text.strip():
-            return jsonify(error="submit the Administrator NT hash recovered via DCSync"), 400
-        validation = AL.validate_live()
-        proof = AL.verify_compromise(proof_text)
         br = _board_result(c, n)
         attempt = getattr(br, "attempt", 1)
+        validation = AL.validate_live()
+        # Proof is the candidate's trophy write, verified by reading the live DC - no secret to paste.
+        proof = AL.verify_trophy(c, n, attempt=attempt)
         creditable, att = AL.attest(c, n, cohort=c.cohort, attempt=attempt,
                                     validation=validation, proof=proof,
                                     scenario={"scenario_ref": _scenario_ref(c, n)})

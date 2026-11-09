@@ -143,11 +143,13 @@ def test_board5_live_range_requires_compromise(client, monkeypatch):
     # a creditable, verified compromise then clears the board and advances to 6
     monkeypatch.setattr(AL, "validate_live",
                         lambda **k: {"ok": True, "reachable": True, "checks": {}, "reason": "ok"})
-    monkeypatch.setattr(AL, "verify_compromise", lambda t: {"ok": True, "reason": "match"})
+    monkeypatch.setattr(AL, "verify_trophy",
+                        lambda c, n, **k: {"ok": True, "present": True, "reachable": True,
+                                           "reason": "trophy present", "flag": "pwn-test"})
     monkeypatch.setattr(AL, "attest",
                         lambda c, n, **k: (True, {"mode": "real", "real": True, "handle": "x"}))
     r2 = client.post("/me/workspace/compromise",
-                     data=json.dumps({"proof": "deadbeefdeadbeefdeadbeefdeadbeef"}),
+                     data=json.dumps({}),
                      content_type="application/json", headers={"X-CSRF-Token": "t"})
     assert r2.status_code == 200, r2.data
     assert r2.get_json()["promoted"] is True

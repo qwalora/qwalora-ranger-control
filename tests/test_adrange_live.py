@@ -158,3 +158,59 @@ def test_attestation_does_not_embed_full_hash(monkeypatch):
     import json
     blob = json.dumps(rec)
     assert exp not in blob  # only a short fingerprint is stored, never the full secret hash
+
+
+def test_trophy_flag_deterministic_and_scoped(monkeypatch):
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "proof-secret-key")
+    a = AL.trophy_flag("alice", 5, 1)
+    assert a == AL.trophy_flag("alice", 5, 1)           # deterministic
+    assert a.startswith("pwn-") and len(a) == 20        # CN-safe shape
+    assert a != AL.trophy_flag("bob", 5, 1)             # per-candidate
+    assert a != AL.trophy_flag("alice", 6, 1)           # per-board
+    assert a != AL.trophy_flag("alice", 5, 2)           # per-attempt
+
+
+def test_trophy_flag_unforgeable_without_key(monkeypatch):
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "key-one")
+    one = AL.trophy_flag("alice", 5, 1)
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "key-two")
+    assert one != AL.trophy_flag("alice", 5, 1)  # a different portal key yields a different flag
+
+
+def test_verify_trophy_reads_dc(monkeypatch):
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "proof-secret-key")
+    seen = {}
+
+    def fake_get(path, timeout):
+        seen["path"] = path
+        return {"present": True, "realm": "QWALORA.RANGE"}, True, "ok"
+
+    monkeypatch.setattr(AL, "_proof_http_get", fake_get)
+    r = AL.verify_trophy(_Cand(), 5, attempt=1)
+    assert r["ok"] is True and r["present"] is True
+    assert r["flag"] == AL.trophy_flag("rtest", 5, 1)
+    assert r["flag"] in seen["path"] and seen["path"].startswith("/trophy?flag=")
+
+
+def test_verify_trophy_absent_and_unreachable(monkeypatch):
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "proof-secret-key")
+    monkeypatch.setattr(AL, "_proof_http_get",
+                        lambda p, t: ({"present": False}, True, "ok"))
+    assert AL.verify_trophy(_Cand(), 5)["ok"] is False
+    # fail-closed when the proof channel is unreachable
+    monkeypatch.setattr(AL, "_proof_http_get", lambda p, t: (None, False, "pivot unreachable"))
+    r = AL.verify_trophy(_Cand(), 5)
+    assert r["ok"] is False and r["reachable"] is False
+
+
+def test_attest_with_trophy_proof(monkeypatch):
+    monkeypatch.setenv("ADRANGE_ADAPTER_VERIFIED", "1")
+    monkeypatch.setenv("ADRANGE_PROOF_TOKEN", "proof-secret-key")
+    passval = {"ok": True, "reachable": True, "checks": {"provisioned": True}, "reason": "ok"}
+    proof = {"ok": True, "present": True, "reason": "trophy present", "flag": "pwn-abc123"}
+    cred, rec = AL.attest(_Cand(), 5, cohort="2026-A", attempt=1, validation=passval, proof=proof)
+    assert cred is True
+    assert rec["proof_of_compromise"]["method"] == "trophy-write"
+    assert rec["proof_of_compromise"]["trophy"] == "pwn-abc123"
+    ok, _ = AL.verify_attestation(rec, handle="rtest", board=5, cohort="2026-A", attempt=1)
+    assert ok is True
