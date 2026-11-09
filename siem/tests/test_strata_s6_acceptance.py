@@ -115,19 +115,54 @@ def _approve_portfolio(db, application, cohort, board, n=2):
 # =====================================================================================
 # NEGATIVE - must be refused / must fail
 # =====================================================================================
-def test_NEG_mock_range_earns_no_isolated_credit_and_no_promotion():
+# Ungoverned boards 5/6 are the live Railway AD range: proof of compromise is the candidate's trophy
+# write, verified over /me/workspace/compromise. The mock-vs-real guarantee is unchanged - a mock
+# range earns no isolated credit or promotion; a verified real compromise plus an approved report
+# awards and promotes. The attack-path objective is covered by the board-5 range suite; pre-set it
+# here so the focus is the compromise/attestation gate.
+def _live_compromise(client, db, monkeypatch, c, n, *, compromised, report_approved=True):
+    import adrange_live as AL
+    from models import BoardResult
+    monkeypatch.delenv("RANGER_STRATA_PORTFOLIOS", raising=False)  # ungoverned -> ad-range
+    monkeypatch.setenv("ADRANGE_ENABLED", "1")
+    monkeypatch.setenv("ADRANGE_HOST", "proxy.rlwy.net")
+    monkeypatch.setenv("ADRANGE_ADAPTER_VERIFIED", "1")
+    monkeypatch.setattr(AL, "enabled", lambda: True)
+    br = BoardResult.query.filter_by(candidate_id=c.id, board=n).first()
+    if br is None:
+        br = BoardResult(candidate_id=c.id, board=n, role="red-teamer"); db.session.add(br)
+    br.objective_passed = True
+    br.report_status = "approved" if report_approved else "pending"
+    db.session.commit()
+    monkeypatch.setattr(AL, "validate_live",
+                        lambda **k: {"ok": True, "reachable": True, "checks": {}, "reason": "ok"})
+    monkeypatch.setattr(AL, "verify_trophy",
+                        lambda cand, board, **k: {"ok": compromised, "present": compromised,
+                                                  "reachable": True, "flag": "pwn-x",
+                                                  "reason": "ok" if compromised else "no trophy"})
+    monkeypatch.setattr(AL, "attest",
+                        lambda cand, board, **k: (bool(compromised),
+                                                  {"mode": "real" if compromised else "unavailable",
+                                                   "real": bool(compromised), "handle": cand.handle}))
+    monkeypatch.setattr(AL, "verify_attestation", lambda rec, **k: (bool(rec), "ok" if rec else "none"))
+    with client.session_transaction() as s:
+        s["cand"] = c.id
+        s["csrf"] = "t"
+    return client.post("/me/workspace/compromise", json={}, headers={"X-CSRF-Token": "t"})
+
+
+def test_NEG_mock_range_earns_no_isolated_credit_and_no_promotion(monkeypatch):
     appmod, application, db, ctx = _app()
     try:
         from models import BoardResult, Candidate
         client = expiring_client(application, db)
         c = _cand(db, "accN1", 5)
-        hdr = {"X-Candidate-Token": c.token}
-        g = client.post("/grade/submit", json={"handle": c.handle,
-                        "submission": _correct_flags_legacy(c, client, 5)}, headers=hdr).get_json()
-        assert g["score"] >= 95.0 and g["passed"] is False and g["promoted"] is False
+        r = _live_compromise(client, db, monkeypatch, c, 5, compromised=False)
+        assert r.status_code == 200, r.data
+        jb = r.get_json()
+        assert jb["creditable"] is False and jb["promoted"] is False
         br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
-        assert br.objective_passed is False
-        assert _json.loads(br.range_attestation)["real"] is False
+        assert br.live_attestation is None                 # a mock range records no attestation
         assert Candidate.query.get(c.id).current_board == 5
     finally:
         ctx.pop()
@@ -236,28 +271,21 @@ def test_NEG_candidate_projection_never_leaks_flags():
 # =====================================================================================
 # POSITIVE - must work
 # =====================================================================================
-def test_POS_attested_real_range_awards_and_promotes_once():
-    _saved = {k: os.environ.get(k) for k in ("RANGER_ENV", "RANGER_S6_ATTEST_TEST")}
-    os.environ["RANGER_ENV"] = "test"; os.environ["RANGER_S6_ATTEST_TEST"] = "1"
+def test_POS_attested_real_range_awards_and_promotes_once(monkeypatch):
     appmod, application, db, ctx = _app()
     try:
-        from models import BoardResult, Candidate
+        from models import Candidate
         client = expiring_client(application, db)
         c = _cand(db, "accP1", 5)
-        hdr = {"X-Candidate-Token": c.token}
-        sub = _correct_flags_legacy(c, client, 5)
-        g = client.post("/grade/submit", json={"handle": c.handle, "submission": sub}, headers=hdr).get_json()
-        assert g["passed"] is True
-        br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
-        att = _json.loads(br.range_attestation)
-        assert att["mode"] == "test_fixture" and att["real"] is False  # creditable but never claimed real
-        assert Candidate.query.get(c.id).current_board == 5            # no promotion without report
-        br.report_status = "approved"; db.session.add(br); db.session.commit()
-        g2 = client.post("/grade/submit", json={"handle": c.handle, "submission": sub}, headers=hdr).get_json()
-        assert g2["promoted"] is True and Candidate.query.get(c.id).current_board == 6
+        # a verified compromise with no approved report does NOT promote
+        r0 = _live_compromise(client, db, monkeypatch, c, 5, compromised=True, report_approved=False)
+        assert r0.get_json()["creditable"] is True and r0.get_json()["promoted"] is False
+        assert Candidate.query.get(c.id).current_board == 5
+        # a verified real compromise + approved report clears the board and advances to 6 exactly once
+        r = _live_compromise(client, db, monkeypatch, c, 5, compromised=True, report_approved=True)
+        assert r.get_json()["creditable"] is True and r.get_json()["promoted"] is True
+        assert Candidate.query.get(c.id).current_board == 6
     finally:
-        for k, v in _saved.items():
-            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         ctx.pop()
 
 

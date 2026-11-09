@@ -108,15 +108,42 @@ def _bind_and_submit(appmod, application, db, c, *, portfolios):
     return BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
 
 
-def test_real_credit_requires_governance_denied_without_portfolios():
-    os.environ.pop("RANGER_STRATA_PORTFOLIOS", None)  # portfolios OFF -> legacy seed path
+def test_ungoverned_isolated_credit_requires_verified_live_compromise(monkeypatch):
+    """Without governance, boards 5/6 are the live Railway AD range (not the Ludus range), so the
+    §4 'no credit without proof' property holds through the live-range path instead: with the live
+    range enabled, the attack-path objective plus an approved report do NOT clear the board - a
+    verified live compromise (the candidate's trophy write, read off the DC) is required. Fail-closed:
+    a mock / unverified range records no attestation and never promotes."""
+    monkeypatch.delenv("RANGER_STRATA_PORTFOLIOS", raising=False)  # ungoverned -> live AD range
+    monkeypatch.setenv("ADRANGE_ENABLED", "1")
+    monkeypatch.setenv("ADRANGE_HOST", "proxy.rlwy.net")
+    monkeypatch.setenv("ADRANGE_ADAPTER_VERIFIED", "1")
+    import adrange_live as AL
+    monkeypatch.setattr(AL, "enabled", lambda: True)
+    monkeypatch.setattr(AL, "validate_live",
+                        lambda **k: {"ok": True, "reachable": True, "checks": {}, "reason": "ok"})
+    monkeypatch.setattr(AL, "verify_trophy",   # mock/unverified range: no trophy
+                        lambda cand, board, **k: {"ok": False, "present": False, "reachable": True,
+                                                  "flag": "pwn-x", "reason": "no trophy"})
+    monkeypatch.setattr(AL, "verify_attestation", lambda rec, **k: (bool(rec), "ok" if rec else "none"))
     appmod, application, db, ctx = _app()
     try:
-        c = _cand(db, "rc_nogov")
-        br = _bind_and_submit(appmod, application, db, c, portfolios=False)
-        att = _json.loads(br.range_attestation)
-        assert att["mode"] == ra.MODE_REAL, "test harness must produce a REAL posture"
-        assert br.objective_passed is False, "a real range must NOT credit without governance"
+        from models import BoardResult, Candidate
+        client = expiring_client(application, db)
+        c = _cand(db, "rc_live")
+        # objective + approved report present, but NO verified compromise
+        db.session.add(BoardResult(candidate_id=c.id, board=5, role="red-teamer",
+                                   objective_passed=True, report_status="approved"))
+        db.session.commit()
+        with client.session_transaction() as s:
+            s["cand"] = c.id
+            s["csrf"] = "t"
+        r = client.post("/me/workspace/compromise", json={}, headers={"X-CSRF-Token": "t"})
+        assert r.status_code == 200, r.data
+        assert r.get_json()["creditable"] is False and r.get_json()["promoted"] is False
+        br = BoardResult.query.filter_by(candidate_id=c.id, board=5).first()
+        assert br.live_attestation is None, "a mock range must record no attestation"
+        assert Candidate.query.get(c.id).current_board == 5, "objective + report alone must not clear"
     finally:
         ctx.pop()
 
