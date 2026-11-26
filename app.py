@@ -46,6 +46,7 @@ import notify
 import prodconfig
 import rc_guard
 import signing
+import credentials
 from broker import broker_status
 from crypto import decrypt, encrypt
 from models import (AdminUser, Badge, BoardResult, Candidate, Cohort,
@@ -3654,6 +3655,34 @@ def create_app():
               "validity_years": cert.get("validity_years", CERT_VALIDITY_YEARS),
               "clearances": rec["clearances"], "pubkey": signing.public_key_b64()}
         return render_template("certificate.html", vm=vm)
+
+    @app.get("/.well-known/ranger-credentials.json")
+    def ranger_credential_keys():
+        """Public issuer key set: the Ed25519 public keys any third party uses to verify an
+        exported Ranger credential offline. No private material is ever included."""
+        return jsonify(credentials.public_key_set())
+
+    @app.get("/credentials/<cid>")
+    def credential_export(cid):
+        """Public, no-auth: the standards-shaped, offline-verifiable credential (W3C VC / Open
+        Badges 3.0) for a certificate id (QR-XXXX-XXXX). The original signed claim and signature
+        are embedded, so anyone can verify it against the published key set without trusting this
+        page. 404 on an unknown or revoked credential. Reveals only that one credential."""
+        norm = _norm_cert_id(cid)
+        if not norm:
+            abort(404)
+        b = Badge.query.filter_by(cert_id=norm).first()
+        if not b or b.revoked:
+            abort(404)
+        c = db.session.get(Candidate, b.candidate_id)
+        if not c:
+            abort(404)
+        vc = credentials.to_open_badge(
+            handle=c.handle, person_name=c.name, cohort=c.cohort, level=b.level,
+            badge_name=b.name, role=b.role, issued_at=b.issued_at, signature=b.signature,
+            cert_id=norm, base_url=githuboauth.base_url())
+        return app.response_class(_json.dumps(vc, indent=2) + "\n",
+                                  mimetype="application/json")
 
     # --- resource library (public + candidate + admin) ----------------------
     def _board_label(n):
